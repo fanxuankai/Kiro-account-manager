@@ -1177,7 +1177,7 @@ interface ToolUseState {
 
 // Token 估算（仅作兜底，Kiro 后端返回真实值时不使用）
 // 英文约 1 字符 = 0.3 token，中文约 1 字符 = 0.6 token
-function estimateTokens(text: string): number {
+export function estimateTokens(text: string): number {
   let cjkChars = 0
   let otherChars = 0
   for (let i = 0; i < text.length; i++) {
