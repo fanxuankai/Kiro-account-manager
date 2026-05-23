@@ -16,7 +16,7 @@ import {
   type KProxyConfig,
   type DeviceIdMapping
 } from './kproxy'
-import { fetchKiroModels, fetchSubscriptionToken, fetchAvailableSubscriptions, setUserPreference, setUseKProxyForApiInProxy, setLogStreamEvents, setPayloadSizeLimitKB } from './proxy/kiroApi'
+import { fetchKiroModels, fetchSubscriptionToken, fetchAvailableSubscriptions, setUserPreference, setUseKProxyForApiInProxy, setLogStreamEvents, setPayloadSizeLimitKB, setTokenBufferReserve } from './proxy/kiroApi'
 import { getSystemProxy } from './proxy/systemProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
@@ -289,6 +289,10 @@ function initProxyServer(): ProxyServer {
   // 恢复 payload 大小限制
   if (config.payloadSizeLimitKB) {
     setPayloadSizeLimitKB(config.payloadSizeLimitKB)
+  }
+  // 恢复 Token buffer reserve
+  if (config.tokenBufferReserve) {
+    setTokenBufferReserve(config.tokenBufferReserve)
   }
 
   proxyServer = new ProxyServer(
@@ -4932,6 +4936,10 @@ app.whenReady().then(async () => {
       // 同步 payload 大小限制
       if (config.payloadSizeLimitKB !== undefined) {
         setPayloadSizeLimitKB(config.payloadSizeLimitKB)
+      }
+      // 同步 Token buffer reserve
+      if (config.tokenBufferReserve !== undefined) {
+        setTokenBufferReserve(config.tokenBufferReserve)
       }
       // 保存配置到 store（用于自启动）
       if (store) {

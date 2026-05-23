@@ -491,8 +491,11 @@ export interface ProxyConfig {
   clientDrivenToolExecution?: boolean
   // 禁用工具调用（移除 tools 参数）
   disableTools?: boolean
-  // Payload 大小限制（KB），超过时截断工具结果
+  // Payload 大小限制（KB），超过时截断工具结果（byte 维度）
   payloadSizeLimitKB?: number
+  // Token buffer reserve（为 model context window 预留余量，effective limit = model.maxInputTokens - buffer）
+  // 默认 50K 适配所有 ctx_window 模型（200K → 150K, 1M → 950K），无需按模型手动调
+  tokenBufferReserve?: number
   // 单账号模式下额度耗尽自动切换到下一个账号
   autoSwitchOnQuotaExhausted?: boolean
   // 多账号选择策略 (仅 enableMultiAccount=true 时生效)

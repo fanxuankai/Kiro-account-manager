@@ -37,6 +37,45 @@ export function setPayloadSizeLimitKB(limitKB: number): void {
   payloadSizeLimitKB = Math.max(256, Math.min(10240, limitKB))
 }
 
+// Token buffer reserve（为 model context window 预留的余量，覆盖 system + tools + current + output + 估算偏差 + schema 开销）
+// 默认 50K：适配所有 ctx_window 模型 (200K → effective 150K, 1M → effective 950K)
+let tokenBufferReserve = 50000
+export function setTokenBufferReserve(tokens: number): void {
+  tokenBufferReserve = Math.max(5000, Math.min(150000, tokens))
+}
+export function getTokenBufferReserve(): number {
+  return tokenBufferReserve
+}
+
+// Model context window 缓存 (modelId → maxInputTokens)
+// 由 proxyServer 在 fetchKiroModels 后填充
+const modelContextWindowCache = new Map<string, number>()
+export function setModelContextWindow(modelId: string, maxInputTokens: number): void {
+  if (modelId && maxInputTokens > 0) {
+    modelContextWindowCache.set(modelId, maxInputTokens)
+  }
+}
+export function getModelContextWindow(modelId: string): number | undefined {
+  return modelContextWindowCache.get(modelId)
+}
+
+// 根据 modelId 和 buffer 计算 effective token limit
+// 查不到 model 时 fallback 到 200K context (Claude 默认)
+function getEffectiveTokenLimit(modelId?: string): number {
+  const ctx = (modelId ? modelContextWindowCache.get(modelId) : undefined) || 200000
+  return Math.max(8000, ctx - tokenBufferReserve)
+}
+
+// Token 估算 (UTF-8 字节数 / 3.5，对中英混合场景做安全偏保守估算)
+// 比真实 cl100k_base tokenizer 略偏高 (10-20%), 用于触发裁剪阈值是安全的
+function estimateTokensFromString(str: string): number {
+  return Math.ceil(Buffer.byteLength(str, 'utf-8') / 3.5)
+}
+
+function estimatePayloadTokens(payload: KiroPayload): number {
+  return estimateTokensFromString(JSON.stringify(payload))
+}
+
 // 获取网络代理 agent（优先 K-Proxy，其次用户设置代理，其次系统代理）
 function getNetworkAgent(): ProxyAgent | undefined {
   if (useKProxyForApi) {
@@ -86,7 +125,7 @@ const KIRO_ENDPOINTS = [
   },
   {
     url: 'https://q.us-east-1.amazonaws.com/SendMessageStreaming',
-    origin: 'AmazonQ',
+    origin: 'CLI',
     amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
     name: 'AmazonQCLI'
   }
@@ -738,6 +777,49 @@ function sanitizeConversation(messages: KiroHistoryMessage[]): KiroHistoryMessag
   return sanitized
 }
 
+// 按 token 估算成对裁剪 history 最旧消息 (避免后端 CONTENT_LENGTH_EXCEEDS_THRESHOLD)
+// 切点保证不破坏 toolUse↔toolResult 配对：assistant(toolUse) 必须连同后续 user(toolResult) 一起裁
+// 裁剪后用 ensureStartsWithUserMessage 兜底重新规范化
+function trimHistoryByTokens(payload: KiroPayload, maxTokens: number): { trimmed: number; finalTokens: number; iterations: number } {
+  let history = payload.conversationState.history
+  if (!history || history.length === 0) {
+    return { trimmed: 0, finalTokens: estimatePayloadTokens(payload), iterations: 0 }
+  }
+
+  let totalTrimmed = 0
+  let iterations = 0
+  let currentTokens = estimatePayloadTokens(payload)
+  const MAX_ITERATIONS = 100 // 防止极端情况死循环
+
+  while (currentTokens > maxTokens && history.length >= 4 && iterations < MAX_ITERATIONS) {
+    iterations++
+    // 计算安全切点：从 index 0 开始至少裁掉 1 组 (user+assistant)，并连带 toolUse/toolResult 配对
+    let cutAt = 0
+    while (cutAt < history.length - 2) {
+      const msg = history[cutAt]
+      // assistant(toolUse) → 下一条 user(toolResult) 必须一起裁，避免配对断裂
+      if (isAssistantResponseMessage(msg) && hasToolUses(msg)) {
+        cutAt += 2
+      } else {
+        cutAt += 1
+      }
+      if (cutAt >= 2) break
+    }
+
+    if (cutAt === 0) break // 无法继续裁剪
+
+    history = history.slice(cutAt)
+    totalTrimmed += cutAt
+
+    // 裁剪后 history 可能以 assistant 起头 → 补 HELLO 重新规范
+    history = ensureStartsWithUserMessage(history)
+    payload.conversationState.history = history
+    currentTokens = estimatePayloadTokens(payload)
+  }
+
+  return { trimmed: totalTrimmed, finalTokens: currentTokens, iterations }
+}
+
 // ============= 构建 Kiro API 请求负载（参考 Kiro 官方实现）=============
 
 export function buildKiroPayload(
@@ -871,7 +953,20 @@ export function buildKiroPayload(
     payload.additionalModelRequestFields = additionalModelRequestFields
   }
 
-  // 工具结果裁剪：payload 超过限制时，从最旧的历史 toolResult 开始截断内容
+  // ====== 第一阶段：按 token 估算成对裁剪旧 history ======
+  // 避免 Kiro 后端 CONTENT_LENGTH_EXCEEDS_THRESHOLD（token 维度的拒绝）
+  // 注意：byte size 充足但 token 超限是常见情况（长对话+大量小消息）
+  // effectiveLimit 按模型 context window 自动算：ctx - tokenBufferReserve (默认 50K)
+  // 例：sonnet-4.5 (200K) → 150K, sonnet-4.5 with 1M beta → 950K
+  const effectiveTokenLimit = getEffectiveTokenLimit(modelId)
+  const tokenTrimResult = trimHistoryByTokens(payload, effectiveTokenLimit)
+  if (tokenTrimResult.trimmed > 0) {
+    const modelCtx = getModelContextWindow(modelId) || 200000
+    console.log(`[KiroPayload] Trimmed ${tokenTrimResult.trimmed} oldest history messages by token estimate (≈${tokenTrimResult.finalTokens.toLocaleString()} / ${effectiveTokenLimit.toLocaleString()} tokens [model ctx ${modelCtx.toLocaleString()} - buffer ${tokenBufferReserve.toLocaleString()}], ${tokenTrimResult.iterations} iter)`)
+  }
+
+  // ====== 第二阶段：按 byte 截断 tool result 内容 ======
+  // 避免 HTTP body 过大被 Kiro 网关拒绝
   // 用户可在高级设置中调整限制值（默认 1536KB = 1.5MB）
   const PAYLOAD_SIZE_LIMIT = (payloadSizeLimitKB || 1536) * 1024
   const TOOL_RESULT_TRUNCATE_LENGTH = 4000

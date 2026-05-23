@@ -77,6 +77,7 @@ interface ProxyConfig {
   clientDrivenToolExecution?: boolean
   disableTools?: boolean
   payloadSizeLimitKB?: number
+  tokenBufferReserve?: number
   autoSwitchOnQuotaExhausted?: boolean
   accountSelectionStrategy?: 'round-robin' | 'sticky'
   modelMappings?: ModelMappingRule[]
@@ -876,6 +877,24 @@ export function ProxyPanel() {
                   disabled={isRunning}
                 />
                 <p className="text-xs text-muted-foreground">{isEn ? 'When payload exceeds this limit, oldest tool results will be truncated. Default 1536KB (1.5MB). Reduce if API rejects large payloads.' : '超过此限制时，最旧的工具结果将被截断。默认 1536KB (1.5MB)，如 API 拒绝大 payload 可调小。'}</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tokenBufferReserve">{isEn ? 'Token Buffer Reserve (auto-trim history)' : 'Token Buffer 预留 (自动裁旧 history)'}</Label>
+                <Input
+                  id="tokenBufferReserve"
+                  type="number"
+                  min={5000}
+                  max={150000}
+                  step={1000}
+                  value={config.tokenBufferReserve || 50000}
+                  onChange={(e) => {
+                    const tokens = parseInt(e.target.value) || 50000
+                    setConfig(prev => ({ ...prev, tokenBufferReserve: tokens }))
+                    window.api.proxyUpdateConfig({ tokenBufferReserve: tokens })
+                  }}
+                  disabled={isRunning}
+                />
+                <p className="text-xs text-muted-foreground">{isEn ? 'Tokens reserved below the model context window. Effective trim threshold = model.maxInputTokens - buffer. Default 50K works for all models (200K → trim at 150K, 1M → trim at 950K). Covers system + tools + current message + output + estimation bias.' : '从模型 context window 中预留的 token 余量。有效裁剪阈值 = model.maxInputTokens - buffer。默认 50K 适配所有模型（200K 模型→150K 裁剪，1M 模型→950K 裁剪）。覆盖 system + tools + current message + output + 估算偏差。'}</p>
               </div>
             </div>
           </div>

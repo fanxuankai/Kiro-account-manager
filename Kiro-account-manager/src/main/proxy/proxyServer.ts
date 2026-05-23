@@ -17,7 +17,7 @@ import type {
   TokenRefreshCallback
 } from './types'
 import { AccountPool, ErrorType, classifyError } from './accountPool'
-import { callKiroApiStream, callKiroApi, fetchKiroModels, type KiroModel } from './kiroApi'
+import { callKiroApiStream, callKiroApi, fetchKiroModels, setModelContextWindow, type KiroModel } from './kiroApi'
 import { proxyLogger } from './logger'
 import { getKProxyService, generateDeviceId } from '../kproxy'
 import {
@@ -832,6 +832,12 @@ export class ProxyServer {
         kiroModels = await fetchKiroModels(account, signal)
         if (kiroModels.length > 0) {
           this.modelCache = { models: kiroModels, timestamp: now }
+          // 同步到 kiroApi 的 ctx cache, 供 token 裁剪逻辑使用
+          for (const m of kiroModels) {
+            if (m.tokenLimits?.maxInputTokens) {
+              setModelContextWindow(m.modelId, m.tokenLimits.maxInputTokens)
+            }
+          }
         }
       } catch (error) {
         if (this.isAbortError(error, signal)) throw error
@@ -1749,6 +1755,12 @@ export class ProxyServer {
           kiroModels = await fetchKiroModels(account, signal)
           if (kiroModels.length > 0) {
             this.modelCache = { models: kiroModels, timestamp: now }
+            // 同步到 kiroApi 的 ctx cache, 供 token 裁剪逻辑使用
+            for (const m of kiroModels) {
+              if (m.tokenLimits?.maxInputTokens) {
+                setModelContextWindow(m.modelId, m.tokenLimits.maxInputTokens)
+              }
+            }
             proxyLogger.info('ProxyServer', `Fetched ${kiroModels.length} models from Kiro API`)
           }
         } catch (error) {
