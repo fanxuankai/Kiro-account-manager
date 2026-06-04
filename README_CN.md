@@ -272,6 +272,71 @@ npx electron-builder --linux --arm64
 ## 📋 更新日志
 
 
+### v1.7.3 (2026-6-4) — Kiro IDE Token 双向同步 + BuilderId 占位符 ARN 闭环修复 + 主动续期 + macOS 自动更新修复
+
+> 本版本聚焦解决"通过本工具切号 / 刷新 Token 后，Kiro IDE 桌面端约 1 小时后被强制登出"的核心故障，闭环修掉 BuilderId 账号在多处仍被写入占位符 profileArn 的连环 bug，新增可选的 IDE Token 主动续期能力（默认关闭），修复 macOS 自动更新 404，附带 Kiro IDE 二进制补丁器脚本与若干 UI 细节调整。
+
+#### 🔥 核心修复：Kiro IDE Token 双向同步（修复"切号 ~1h 后 IDE 强制登出"）
+
+- **修复**: 🔥 **`switch-account` 写入磁盘的 refreshToken 是已被服务端 rotate 作废的旧值** — 旧实现在调 OIDC 拿到 `access_v2 + refresh_v2` 后只更新本地变量 `accessToken`，写入 `~/.aws/sso/cache/kiro-auth-token.json` 时 `refreshToken` 仍是 `v1`（已被 BuilderId 的 rotating refresh token 机制立即作废）。Kiro IDE 在 ~50 分钟后 refresh loop 用 `v1` 调 OIDC → 401 → `logoutAndForget()` 强制登出
+- **修复**: 🔥 **`refresh-account-token`（"刷新 Token"按钮）从来不写磁盘文件** — 旧实现只更新工具内 store 并通知 renderer，磁盘 token 文件没动；Kiro IDE 永远看不到新 token，UI 显示"已刷新"但 IDE 实际仍用旧的，约 1 小时后撞同样的 401 → 登出
+- **修复**: 🔥 **`background-batch-refresh`（自动刷新走的批量 IPC）也不写磁盘** — "自动刷新"功能（默认 5 分钟一次）刷新所有账号但永远不同步到 IDE 磁盘，是修复"切号"和"刷新 Token"按钮后的最大隐藏漏洞。现在每个账号刷新成功后，若识别为 IDE 当前激活账号则自动同步
+- **修复**: `switch-account` 的 `expiresAt` 硬编码 `Date.now() + 3600*1000`，现改用 OIDC 返回的真实 `expiresIn`
+- **修复**: `switch-account` 在 OIDC 刷新失败时仍用旧 token 写文件埋雷，现直接报错不写文件，并提示用户
+
+#### 🔁 新模块：`src/main/kiroAuthSync.ts` 与双向同步
+
+- **新增**: `writeKiroAuthTokenFile` / `readKiroAuthTokenFile` 共用 helper，统一以 Kiro IDE 完全兼容的格式（`mode 0o600` 等）读写 `~/.aws/sso/cache/kiro-auth-token.json`；社交 / IdC 字段顺序对齐 IDE 源码序列化结果
+- **新增**: `parseAccessTokenClaims` — 解 access token 的 JWT 第二段拿 `sub / email / aud`，用于反向同步时识别"IDE 这次自刷的是哪个账号"
+- **新增**: `watchKiroAuthTokenFile` — 用 `fs.watchFile` 监听磁盘 token 变化 + 内容防抖；账号管理器主进程启动时自动挂上
+- **新增**: **反向同步链路** — Kiro IDE 自己 refresh 后写新 token 到磁盘 → 反代 watcher 检测到 → JWT sub 三层匹配（sub / lastSwitchedAccountId / refreshToken）找到反代 store 里的账号 → 更新 credentials → `webContents.send('kiro-ide-token-changed')` 通知 renderer 重新 loadAccounts，UI 立刻看到最新 expiresAt
+- **新增**: 防回环 — 反代自己刚写入的 token 签名 `lastWrittenTokenSignature` 会被 watcher 识别并跳过，避免 IDE / 反代来回打架
+- **新增**: `switchAccount` IPC 返回 `refreshedCredentials`（含 refresh 后真实的 access/refresh/expiresIn），renderer 立即同步到 store；解决"反代 store 仍存 v1 → 下次刷新撞已作废 refresh"的连锁问题
+
+#### 🛡️ BuilderId 占位符 profileArn 闭环修复
+
+- **修复**: 🔥 **Kiro IDE 桌面端 `FixedProfileArns` 给 BuilderId 硬编码占位符 ARN `profile/AAAACCCCXXXX`** — 反代直接调 `codewhisperer.us-east-1.amazonaws.com/ListAvailableModels` 携带此 ARN 必触发 403 "User is not authorized to make this call."。本工具反代侧 `kiroApi.ts` 的 `resolveProfileArn` 改为：BuilderId 与未知 provider 不附加任何 profileArn；所有调用点（`fetchKiroModels` / `callKiroApiStream` / 订阅三接口）全部加判空守护
+- **修复**: 🔥 **`switch-account` / `switch-account-cli` / `refresh-account-token`（同步分支）/ `runProactiveRenewal` 等 4 处写入路径仍内联占位符 ARN** — BuilderId 账号会被强行塞这个占位符到 `~/.aws/sso/cache/kiro-auth-token.json` 或 `~/.local/share/kiro-cli/data.sqlite3`，导致 Kiro IDE / kiro-cli 后续走 REST 端点的调用同样被埋雷。现统一改用 `resolveProfileArnForWrite` helper：BuilderId 永远返回 `undefined`
+- **新增**: `kiroAuthSync.ts` 集中维护 `KIRO_BUILDER_ID_PLACEHOLDER_ARN` / `KIRO_SOCIAL_PROFILE_ARN` 常量；反代 `kiroApi.ts` 改为 re-export，消除 5 处常量重复定义的漂移风险
+- **新增**: `writeKiroAuthTokenFile` 内部加防线 — 检测到调用方传入占位符 ARN 自动 strip 为 `undefined`，任何漏掉 helper 的路径仍被兜底
+- **新增**: 启动时 `migrateAccountDataIfNeeded` 一次性扫描 electron-store 里的账号数据，把已被旧版本 / Kiro IDE 写入的占位符 ARN 清空并幂等回写
+
+#### 🆕 新增：IDE Token 主动续期（Proactive Renewal，默认关闭）
+
+- **新增**: Settings → Auto Refresh 块下方新增 **「IDE 主动续期」** 开关 — 启用后账号管理器主进程会在 IDE 当前激活账号的 token 剩 ~15 分钟时抢先 refresh + 写磁盘，Kiro IDE 始终看到剩余 ≥ 45 分钟的 token，IDE 内部 `attemptRefreshIfCloseToExpiry` 永远不触发，彻底消除 IDE 与本工具同时 refresh 撞车 OIDC rotation 的 race 风险
+- **新增**: 仅对"当前 IDE 激活账号"维护一个 timer（开销最低）；`switch-account` / `refresh-account-token` / `logout-account` 都会正确调度或清理 timer，绝不泄漏
+- **新增**: 续期失败时 timer 停止 + 由 IDE 自己的 refresh loop 接管 — 与双向同步机制天然互补
+- **新增**: 持久化在 electron-store（`proactiveRenewalEnabled` 键），重启账号管理器后自动恢复
+
+#### 🧰 Kiro IDE 二进制补丁器 `scripts/patch-kiro-ide.cjs`
+
+- **新增**: 跨平台脚本 — 针对 Kiro IDE 桌面端 `extension.js` 与 `packages/kiro-shared` bundled JS 做 3 处精准正则替换：
+  - `getFixedProfileArn`：BuilderId 短路返回 `void 0`
+  - `supportsProfiles`：把 BuilderId 移出 IdC 列表
+  - `resolveProfileArn`：BuilderId token 直接返回 `void 0`
+- **新增**: 同时清理 `%APPDATA%/Kiro/User/globalStorage/kiro.kiro-agent/profile.json` 里写入的占位符 ARN
+- **新增**: 幂等（首行 MARKER）+ 备份（`.kpatch-backup`）+ `--dry-run` / `--restore` / `--verbose` / `--kiro-dir` 参数；Kiro IDE 升级覆盖后重新运行同一命令即可重打
+- **使用**: `node scripts/patch-kiro-ide.cjs --dry-run` 先预检，`node scripts/patch-kiro-ide.cjs` 正式打。建议完全退出 Kiro 后再执行
+
+#### 🔧 构建 / 发布
+
+- **修复**: 🔥 **macOS 自动更新 404** — `electron-builder` 默认行为下 mac zip 文件名把 `productName` 中的空格替换成 `.`（生成 `Kiro.Account.Manager-1.7.2-mac.zip`），但 `latest-mac.yml` 里的 `url` 字段把空格替换成 `-`（指向 `Kiro-Account-Manager-1.7.2-mac.zip`），两者 mismatch → updater 下载 404。`electron-builder.yml` 新增 `mac.artifactName: ${name}-${version}-${arch}-mac.${ext}` 与显式 `target: zip/dmg × [x64, arm64]`，让所有平台命名统一为 `kiro-account-manager-…` 风格，并让 `latest-mac.yml` 同时包含 x64 + arm64 双入口，Apple Silicon 用户能拿到 arm64 原生包
+- **注意**: 现有 v1.7.2 macOS 用户因上述 bug 仍无法自动升级到 v1.7.3，请到 [Releases](https://github.com/chaogei/Kiro-account-manager/releases/latest) 手动下载对应 dmg/zip 安装一次
+
+#### 🎨 UI / 细节调整
+
+- **优化**: 注册页面 — 「日志」卡片从页面最底部移到「开始注册」按钮所在卡片之后，操作时可一眼看到实时进度
+- **优化**: 账号工具栏 — 「批量检查账户信息」与「批量刷新 Token」两个按钮之前都用 `RefreshCw` 图标，肉眼分不清；现分别改为 `Activity`（检查/活动语义）与 `KeyRound`（刷新令牌语义，与卡片视图一致），并附 i18n tooltip
+- **新增**: Settings → Auto Refresh 块下加双向同步说明 — 明确「Kiro IDE 有自己的内部刷新循环」、「切号 / 刷新仅当账号是 IDE 当前激活账号才同步到磁盘」、「IDE 自刷后本工具会反向同步到 store」
+- **新增**: `onKiroIdeTokenChanged` IPC 事件 — renderer 收到后自动 `loadFromStorage`，IDE 自刷后 UI 立刻刷新 expiresAt
+
+#### 🔍 验证
+
+- 全项目 `npm run typecheck:node && npm run typecheck:web` 两段 zero error 通过
+- ReadLints 对全部改动文件零警告
+- Kiro IDE 补丁脚本 `--dry-run` 在 Windows 实测 D:\Program\Kiro 上 5 个目标文件全部精准命中（3 + 1 + 1 + 1 + 1 处替换）
+
+
 ### v1.7.2 (2026-6-2) — 批量订阅链接增强 + 卡密解析修复 + 添加/导入分组归属
 
 > 本版本聚焦批量订阅「获取链接」界面的批量导入与快选分批打开、卡密/凭证解析的边界字符修复（解决导入验证 401），以及添加 / 批量 / 导入账号时可归入指定分组。

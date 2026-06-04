@@ -53,8 +53,21 @@ interface RefreshResult {
     accessToken: string
     refreshToken?: string
     expiresIn: number
+    /**
+     * 反代在 main 进程中是否已经把新 token 同步写入 ~/.aws/sso/cache/kiro-auth-token.json。
+     * 仅当该账号被识别为 Kiro IDE 当前激活账号时才会同步，否则为 false。
+     */
+    syncedToIde?: boolean
+    /** 未同步到 IDE 时的原因描述（用于 UI 提示） */
+    syncSkipReason?: string
   }
   error?: { message: string }
+}
+
+/** Kiro IDE 自己 refresh 完写回 token 文件、被反代检测到后通知 renderer 的 payload */
+interface KiroIdeTokenChangedPayload {
+  accountId: string
+  reason: string
 }
 
 interface BonusData {
@@ -180,7 +193,44 @@ interface KiroApi {
     authMethod?: 'IdC' | 'social'
     provider?: 'BuilderId' | 'Enterprise' | 'Github' | 'Google' | 'IAM_SSO'
     profileArn?: string
-  }) => Promise<{ success: boolean; error?: string }>
+    /** 反代 store 里的 account.id，用于 main 进程记忆 lastSwitchedAccountId 供 watcher 反向同步 */
+    accountId?: string
+  }) => Promise<{
+    success: boolean
+    error?: string
+    /** 切号前 main 进程会做一次 refresh；这是 OIDC 返回的最新凭证，renderer 应据此更新 store */
+    refreshedCredentials?: {
+      accessToken: string
+      refreshToken: string
+      expiresIn: number
+    }
+  }>
+
+  /**
+   * 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件，回调里通常应该重新 loadAccounts
+   * 让 UI 显示最新 expiresAt。返回 unsubscribe 函数。
+   */
+  onKiroIdeTokenChanged: (callback: (data: KiroIdeTokenChangedPayload) => void) => () => void
+
+  /**
+   * 开启/关闭"主动续期"功能。
+   * 开启后账号管理器会在 IDE 当前激活账号 token 剩 ~15 分钟时抢先 refresh + 写磁盘，
+   * 让 IDE 永远拿到剩余时间充足的 token，IDE 内部的 refresh loop 不会被触发，
+   * 彻底消除 IDE 与账号管理器同时 refresh 撞车的可能。
+   */
+  setProactiveRenewalEnabled: (enabled: boolean) => Promise<{
+    success: boolean
+    enabled?: boolean
+    error?: string
+  }>
+
+  /** 读取主动续期开关当前状态 + 提前续期的分钟数 */
+  getProactiveRenewalEnabled: () => Promise<{
+    success: boolean
+    enabled: boolean
+    leadTimeMinutes?: number
+    error?: string
+  }>
 
   // 切换账号到 Kiro CLI - 写入凭证到 SQLite 数据库
   switchAccountCli: (credentials: {

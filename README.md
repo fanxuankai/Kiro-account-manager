@@ -272,6 +272,71 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.3 (2026-6-4) — Kiro IDE Token Bidirectional Sync + BuilderId Placeholder ARN Full Closure + Proactive Renewal + macOS Auto-Update Fix
+
+> This release focuses on the core failure "after switching accounts / refreshing tokens in this app, Kiro IDE desktop gets force-logged-out ~1 hour later", closes the chain of bugs where BuilderId accounts still got written placeholder profileArn in multiple paths, adds an optional IDE Token proactive-renewal capability (off by default), fixes macOS auto-update 404, and ships a Kiro IDE binary patcher script plus several UI tweaks.
+
+#### 🔥 Core Fix: Kiro IDE Token Bidirectional Sync (resolves "force-logout ~1h after switching")
+
+- **Fix**: 🔥 **`switch-account` wrote the already-rotated/invalidated old refreshToken to disk** — the old code only updated the local variable `accessToken` after calling OIDC for `access_v2 + refresh_v2`, but the `refreshToken` written into `~/.aws/sso/cache/kiro-auth-token.json` was still `v1` (immediately invalidated by BuilderId's rotating refresh-token mechanism). Kiro IDE's refresh loop later used `v1` against OIDC → 401 → `logoutAndForget()` force-logout
+- **Fix**: 🔥 **`refresh-account-token` ("Refresh Token" button) never wrote to disk at all** — the old code only updated the in-app store and notified the renderer; the disk token file was untouched, so Kiro IDE never saw the new token. The UI showed "refreshed" but IDE actually kept using the old one and hit the same 401 → logout ~1h later
+- **Fix**: 🔥 **`background-batch-refresh` (the IPC used by "Auto Refresh") also never wrote to disk** — the Auto Refresh feature (default every 5 minutes) refreshed all accounts but never synced to the IDE disk file. This was the biggest hidden hole after the switch/refresh-button fixes. Now every refreshed account, if recognized as the IDE current active account, is auto-synced
+- **Fix**: `switch-account` hardcoded `expiresAt = Date.now() + 3600*1000`; now uses the real `expiresIn` returned by OIDC
+- **Fix**: `switch-account` previously still wrote the old token on OIDC refresh failure (planting a landmine); now it errors out without writing and surfaces a clear message
+
+#### 🔁 New Module: `src/main/kiroAuthSync.ts` and Bidirectional Sync
+
+- **New**: `writeKiroAuthTokenFile` / `readKiroAuthTokenFile` shared helpers — uniformly read/write `~/.aws/sso/cache/kiro-auth-token.json` in a fully Kiro-IDE-compatible format (`mode 0o600` etc.); social / IdC field ordering matches the IDE source serializer
+- **New**: `parseAccessTokenClaims` — decodes the JWT body of an access token for `sub / email / aud`, used during reverse sync to identify "which account did the IDE just self-refresh"
+- **New**: `watchKiroAuthTokenFile` — uses `fs.watchFile` with content-level debouncing; hooked up on app start
+- **New**: **Reverse sync pipeline** — when Kiro IDE self-refreshes and writes new token to disk → the watcher fires → 3-tier account matching (JWT sub / `lastSwitchedAccountId` / refreshToken equality) finds the account in store → updates credentials → `webContents.send('kiro-ide-token-changed')` triggers renderer to `loadFromStorage`, UI immediately shows latest `expiresAt`
+- **New**: Anti-loop — `lastWrittenTokenSignature` (the token written by this app itself) is recognized by the watcher and skipped, preventing ping-pong between IDE and the app
+- **New**: `switchAccount` IPC returns `refreshedCredentials` (the real post-refresh access/refresh/expiresIn); the renderer immediately syncs to store, eliminating the cascading bug "store still holds v1 → next refresh hits invalidated refresh"
+
+#### 🛡️ BuilderId Placeholder profileArn Full Closure
+
+- **Fix**: 🔥 **Kiro IDE desktop's `FixedProfileArns` hardcodes the placeholder ARN `profile/AAAACCCCXXXX` for BuilderId** — calling `codewhisperer.us-east-1.amazonaws.com/ListAvailableModels` with this ARN deterministically triggers 403 "User is not authorized to make this call." The reverse-proxy side `kiroApi.ts`'s `resolveProfileArn` now returns no profileArn for BuilderId and unknown providers; all call sites (`fetchKiroModels` / `callKiroApiStream` / 3 subscription endpoints) guard with null-checks
+- **Fix**: 🔥 **4 disk-write paths (`switch-account` / `switch-account-cli` / `refresh-account-token` sync branch / `runProactiveRenewal`) still inlined the placeholder ARN** — BuilderId accounts were force-stamped this placeholder into `~/.aws/sso/cache/kiro-auth-token.json` or `~/.local/share/kiro-cli/data.sqlite3`, planting the same landmine for Kiro IDE / kiro-cli REST calls. All paths now use the unified `resolveProfileArnForWrite` helper, which always returns `undefined` for BuilderId
+- **New**: `kiroAuthSync.ts` centrally hosts `KIRO_BUILDER_ID_PLACEHOLDER_ARN` / `KIRO_SOCIAL_PROFILE_ARN`; reverse-proxy `kiroApi.ts` becomes a re-exporter, eliminating drift risk across 5 duplicated constants
+- **New**: Last-line-of-defense inside `writeKiroAuthTokenFile` — if a placeholder ARN is detected in input, it is automatically stripped to `undefined`, catching anything that bypassed the helper
+- **New**: On boot, `migrateAccountDataIfNeeded` performs a one-time scan of account data in electron-store, clearing placeholder ARNs written by older versions / Kiro IDE itself, then writes back idempotently
+
+#### 🆕 New: IDE Token Proactive Renewal (off by default)
+
+- **New**: A **"Proactive Token Renewal for IDE"** toggle has been added beneath the Auto Refresh block in Settings — when enabled, the app's main process refreshes + writes-to-disk ~15 minutes before the IDE active account's token expires, so Kiro IDE always sees ≥ 45 minutes remaining and its internal `attemptRefreshIfCloseToExpiry` never fires, completely eliminating any race against OIDC rotation
+- **New**: Maintains a single in-process timer (lowest possible cost) tied to the IDE current active account; `switch-account` / `refresh-account-token` / `logout-account` all schedule or clear the timer correctly with zero leaks
+- **New**: On renewal failure, the timer halts and the IDE's own refresh loop takes over — naturally complementary to the bidirectional-sync mechanism
+- **New**: Persisted in electron-store (`proactiveRenewalEnabled` key) and auto-restored after restarting the app
+
+#### 🧰 Kiro IDE Binary Patcher `scripts/patch-kiro-ide.cjs`
+
+- **New**: Cross-platform script — performs 3 precise regex replacements against Kiro IDE desktop's `extension.js` and the bundled JS under `packages/kiro-shared`:
+  - `getFixedProfileArn`: short-circuit `void 0` for BuilderId
+  - `supportsProfiles`: remove BuilderId from the IdC list
+  - `resolveProfileArn`: return `void 0` directly for BuilderId tokens
+- **New**: Also cleans the placeholder ARN persisted in `%APPDATA%/Kiro/User/globalStorage/kiro.kiro-agent/profile.json`
+- **New**: Idempotent (first-line MARKER) + backup (`.kpatch-backup`) + flags: `--dry-run` / `--restore` / `--verbose` / `--kiro-dir`; re-run the same command after Kiro IDE upgrades to re-patch
+- **Usage**: `node scripts/patch-kiro-ide.cjs --dry-run` for preview; `node scripts/patch-kiro-ide.cjs` to apply. Fully quit Kiro before running
+
+#### 🔧 Build / Release
+
+- **Fix**: 🔥 **macOS auto-update 404** — by default, `electron-builder` replaces spaces in `productName` with `.` for the mac zip filename (yielding `Kiro.Account.Manager-1.7.2-mac.zip`), but the `url` field in `latest-mac.yml` replaces spaces with `-` (pointing at `Kiro-Account-Manager-1.7.2-mac.zip`). The mismatch caused updater 404. `electron-builder.yml` now sets `mac.artifactName: ${name}-${version}-${arch}-mac.${ext}` and explicit `target: zip/dmg × [x64, arm64]`, unifying naming to `kiro-account-manager-…` across platforms and making `latest-mac.yml` include both x64 and arm64 entries so Apple Silicon users get a native arm64 build
+- **Note**: Existing v1.7.2 macOS users cannot auto-upgrade to v1.7.3 due to the above bug; please download the matching dmg/zip from [Releases](https://github.com/chaogei/Kiro-account-manager/releases/latest) manually one time
+
+#### 🎨 UI / Detail Tweaks
+
+- **Optimize**: Registration page — the "Log" card has been moved from the bottom of the page to right after the "Start Registration" button card, so live progress is visible at a glance
+- **Optimize**: Account toolbar — "Batch Check Account Info" and "Batch Refresh Token" both previously used the `RefreshCw` icon and were visually indistinguishable; now respectively switched to `Activity` (check/activity semantic) and `KeyRound` (refresh-token semantic, consistent with the card view) with i18n tooltips
+- **New**: Bidirectional-sync explainer block added beneath Auto Refresh in Settings — clarifying "Kiro IDE has its own internal refresh loop", "switch/refresh syncs to disk only for the IDE current active account", and "the app reverse-syncs back to store when IDE self-refreshes"
+- **New**: `onKiroIdeTokenChanged` IPC event — renderer subscribes and triggers `loadFromStorage` on receipt; the UI refreshes `expiresAt` instantly after IDE self-refresh
+
+#### 🔍 Validation
+
+- Full-project `npm run typecheck:node && npm run typecheck:web` both pass with zero errors
+- ReadLints reports zero warnings across all modified files
+- The Kiro IDE patcher script's `--dry-run` precisely targets all 5 candidate files on Windows D:\Program\Kiro (3 + 1 + 1 + 1 + 1 replacements)
+
+
 ### v1.7.2 (2026-6-2) — Batch Subscription Link Enhancements + Card-Key Parsing Fix + Group Assignment on Add/Import
 
 > This release focuses on bulk import & quick-pick batched opening in the Subscription "Get Links" view, a boundary-character fix in card-key/credential parsing (resolving import-verification 401s), and assigning accounts to a chosen group when adding / batch-adding / importing.

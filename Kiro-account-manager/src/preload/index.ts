@@ -137,8 +137,32 @@ const api = {
     authMethod?: 'IdC' | 'social'
     provider?: 'BuilderId' | 'Github' | 'Google' | 'Enterprise'
     profileArn?: string
-  }): Promise<{ success: boolean; error?: string }> => {
+    accountId?: string
+  }): Promise<{
+    success: boolean
+    error?: string
+    refreshedCredentials?: { accessToken: string; refreshToken: string; expiresIn: number }
+  }> => {
     return ipcRenderer.invoke('switch-account', credentials)
+  },
+
+  // 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件
+  onKiroIdeTokenChanged: (callback: (data: { accountId: string; reason: string }) => void): (() => void) => {
+    const handler = (_event: unknown, data: { accountId: string; reason: string }): void => {
+      callback(data)
+    }
+    ipcRenderer.on('kiro-ide-token-changed', handler)
+    return (): void => {
+      ipcRenderer.removeListener('kiro-ide-token-changed', handler)
+    }
+  },
+
+  // 主动续期开关：开启后账号管理器会在 IDE refresh 阈值前抢先 refresh，IDE 永不自刷
+  setProactiveRenewalEnabled: (enabled: boolean): Promise<{ success: boolean; enabled?: boolean; error?: string }> => {
+    return ipcRenderer.invoke('set-proactive-renewal-enabled', enabled)
+  },
+  getProactiveRenewalEnabled: (): Promise<{ success: boolean; enabled: boolean; leadTimeMinutes?: number; error?: string }> => {
+    return ipcRenderer.invoke('get-proactive-renewal-enabled')
   },
 
   // 切换账号到 Kiro CLI - 写入凭证到 SQLite 数据库

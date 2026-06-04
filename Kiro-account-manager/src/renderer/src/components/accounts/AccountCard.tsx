@@ -240,7 +240,8 @@ export const AccountCard = memo(function AccountCard({
       startUrl: credentials.startUrl,
       authMethod: credentials.authMethod,
       provider: credentials.provider,
-      profileArn: account.profileArn
+      profileArn: account.profileArn,
+      accountId: account.id
     }
 
     let success = true
@@ -249,7 +250,30 @@ export const AccountCard = memo(function AccountCard({
     // 根据 switchTarget 设置决定切换目标
     if (switchTarget === 'ide' || switchTarget === 'both') {
       const result = await window.api.switchAccount(idePayload)
-      if (!result.success) { success = false; errorMsg = result.error || '' }
+      if (!result.success) {
+        success = false
+        errorMsg = result.error || ''
+      } else if (result.refreshedCredentials) {
+        // 同步 main 进程 refresh 后的最新 credentials 到 store，避免反代 store 留下已作废的 refreshToken
+        const rc = result.refreshedCredentials
+        useAccountsStore.setState((state) => {
+          const accounts = new Map(state.accounts)
+          const acc = accounts.get(account.id)
+          if (acc) {
+            accounts.set(account.id, {
+              ...acc,
+              credentials: {
+                ...acc.credentials,
+                accessToken: rc.accessToken,
+                refreshToken: rc.refreshToken,
+                expiresAt: Date.now() + rc.expiresIn * 1000
+              }
+            })
+          }
+          return { accounts }
+        })
+        useAccountsStore.getState().saveToStorage()
+      }
     }
     if (switchTarget === 'cli' || switchTarget === 'both') {
       const result = await window.api.switchAccountCli(cliPayload)

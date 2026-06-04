@@ -2672,6 +2672,27 @@ export function RegisterPage(): React.JSX.Element {
         </CardContent>
       </Card>
 
+      {/* 日志（紧跟"开始注册"卡片，方便观察进度，不再放到页面最底部） */}
+      {logs.length > 0 && (
+        <Card className="overflow-hidden">
+          <CardHeader className="py-3 border-b">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm">{t('register.log')}</CardTitle>
+              <Button variant="ghost" size="sm" onClick={() => { _logs = []; setLogs([]) }}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div ref={logContainerRef} className="h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5 bg-muted/20">
+              {logs.map((line, i) => (
+                <div key={i} className="text-muted-foreground leading-relaxed">{line}</div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 批量注册 (非手动模式) */}
       {mode !== 'manual' && (
         <Card className="hover-lift">
@@ -3280,26 +3301,6 @@ export function RegisterPage(): React.JSX.Element {
         </Card>
       )}
 
-      {/* 日志 */}
-      {logs.length > 0 && (
-        <Card className="overflow-hidden">
-          <CardHeader className="py-3 border-b">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm">{t('register.log')}</CardTitle>
-              <Button variant="ghost" size="sm" onClick={() => { _logs = []; setLogs([]) }}>
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className="p-0">
-            <div ref={logContainerRef} className="h-48 overflow-y-auto p-3 font-mono text-xs space-y-0.5 bg-muted/20">
-              {logs.map((line, i) => (
-                <div key={i} className="text-muted-foreground leading-relaxed">{line}</div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   )
 }

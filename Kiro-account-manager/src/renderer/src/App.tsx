@@ -90,6 +90,8 @@ function App(): React.JSX.Element {
     loadFromStorage().then(() => {
       startAutoTokenRefresh()
     })
+    // 同步主动续期开关（持久化在 main 进程的 electron-store）
+    useAccountsStore.getState().loadProactiveRenewalEnabled()
     // 加载 Webhook 配置
     useWebhookStore.getState().loadFromStorage()
 
@@ -97,6 +99,18 @@ function App(): React.JSX.Element {
       stopAutoTokenRefresh()
     }
   }, [loadFromStorage, startAutoTokenRefresh, stopAutoTokenRefresh])
+
+  // 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件
+  // 触发时间点：Kiro IDE 在后台 refresh loop 把磁盘 token 写新了，反代 watcher 反向同步到 store
+  // 这里收到事件后从磁盘重新加载账号数据，让 UI 立刻显示最新 expiresAt / accessToken
+  useEffect(() => {
+    if (typeof window.api.onKiroIdeTokenChanged !== 'function') return
+    const unsubscribe = window.api.onKiroIdeTokenChanged((data) => {
+      console.log(`[App] Kiro IDE refreshed token for account ${data.accountId} (${data.reason}), reloading accounts...`)
+      loadFromStorage().catch((e) => console.warn('[App] reload after IDE token change failed:', e))
+    })
+    return unsubscribe
+  }, [loadFromStorage])
 
   // 反代关键事件 → 触发 webhook（v1.8 新增）
   // 由 main/proxyServer 内置的 webhookTrigger 通过 IPC 推送过来，统一在 renderer 调 useWebhookStore

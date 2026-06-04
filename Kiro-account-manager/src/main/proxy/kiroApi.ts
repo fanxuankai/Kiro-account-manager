@@ -186,14 +186,33 @@ const KIRO_CLI_AMZ_USER_AGENT = `aws-sdk-rust/1.3.9 ua/2.1 api/ssooidc/1.88.0 os
 const AGENT_MODE_SPEC = 'spec' // IDE 模式
 const AGENT_MODE_VIBE = 'vibe' // CLI 模式
 
-const KIRO_BUILDER_ID_PROFILE_ARN = 'arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX'
-const KIRO_SOCIAL_PROFILE_ARN = 'arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK'
+// profileArn 决策中心已迁移到 ../kiroAuthSync，反代和账号管理器主进程共用同一份定义，
+// 防止多处常量漂移。注意 KIRO_BUILDER_ID_PLACEHOLDER_ARN 仍以本模块为出口 re-export，
+// 这样 main/index.ts 等老 import 路径不需要改。
+import {
+  KIRO_BUILDER_ID_PLACEHOLDER_ARN as _KIRO_BUILDER_ID_PLACEHOLDER_ARN,
+  KIRO_SOCIAL_PROFILE_ARN,
+  isPlaceholderProfileArn as _isPlaceholderProfileArn,
+  resolveProfileArnForWrite
+} from '../kiroAuthSync'
 
-function resolveProfileArn(account: ProxyAccount): string {
-  if (account.profileArn) return account.profileArn
-  if (account.provider === 'Github' || account.provider === 'Google') return KIRO_SOCIAL_PROFILE_ARN
-  return KIRO_BUILDER_ID_PROFILE_ARN
+export const KIRO_BUILDER_ID_PLACEHOLDER_ARN = _KIRO_BUILDER_ID_PLACEHOLDER_ARN
+export const isPlaceholderProfileArn = _isPlaceholderProfileArn
+
+/**
+ * 反代调 Kiro API 时使用的 profileArn 决策。
+ * BuilderId 等"不支持 profile"的账号返回 undefined，避免 REST 端点 403。
+ */
+function resolveProfileArn(account: ProxyAccount): string | undefined {
+  return resolveProfileArnForWrite({
+    profileArn: account.profileArn,
+    authMethod: account.authMethod,
+    provider: account.provider
+  })
 }
+
+// 兼容 SDK 部分调用仍想知道社交 ARN 的场景（极少；保留 export 不破坏外部 import）
+export { KIRO_SOCIAL_PROFILE_ARN }
 
 // Agentic 模式系统提示 - 防止大文件写入超时
 const AGENTIC_SYSTEM_PROMPT = `# CRITICAL: CHUNKED WRITE PROTOCOL (MANDATORY)
@@ -327,7 +346,7 @@ function isCodeWhispererModelId(modelId: string): boolean {
 }
 
 function getModelCacheKey(account: ProxyAccount): string {
-  return `${account.id}:${account.region || 'us-east-1'}:${resolveProfileArn(account)}`
+  return `${account.id}:${account.region || 'us-east-1'}:${resolveProfileArn(account) ?? 'no-arn'}`
 }
 
 async function getCachedCodeWhispererModels(account: ProxyAccount, signal?: AbortSignal): Promise<KiroModel[]> {
@@ -1202,7 +1221,12 @@ export async function callKiroApiStream(
     try {
       throwIfAborted(signal)
       const requestPayload = clonePayload(payload)
-      requestPayload.profileArn = resolveProfileArn(account)
+      const resolvedArn = resolveProfileArn(account)
+      if (resolvedArn) {
+        requestPayload.profileArn = resolvedArn
+      } else {
+        delete requestPayload.profileArn
+      }
       const requestedModelId = getPayloadModelId(requestPayload)
       if (endpoint.name === 'CodeWhisperer') {
         applyPayloadModelId(requestPayload, await resolveCodeWhispererModelId(account, requestedModelId, signal))
@@ -1958,7 +1982,9 @@ export async function fetchKiroModels(account: ProxyAccount, signal?: AbortSigna
   try {
     do {
       const params = new URLSearchParams({ origin: 'AI_EDITOR', maxResults: '50' })
-      params.set('profileArn', resolveProfileArn(account))
+      // BuilderId 等账号不携带 profileArn，避免 AWS 后端对占位符 ARN 返回 403
+      const arnForModels = resolveProfileArn(account)
+      if (arnForModels) params.set('profileArn', arnForModels)
       if (nextToken) params.set('nextToken', nextToken)
 
       const url = `${baseUrl}/ListAvailableModels?${params.toString()}`
@@ -2035,10 +2061,12 @@ export async function fetchAvailableSubscriptions(account: ProxyAccount): Promis
   }
 
   const profileArn = resolveProfileArn(account)
-  const body = JSON.stringify({ profileArn })
+  // BuilderId 不带 profileArn；带空/占位符会被 AWS 后端拒绝
+  const body = JSON.stringify(profileArn ? { profileArn } : {})
 
   console.log(`[KiroAPI] ListAvailableSubscriptions [${account.email || account.id.slice(0, 8)}]`, {
-    url
+    url,
+    hasProfileArn: profileArn !== undefined
   })
 
   try {
@@ -2085,11 +2113,13 @@ export async function fetchSubscriptionToken(
 
   const profileArn = resolveProfileArn(account)
 
-  // clientToken 是必需参数，需要生成 UUID
+  // clientToken 是必需参数；profileArn 仅在解析出有效值时附带
   const payload: Record<string, string> = {
     clientToken: uuidv4(),
-    profileArn,
     provider: 'STRIPE'
+  }
+  if (profileArn) {
+    payload.profileArn = profileArn
   }
   if (subscriptionType) {
     payload.subscriptionType = subscriptionType
@@ -2131,10 +2161,13 @@ export async function setUserPreference(
   }
 
   const profileArn = resolveProfileArn(account)
-  const body = JSON.stringify({
-    overageConfiguration: { overageStatus },
-    profileArn
-  })
+  const bodyPayload: Record<string, unknown> = {
+    overageConfiguration: { overageStatus }
+  }
+  if (profileArn) {
+    bodyPayload.profileArn = profileArn
+  }
+  const body = JSON.stringify(bodyPayload)
 
   try {
     const response = await fetchWithProxy(url, { method: 'POST', headers, body }, account)

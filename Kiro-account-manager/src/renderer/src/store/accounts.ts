@@ -268,6 +268,10 @@ interface AccountsState {
   autoRefreshSyncInfo: boolean // 刷新时是否同步检测账户信息（用量、订阅、封禁状态）
   statusCheckInterval: number // 分钟
 
+  // 主动续期开关（持久化在 main 进程的 electron-store；这里只是镜像，不写 saveToStorage）
+  proactiveRenewalEnabled: boolean
+  proactiveRenewalLeadMinutes: number
+
   // 隐私模式
   privacyMode: boolean
 
@@ -394,6 +398,10 @@ interface AccountsActions {
   setAutoRefresh: (enabled: boolean, interval?: number) => void
   setAutoRefreshConcurrency: (concurrency: number) => void
   setAutoRefreshSyncInfo: (enabled: boolean) => void
+  /** 调 main 进程的 IPC，同步开启/关闭主动续期；成功后更新本地镜像 */
+  setProactiveRenewalEnabled: (enabled: boolean) => Promise<{ success: boolean; error?: string }>
+  /** 从 main 进程读取主动续期开关当前状态 */
+  loadProactiveRenewalEnabled: () => Promise<void>
   setStatusCheckInterval: (interval: number) => void
 
   // 隐私模式
@@ -547,6 +555,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   autoRefreshConcurrency: 100,
   autoRefreshSyncInfo: true,
   statusCheckInterval: 60,
+  proactiveRenewalEnabled: false,
+  proactiveRenewalLeadMinutes: 15,
   privacyMode: false,
   usagePrecision: false,
   proxyEnabled: false,
@@ -1311,6 +1321,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const result = await window.api.refreshAccountToken(account)
 
       if (result.success && result.data) {
+        // 当 refresh 后 main 进程检测到该账号是 IDE 当前激活账号，会自动同步到磁盘 token 文件；
+        // 否则只更新反代 store，IDE 仍用旧 token —— 提醒用户避免误以为"刷新对 IDE 也生效了"
+        if (result.data.syncedToIde) {
+          console.log(`[refreshAccountToken] Token refreshed AND synced to Kiro IDE (account=${account.email})`)
+        } else {
+          console.warn(
+            `[refreshAccountToken] Token refreshed but NOT synced to Kiro IDE (account=${account.email}). ` +
+              `Reason: ${result.data.syncSkipReason || 'unknown'}. ` +
+              `Kiro IDE will still use its previously cached token until its own refresh loop kicks in.`
+          )
+        }
+
         set((state) => {
           const accounts = new Map(state.accounts)
           const acc = accounts.get(id)
@@ -1868,6 +1890,32 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     get().saveToStorage()
   },
 
+  setProactiveRenewalEnabled: async (enabled) => {
+    if (typeof window.api?.setProactiveRenewalEnabled !== 'function') {
+      return { success: false, error: 'API not available' }
+    }
+    const result = await window.api.setProactiveRenewalEnabled(enabled)
+    if (result.success) {
+      set({ proactiveRenewalEnabled: !!result.enabled })
+    }
+    return { success: result.success, error: result.error }
+  },
+
+  loadProactiveRenewalEnabled: async () => {
+    if (typeof window.api?.getProactiveRenewalEnabled !== 'function') return
+    try {
+      const result = await window.api.getProactiveRenewalEnabled()
+      if (result.success) {
+        set({
+          proactiveRenewalEnabled: !!result.enabled,
+          proactiveRenewalLeadMinutes: result.leadTimeMinutes ?? 15
+        })
+      }
+    } catch (e) {
+      console.warn('[Store] loadProactiveRenewalEnabled failed:', e)
+    }
+  },
+
   setStatusCheckInterval: (interval) => {
     set({ statusCheckInterval: interval })
     get().saveToStorage()
@@ -2091,7 +2139,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         const { switchTarget: target } = get()
         const creds = availableAccount.credentials
         if (target === 'ide' || target === 'both') {
-          await window.api.switchAccount({
+          const switchResult = await window.api.switchAccount({
             accessToken: creds.accessToken || '',
             refreshToken: creds.refreshToken || '',
             clientId: creds.clientId || '',
@@ -2100,8 +2148,31 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             startUrl: creds.startUrl,
             authMethod: creds.authMethod,
             provider: creds.provider,
-            profileArn: (availableAccount as { profileArn?: string }).profileArn
+            profileArn: (availableAccount as { profileArn?: string }).profileArn,
+            accountId: availableAccount.id
           })
+          // 把 main 进程 refresh 后的最新 credentials 同步回 store，
+          // 否则 store 里的 refreshToken 仍是 v1（已被服务端 rotate 作废），下次任何 refresh 都会失败
+          if (switchResult?.success && switchResult.refreshedCredentials) {
+            const rc = switchResult.refreshedCredentials
+            set((state) => {
+              const accounts = new Map(state.accounts)
+              const acc = accounts.get(availableAccount.id)
+              if (acc) {
+                accounts.set(availableAccount.id, {
+                  ...acc,
+                  credentials: {
+                    ...acc.credentials,
+                    accessToken: rc.accessToken,
+                    refreshToken: rc.refreshToken,
+                    expiresAt: Date.now() + rc.expiresIn * 1000
+                  }
+                })
+              }
+              return { accounts }
+            })
+            get().saveToStorage()
+          }
         }
         if (target === 'cli' || target === 'both') {
           window.api.switchAccountCli?.({

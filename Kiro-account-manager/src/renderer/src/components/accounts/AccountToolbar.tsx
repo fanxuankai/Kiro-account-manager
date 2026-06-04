@@ -11,7 +11,6 @@ import {
   Plus,
   Upload,
   Download,
-  RefreshCw,
   Trash2,
   Tag,
   FolderPlus,
@@ -30,7 +29,9 @@ import {
   Users,
   Inbox,
   ArrowRightLeft,
-  Zap
+  Zap,
+  Activity,
+  KeyRound
 } from 'lucide-react'
 
 export type AccountViewMode = 'grid' | 'list'
@@ -819,7 +820,8 @@ export function AccountToolbar({
               : (isEn ? 'Check accounts info (select first)' : '检查账户信息（请先选中账号）')
             }
           >
-            {isChecking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {/* 与 batchRefresh 区分图标：Activity 代表"查看状态/活动" */}
+            {isChecking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"
@@ -858,7 +860,8 @@ export function AccountToolbar({
               : (isEn ? 'Refresh Token (select first)' : '刷新 Token（请先选中账号）')
             }
           >
-            {isRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {/* 与 batchCheck 区分图标：KeyRound 代表"刷新令牌"，与 AccountCard 单账号视图一致 */}
+            {isRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
           </Button>
 
           <div className="w-px h-6 bg-border mx-1" />
