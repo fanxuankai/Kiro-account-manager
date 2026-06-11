@@ -4,3 +4,9 @@ out
 .DS_Store
 .eslintcache
 *.log*
+
+# TypeScript 增量构建产物
+*.tsbuildinfo
+
+# 编辑器/插件工作区配置
+.cursor/

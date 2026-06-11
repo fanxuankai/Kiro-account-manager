@@ -40,3 +40,7 @@ Kiro.code-workspace
 Kiro register.code-workspace
 Kiro-account-manager/.kiro
 Kiro register
+
+# 抓包数据（可能含 token/cookie 等敏感信息，不入库）
+docs/mail.chatgpt.org.uk.har
+docs/mail.chatgpt.org.uk/
