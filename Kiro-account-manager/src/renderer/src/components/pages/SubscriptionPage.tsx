@@ -1091,13 +1091,15 @@ export function SubscriptionPage() {
                           <span className="w-32 text-center">
                             <span className={cn(
                               'inline-block px-2 py-0.5 rounded text-[10px] font-medium',
-                              planName.toUpperCase().includes('PRO+') || planName.toUpperCase().includes('PRO_PLUS')
-                                ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300'
-                                : planName.toUpperCase().includes('POWER')
-                                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                                  : planName.toUpperCase().includes('PRO')
-                                    ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                                    : 'bg-muted text-muted-foreground'
+                              planName.toUpperCase().includes('PRO_MAX') || planName.toUpperCase().includes('PRO MAX') || planName.toUpperCase().includes('PROMAX')
+                                ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                                : planName.toUpperCase().includes('PRO+') || planName.toUpperCase().includes('PRO_PLUS')
+                                  ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300'
+                                  : planName.toUpperCase().includes('POWER')
+                                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                    : planName.toUpperCase().includes('PRO')
+                                      ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                                      : 'bg-muted text-muted-foreground'
                             )}>
                               {planName}
                             </span>
@@ -2090,13 +2092,15 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   <span className="w-28 text-center">
                     <span className={cn(
                       'inline-block px-2 py-0.5 rounded text-[10px] font-medium',
-                      planName.toUpperCase().includes('PRO+') || planName.toUpperCase().includes('PRO_PLUS')
-                        ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300'
-                        : planName.toUpperCase().includes('POWER')
-                          ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                          : planName.toUpperCase().includes('PRO')
-                            ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                            : 'bg-muted text-muted-foreground'
+                      planName.toUpperCase().includes('PRO_MAX') || planName.toUpperCase().includes('PRO MAX') || planName.toUpperCase().includes('PROMAX')
+                        ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                        : planName.toUpperCase().includes('PRO+') || planName.toUpperCase().includes('PRO_PLUS')
+                          ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300'
+                          : planName.toUpperCase().includes('POWER')
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                            : planName.toUpperCase().includes('PRO')
+                              ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                              : 'bg-muted text-muted-foreground'
                     )}>
                       {planName}
                     </span>
@@ -2259,13 +2263,15 @@ function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn }: {
       <span className="w-28 text-center">
         <span className={cn(
           'inline-block px-2 py-0.5 rounded text-[10px] font-medium',
-          planName.toUpperCase().includes('PRO+') || planName.toUpperCase().includes('PRO_PLUS')
-            ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300'
-            : planName.toUpperCase().includes('POWER')
-              ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-              : planName.toUpperCase().includes('PRO')
-                ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                : 'bg-muted text-muted-foreground'
+          planName.toUpperCase().includes('PRO_MAX') || planName.toUpperCase().includes('PRO MAX') || planName.toUpperCase().includes('PROMAX')
+            ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+            : planName.toUpperCase().includes('PRO+') || planName.toUpperCase().includes('PRO_PLUS')
+              ? 'bg-purple-500/15 text-purple-700 dark:text-purple-300'
+              : planName.toUpperCase().includes('POWER')
+                ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                : planName.toUpperCase().includes('PRO')
+                  ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                  : 'bg-muted text-muted-foreground'
         )}>{planName}</span>
       </span>
       <span className="w-20 text-center text-muted-foreground">

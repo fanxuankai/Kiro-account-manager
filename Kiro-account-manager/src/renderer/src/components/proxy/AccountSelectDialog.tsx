@@ -60,6 +60,8 @@ export function AccountSelectDialog({
   const getSubscriptionColor = (title?: string): string => {
     if (!title) return 'bg-gray-500 text-white'
     const t = title.toUpperCase()
+    // KIRO PRO MAX - 玫红（必须先于 PRO+/PRO）
+    if (t.includes('PRO_MAX') || t.includes('PRO MAX') || t.includes('PROMAX') || t === 'PRO_MAX') return 'bg-rose-500 text-white'
     // KIRO PRO+ / PRO_PLUS - 紫色
     if (t.includes('PRO+') || t.includes('PRO_PLUS') || t.includes('PROPLUS')) return 'bg-purple-500 text-white'
     // KIRO POWER - 金色

@@ -93,6 +93,8 @@ export const unauthorizedRowStyle: CSSProperties = {
 
 export function getSubscriptionColor(type: string, title?: string): string {
   const text = (title || type).toUpperCase()
+  // KIRO PRO MAX — 必须先于 PRO+/PRO 判断
+  if (text.includes('PRO_MAX') || text.includes('PRO MAX') || text.includes('PROMAX') || text === 'PRO_MAX') return 'bg-rose-500'
   if (text.includes('PRO+') || text.includes('PRO_PLUS') || text.includes('PROPLUS')) return 'bg-purple-500'
   if (text.includes('POWER')) return 'bg-amber-500'
   if (text.includes('PRO')) return 'bg-blue-500'

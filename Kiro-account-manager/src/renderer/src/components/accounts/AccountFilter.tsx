@@ -9,6 +9,7 @@ const SubscriptionOptions: { value: SubscriptionType; label: string; color: stri
   { value: 'Free', label: 'KIRO FREE', color: 'text-gray-500 border-gray-300', activeColor: 'bg-gray-500 text-white border-gray-500' },
   { value: 'Pro', label: 'KIRO PRO', color: 'text-blue-500 border-blue-300', activeColor: 'bg-blue-500 text-white border-blue-500' },
   { value: 'Pro_Plus', label: 'KIRO PRO+', color: 'text-purple-500 border-purple-300', activeColor: 'bg-purple-500 text-white border-purple-500' },
+  { value: 'Pro_Max', label: 'KIRO PRO MAX', color: 'text-rose-500 border-rose-300', activeColor: 'bg-rose-500 text-white border-rose-500' },
   { value: 'Enterprise', label: 'KIRO POWER', color: 'text-amber-500 border-amber-300', activeColor: 'bg-amber-500 text-white border-amber-500' }
 ]
 

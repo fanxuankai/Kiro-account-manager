@@ -4,7 +4,7 @@
 
 export type IdpType = 'Google' | 'Github' | 'BuilderId' | 'Enterprise' | 'AWSIdC' | 'Internal' | 'IAM_SSO'
 
-export type SubscriptionType = 'Free' | 'Pro' | 'Pro_Plus' | 'Enterprise' | 'Teams'
+export type SubscriptionType = 'Free' | 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Enterprise' | 'Teams'
 
 export type AccountStatus = 'active' | 'expired' | 'error' | 'refreshing' | 'unknown'
 

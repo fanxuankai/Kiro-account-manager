@@ -3221,7 +3221,9 @@ app.whenReady().then(async () => {
       // 规范化订阅类型（注意检查顺序：先检查更具体的类型）
       let subscriptionType = 'Free'
       const titleUpper = subscriptionTitle.toUpperCase()
-      if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
+      if (titleUpper.includes('PRO_MAX') || titleUpper.includes('PRO MAX') || titleUpper.includes('PROMAX')) {
+        subscriptionType = 'Pro_Max'
+      } else if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
         subscriptionType = 'Pro_Plus'
       } else if (titleUpper.includes('POWER')) {
         subscriptionType = 'Enterprise'
@@ -3426,14 +3428,21 @@ app.whenReady().then(async () => {
       const totalUsed = baseCurrent + freeTrialCurrent + bonusesData.reduce((sum, b) => sum + b.current, 0)
       const nextResetDate = result.nextDateReset
 
-      // 解析订阅类型
+      // 解析订阅类型（顺序：PRO_MAX → PRO+ → POWER → PRO）
       const subscriptionTitle = result.subscriptionInfo?.subscriptionTitle ?? 'Free'
       let subscriptionType = account.subscription?.type ?? 'Free'
-      if (subscriptionTitle.toUpperCase().includes('PRO')) {
-        subscriptionType = 'Pro'
-      } else if (subscriptionTitle.toUpperCase().includes('ENTERPRISE')) {
+      const titleUpper = subscriptionTitle.toUpperCase()
+      if (titleUpper.includes('PRO_MAX') || titleUpper.includes('PRO MAX') || titleUpper.includes('PROMAX')) {
+        subscriptionType = 'Pro_Max'
+      } else if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
+        subscriptionType = 'Pro_Plus'
+      } else if (titleUpper.includes('POWER')) {
         subscriptionType = 'Enterprise'
-      } else if (subscriptionTitle.toUpperCase().includes('TEAMS')) {
+      } else if (titleUpper.includes('PRO')) {
+        subscriptionType = 'Pro'
+      } else if (titleUpper.includes('ENTERPRISE')) {
+        subscriptionType = 'Enterprise'
+      } else if (titleUpper.includes('TEAMS')) {
         subscriptionType = 'Teams'
       }
 
@@ -3888,7 +3897,9 @@ app.whenReady().then(async () => {
                 const subscriptionTitle = rawUsage.subscriptionInfo?.subscriptionTitle || 'Free'
                 let subscriptionType = 'Free'
                 const titleUpper = subscriptionTitle.toUpperCase()
-                if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
+                if (titleUpper.includes('PRO_MAX') || titleUpper.includes('PRO MAX') || titleUpper.includes('PROMAX')) {
+                  subscriptionType = 'Pro_Max'
+                } else if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
                   subscriptionType = 'Pro_Plus'
                 } else if (titleUpper.includes('POWER')) {
                   subscriptionType = 'Enterprise'
@@ -4209,7 +4220,9 @@ app.whenReady().then(async () => {
               const subscriptionTitle = rawUsage.subscriptionInfo?.subscriptionTitle ?? 'Free'
               let subscriptionType = 'Free'
               const titleUpper = subscriptionTitle.toUpperCase()
-              if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
+              if (titleUpper.includes('PRO_MAX') || titleUpper.includes('PRO MAX') || titleUpper.includes('PROMAX')) {
+                subscriptionType = 'Pro_Max'
+              } else if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
                 subscriptionType = 'Pro_Plus'
               } else if (titleUpper.includes('POWER')) {
                 subscriptionType = 'Enterprise'
@@ -4465,7 +4478,9 @@ app.whenReady().then(async () => {
       const subscriptionTitle = usageResult.subscriptionInfo?.subscriptionTitle || 'Free'
       let subscriptionType = 'Free'
       const titleUpper = subscriptionTitle.toUpperCase()
-      if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
+      if (titleUpper.includes('PRO_MAX') || titleUpper.includes('PRO MAX') || titleUpper.includes('PROMAX')) {
+        subscriptionType = 'Pro_Max'
+      } else if (titleUpper.includes('PRO+') || titleUpper.includes('PRO_PLUS') || titleUpper.includes('PROPLUS')) {
         subscriptionType = 'Pro_Plus'
       } else if (titleUpper.includes('POWER')) {
         subscriptionType = 'Enterprise'

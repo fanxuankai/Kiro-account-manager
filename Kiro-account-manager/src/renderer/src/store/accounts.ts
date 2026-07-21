@@ -1629,6 +1629,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         Free: 0,
         Pro: 0,
         Pro_Plus: 0,
+        Pro_Max: 0,
         Enterprise: 0,
         Teams: 0
       },
@@ -2650,7 +2651,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         })() : account.usage,
         subscription: checkData?.subscription ? {
           ...account.subscription,
-          type: (checkData.subscription.type as 'Free' | 'Pro' | 'Enterprise' | 'Teams') ?? account.subscription.type,
+          type: (checkData.subscription.type as SubscriptionType) ?? account.subscription.type,
           title: checkData.subscription.title ?? account.subscription.title,
           daysRemaining: checkData.subscription.daysRemaining ?? account.subscription.daysRemaining,
           expiresAt: checkData.subscription.expiresAt ?? account.subscription.expiresAt,

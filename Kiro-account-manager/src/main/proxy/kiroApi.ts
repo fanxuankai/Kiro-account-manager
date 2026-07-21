@@ -2370,7 +2370,7 @@ export async function fetchKiroModels(account: ProxyAccount, signal?: AbortSigna
 
 // 订阅计划信息
 export interface SubscriptionPlan {
-  name: string  // KIRO_FREE, KIRO_PRO, KIRO_PRO_PLUS, KIRO_POWER
+  name: string  // KIRO_FREE, KIRO_PRO, KIRO_PRO_PLUS, KIRO_PRO_MAX, KIRO_POWER
   qSubscriptionType: string
   description: {
     title: string

@@ -15,6 +15,8 @@ const EXPIRE_WARN_DAYS = 7
 // 订阅类型颜色映射
 const getSubscriptionColor = (type: string, title?: string): string => {
   const text = (title || type).toUpperCase()
+  // KIRO PRO MAX - 玫红（必须先于 PRO+/PRO）
+  if (text.includes('PRO_MAX') || text.includes('PRO MAX') || text.includes('PROMAX') || text === 'PRO_MAX') return 'bg-rose-500'
   // KIRO PRO+ / PRO_PLUS - 紫色
   if (text.includes('PRO+') || text.includes('PRO_PLUS') || text.includes('PROPLUS')) return 'bg-purple-500'
   // KIRO POWER - 金色

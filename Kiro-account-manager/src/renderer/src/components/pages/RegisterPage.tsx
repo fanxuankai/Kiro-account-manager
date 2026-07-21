@@ -602,7 +602,11 @@ function saveHistory(items: HistoryItem[]): void {
 }
 
 /** 订阅计划类型（对应 Kiro 后端 qSubscriptionType）*/
-export type ProPlanType = 'Q_DEVELOPER_STANDALONE_PRO' | 'Q_DEVELOPER_STANDALONE_PRO_PLUS' | 'Q_DEVELOPER_STANDALONE_POWER'
+export type ProPlanType =
+  | 'Q_DEVELOPER_STANDALONE_PRO'
+  | 'Q_DEVELOPER_STANDALONE_PRO_PLUS'
+  | 'Q_DEVELOPER_STANDALONE_PRO_MAX'
+  | 'Q_DEVELOPER_STANDALONE_POWER'
 
 interface RegisterConfig {
   mode: RegMode
@@ -1015,7 +1019,7 @@ export function RegisterPage(): React.JSX.Element {
             expiresAt
           },
           subscription: {
-            type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Enterprise' | 'Teams') || 'Free',
+            type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Enterprise' | 'Teams') || 'Free',
             title: verifyResult.data.subscriptionTitle || 'Free Tier'
           },
           usage,
@@ -1429,10 +1433,16 @@ export function RegisterPage(): React.JSX.Element {
       const sub = String(v.subscription || 'KIRO FREE')
       const creditUsed = Number(v.credit_used) || 0
       const creditLimit = Number(v.credit_limit) || 0
-      const subType = sub.includes('PRO_PLUS') ? 'Pro_Plus' as const
-        : sub.includes('PRO') ? 'Pro' as const
-        : sub.includes('POWER') ? 'Pro_Plus' as const
-        : 'Free' as const
+      const subUpper = sub.toUpperCase()
+      const subType = subUpper.includes('PRO_MAX') || subUpper.includes('PRO MAX') || subUpper.includes('PROMAX')
+        ? 'Pro_Max' as const
+        : subUpper.includes('PRO_PLUS') || subUpper.includes('PRO+') || subUpper.includes('PROPLUS')
+          ? 'Pro_Plus' as const
+          : subUpper.includes('POWER')
+            ? 'Enterprise' as const
+            : subUpper.includes('PRO')
+              ? 'Pro' as const
+              : 'Free' as const
       addAccount({
         email: String(v.email || regResult.email),
         password: regResult.password,
@@ -1478,7 +1488,7 @@ export function RegisterPage(): React.JSX.Element {
         addAccount({
           email: verifyResult.data.email || regResult.email, password: regResult.password, idp: 'BuilderId', status: 'active',
           credentials: { refreshToken: regResult.refreshToken, clientId: regResult.clientId, clientSecret: regResult.clientSecret, accessToken: verifyResult.data.accessToken || regResult.accessToken || '', csrfToken: '', region: regResult.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt },
-          subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
+          subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
           usage, tags: [], lastUsedAt: now
         })
       } else {
@@ -2155,7 +2165,7 @@ export function RegisterPage(): React.JSX.Element {
           email: verifyResult.data.email || r.email,
           idp: 'BuilderId', status: 'active',
           credentials: { refreshToken: r.refreshToken!, clientId: r.clientId!, clientSecret: r.clientSecret!, accessToken: verifyResult.data.accessToken || r.accessToken || '', csrfToken: '', region: r.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt },
-          subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
+          subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
           usage, tags: [], lastUsedAt: now
         })
       } else {
@@ -2258,6 +2268,7 @@ export function RegisterPage(): React.JSX.Element {
                 {([
                   { value: 'Q_DEVELOPER_STANDALONE_PRO' as ProPlanType, label: 'Pro', color: 'bg-blue-500' },
                   { value: 'Q_DEVELOPER_STANDALONE_PRO_PLUS' as ProPlanType, label: 'Pro+', color: 'bg-purple-500' },
+                  { value: 'Q_DEVELOPER_STANDALONE_PRO_MAX' as ProPlanType, label: 'Pro Max', color: 'bg-rose-500' },
                   { value: 'Q_DEVELOPER_STANDALONE_POWER' as ProPlanType, label: 'Power', color: 'bg-amber-500' }
                 ]).map(opt => (
                   <button
