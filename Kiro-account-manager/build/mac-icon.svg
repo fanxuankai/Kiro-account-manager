@@ -1,0 +1,5 @@
+<!-- mac-icon 由原 build/icon.png 加圆角生成，本 SVG 仅作占位，勿作为设计源 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="229" fill="#888"/>
+  <text x="512" y="540" text-anchor="middle" font-size="48" fill="#fff">from original icon.png</text>
+</svg>

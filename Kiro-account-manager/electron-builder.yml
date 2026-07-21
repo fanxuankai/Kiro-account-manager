@@ -39,6 +39,7 @@ nsis:
   installerIcon: resources/kiro-high-resolution-logo-transparent.ico
   uninstallerIcon: resources/kiro-high-resolution-logo-transparent.ico
 mac:
+  icon: build/mac-icon.icns
   identity: null  # 跳过代码签名（没有 Apple 开发者证书时）
   # 显式指定文件名格式：用 ${name}（package.json name="kiro-account-manager"）替代
   # 默认的 ${productName}（含空格），否则 electron-builder 会把 mac zip 文件名里的空格
