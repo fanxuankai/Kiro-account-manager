@@ -1505,6 +1505,7 @@ export function RegisterPage(): React.JSX.Element {
   }, [addAccount])
 
   // 获取 Pro 订阅链接并写入订阅页面链接列表
+  // proPlanType 必须进依赖，否则切换计划后仍会用旧闭包值
   const fetchProSubscriptionUrl = useCallback(async (regResult: RegResult, email: string): Promise<string | undefined> => {
     const accessToken = regResult.accessToken
     if (!accessToken) return undefined
@@ -1537,7 +1538,7 @@ export function RegisterPage(): React.JSX.Element {
       updateSubscriptionLink(linkId, { status: 'error', error: errMsg })
       return undefined
     }
-  }, [addLog, t])
+  }, [addLog, t, proPlanType])
 
   // 监听注册完成 - 同时记录到历史 + 自动导入
   const onRegComplete = useCallback(async (res: RegResult) => {
