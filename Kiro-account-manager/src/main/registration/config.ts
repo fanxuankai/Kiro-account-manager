@@ -52,6 +52,15 @@ export interface RegistrationConfig {
   gptMailPrefix: string       // 可选：固定前缀，留空则 randomEmailPrefix() 生成
   gptMailPrivatePassword: string  // 可选：仅私有域名模式有效。在 GPTmail 设私有域名时设的密码
 
+  // CF 自建邮箱 (dreamhunter2333/cloudflare_temp_email) — admin 模式
+  //   走 GET /admin/mails?address= + x-admin-auth（admin 密码），无需 JWT/Turnstile/建地址。
+  //   配合域名 catch-all：任意 prefix@domain 都会被收下，地址无需预先创建。
+  useCfMail: boolean
+  cfMailBaseURL: string       // 必填：worker 地址（不是前端 Pages 地址），如 https://temp-mail.xxx.workers.dev
+  cfMailAdminPassword: string // 必填：admin 密码（x-admin-auth 头，对应 worker 的 ADMIN_PASSWORDS）
+  cfMailDomain: string        // 必填：CF Email Routing 已配 catch-all 的域名（多个用空格/逗号分隔）
+  cfMailPrefix: string        // 可选：固定前缀，留空则 randomEmailPrefix() 生成
+
   // 手动模式
   manualMode: boolean
 }
@@ -106,6 +115,11 @@ export function newConfig(overrides?: Partial<RegistrationConfig>): Registration
     gptMailDomain: '',
     gptMailPrefix: '',
     gptMailPrivatePassword: '',
+    useCfMail: false,
+    cfMailBaseURL: '',
+    cfMailAdminPassword: '',
+    cfMailDomain: '',
+    cfMailPrefix: '',
     manualMode: false,
     ...overrides
   }

@@ -9,12 +9,28 @@ function getRegistrationProxyUrl(): string | undefined {
   return process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy || getSystemProxy() || undefined
 }
 
-async function proxyFetch(url: string, options?: RequestInit): Promise<Response> {
+export async function proxyFetch(url: string, options?: RequestInit): Promise<Response> {
   const agent = safeCreateProxyAgent(getRegistrationProxyUrl())
   if (agent) {
     return await undiciFetch(url, { ...options, dispatcher: agent } as UndiciRequestInit) as unknown as Response
   }
   return await fetch(url, options)
+}
+
+/** 导出供其它邮箱服务（如 CF 自建邮箱）复用：可被 AbortSignal 中断的 sleep */
+export async function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new Error('注册已取消'))
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      reject(new Error('注册已取消'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
 }
 
 // ============ 验证码提取 ============
@@ -34,22 +50,6 @@ export interface TempEmailService {
   /** signal：注册被取消时中断轮询（停止/暂停后立即退出，而非等满 timeout） */
   waitForCode(timeoutSec: number, intervalSec: number, signal?: AbortSignal): Promise<string>
   getAddress(): string
-}
-
-/** 可被 AbortSignal 中断的 sleep：停止注册时立刻 reject，不再傻等 */
-function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(new Error('注册已取消'))
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = (): void => {
-      clearTimeout(timer)
-      reject(new Error('注册已取消'))
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
 }
 
 // ============ MoEmail 临时邮箱 ============

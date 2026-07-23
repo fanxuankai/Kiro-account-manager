@@ -16,6 +16,7 @@ import {
   TempEmailService, MoEmailService, TempMailPlusService, ProtonWebviewService, GptMailService,
   parseOutlookLines, getInboxCount, waitForOTP
 } from './email-service'
+import { CfMailService } from './cf-mail-service'
 import { getSystemProxy, safeCreateProxyAgent } from '../proxy/systemProxy'
 import { redactString } from '../utils/redact'
 
@@ -898,6 +899,25 @@ export class Registrar {
       })
       this.email = await this.emailSvc.create()
       if (!this.email) throw new Error('生成 GPTmail 注册邮箱失败')
+      this.emitStep('email-created')
+      this.log(`email=${this.email}`)
+      return
+    }
+
+    if (this.cfg.useCfMail) {
+      this.log('[3] 使用 CF 自建邮箱 (admin)')
+      if (!this.cfg.cfMailBaseURL || !this.cfg.cfMailDomain || !this.cfg.cfMailAdminPassword) {
+        throw new Error('CF 邮箱配置不完整（需 Worker 地址 + admin 密码 + 域名）')
+      }
+      this.emailSvc = new CfMailService({
+        baseURL: this.cfg.cfMailBaseURL,
+        adminPassword: this.cfg.cfMailAdminPassword,
+        domain: this.cfg.cfMailDomain,
+        prefix: this.cfg.cfMailPrefix,
+        log: (m) => this.log(m)
+      })
+      this.email = await this.emailSvc.create()
+      if (!this.email) throw new Error('生成 CF 注册邮箱失败')
       this.emitStep('email-created')
       this.log(`email=${this.email}`)
       return

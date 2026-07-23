@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { UserPlus, Mail, Key, Loader2, CheckCircle2, XCircle, Trash2, Play, Square, Clock, RotateCcw, RefreshCw, Download, Upload, Settings2, Link2, AtSign, Shuffle, Info, Pause, AlertTriangle, ShieldAlert, Gauge, Activity, CalendarClock, Timer } from 'lucide-react'
+import { UserPlus, Mail, Key, Loader2, CheckCircle2, XCircle, Trash2, Play, Square, Clock, RotateCcw, RefreshCw, Download, Upload, Settings2, Link2, AtSign, Shuffle, Info, Pause, AlertTriangle, ShieldAlert, Gauge, Activity, CalendarClock, Timer, Cloud } from 'lucide-react'
 import { useTranslation } from '@/hooks/useTranslation'
 import { useAccountsStore } from '@/store/accounts'
 import { useTaskStore } from '@/store/tasks'
@@ -181,8 +181,8 @@ function injectProxySession(url: string): string {
   return url
 }
 
-type RegMode = 'manual' | 'outlook' | 'tempmail' | 'proton' | 'gptmail' | 'mixed'
-type AutoEmailSource = 'outlook' | 'tempmail' | 'proton' | 'gptmail'
+type RegMode = 'manual' | 'outlook' | 'tempmail' | 'proton' | 'gptmail' | 'cfmail' | 'mixed'
+type AutoEmailSource = 'outlook' | 'tempmail' | 'proton' | 'gptmail' | 'cfmail'
 /**
  * Phase 状态机：
  * - idle：未开始
@@ -631,6 +631,11 @@ interface RegisterConfig {
   gptMailDomain: string
   gptMailPrefix: string
   gptMailPrivatePassword: string
+  /** CF 自建邮箱 (dreamhunter2333/cloudflare_temp_email) — admin 模式：worker 地址 / admin 密码 / 域名 / 前缀 */
+  cfMailBaseURL: string
+  cfMailAdminPassword: string
+  cfMailDomain: string
+  cfMailPrefix: string
   /** 手动模式 — 母邮箱（收验证码的真实邮箱）*/
   manualParentEmail: string
   /** 手动模式 — 启用匿名邮箱（点号变体）*/
@@ -696,6 +701,24 @@ export function RegisterPage(): React.JSX.Element {
   const [gptMailDomain, setGptMailDomain] = useState(saved.gptMailDomain || '')
   const [gptMailPrefix, setGptMailPrefix] = useState(saved.gptMailPrefix || '')
   const [gptMailPrivatePassword, setGptMailPrivatePassword] = useState(saved.gptMailPrivatePassword || '')
+
+  // CF 自建邮箱 (dreamhunter2333/cloudflare_temp_email) 配置 —— 用户自建的 worker
+  const [cfMailBaseURL, setCfMailBaseURL] = useState(saved.cfMailBaseURL || '')
+  const [cfMailAdminPassword, setCfMailAdminPassword] = useState(saved.cfMailAdminPassword || '')
+  const [cfMailDomain, setCfMailDomain] = useState(saved.cfMailDomain || '')
+  const [cfMailPrefix, setCfMailPrefix] = useState(saved.cfMailPrefix || '')
+  // CF 邮箱收码测试（外部发件 + 查询模式：建地址 → 用户外部发件 → 轮询查码）
+  const [cfCreating, setCfCreating] = useState(false)
+  const [cfPolling, setCfPolling] = useState(false)
+  const [cfTestResult, setCfTestResult] = useState<{ ok: boolean; text: string } | null>(null)
+  // 测试地址（建好后显示，供用户从外部邮箱发件）
+  const [cfTestAddress, setCfTestAddress] = useState('')
+  // 测试验证码：自动收到则回填，查不到则手动填写兜底
+  const [cfTestOtp, setCfTestOtp] = useState('')
+  const [copied, setCopied] = useState(false)
+  // 轮询取消标志 + 剩余秒数倒计时
+  const cfPollCancel = useRef(false)
+  const [cfPollCountdown, setCfPollCountdown] = useState(0)
 
   const logContainerRef = useRef<HTMLDivElement>(null)
   const { addAccount, accounts } = useAccountsStore()
@@ -912,7 +935,7 @@ export function RegisterPage(): React.JSX.Element {
     _logs = []; setLogs([])
     setResult(null)
     setImported(false)
-    const modeLabel = mode === 'tempmail' ? 'TempMail.Plus' : mode === 'proton' ? 'Proton' : mode === 'gptmail' ? 'GPTmail' : 'Outlook'
+    const modeLabel = mode === 'tempmail' ? 'TempMail.Plus' : mode === 'proton' ? 'Proton' : mode === 'gptmail' ? 'GPTmail' : mode === 'cfmail' ? 'CF Mail' : 'Outlook'
     addLog(t('register.logAutoStart').replace('{mode}', modeLabel))
 
     const config: Record<string, unknown> = {}
@@ -946,6 +969,17 @@ export function RegisterPage(): React.JSX.Element {
       config.gptMailDomain = gptMailDomain
       config.gptMailPrefix = gptMailPrefix.trim()
       config.gptMailPrivatePassword = gptMailPrivatePassword  // 私有域名设了密码才填
+    } else if (mode === 'cfmail') {
+      if (!cfMailDomain.trim() || !cfMailBaseURL.trim() || !cfMailAdminPassword.trim()) {
+        addLog(isEn ? '[CF Mail] Worker URL, admin password or domain not configured' : '[CF 邮箱] 未配置 Worker 地址 / admin 密码 / 域名')
+        setPhase('idle')
+        return
+      }
+      config.useCfMail = true
+      config.cfMailBaseURL = cfMailBaseURL.trim()
+      config.cfMailAdminPassword = cfMailAdminPassword
+      config.cfMailDomain = cfMailDomain
+      config.cfMailPrefix = cfMailPrefix.trim()
     }
 
     // 代理池注入
@@ -969,6 +1003,119 @@ export function RegisterPage(): React.JSX.Element {
     await window.api.registrationCancel()
     addLog(t('register.logCancelled'))
     setPhase('idle')
+  }
+
+  // ============ CF 邮箱测试（外部发件 + 查询模式，不碰 AWS 注册接口） ============
+
+  const cfTestCfg = () => ({
+    baseURL: cfMailBaseURL.trim(),
+    adminPassword: cfMailAdminPassword,
+    domain: cfMailDomain.trim()
+  })
+
+  /** 第一步：建测试地址（用户拿到地址后从外部邮箱发一封带验证码的邮件过来） */
+  const createCfTestAddr = async (): Promise<void> => {
+    if (!cfMailBaseURL.trim() || !cfMailDomain.trim() || !cfMailAdminPassword.trim()) {
+      setCfTestResult({ ok: false, text: isEn ? 'Worker URL, admin password and domain required' : '请先填写 Worker 地址、admin 密码和域名' })
+      return
+    }
+    setCfCreating(true)
+    setCfTestResult(null)
+    setCfTestAddress('')
+    setCfTestOtp('')
+    addLog(isEn ? '[CF Mail] Creating test address...' : '[CF 邮箱] 正在建测试地址...')
+    try {
+      const r = await window.api.cfMailCreate(cfTestCfg())
+      if (r.ok && r.address) {
+        setCfTestAddress(r.address)
+        setCfTestResult({ ok: true, text: isEn
+          ? `Test address created: ${r.address} — send an email with a 6-digit code to it, then click "Poll for code"`
+          : `测试地址已生成：${r.address} — 请从外部邮箱发一封含 6 位验证码的邮件到此地址，然后点「查询验证码」` })
+        addLog(`[CF 邮箱] ${isEn ? 'Test address' : '测试地址'}: ${r.address}`)
+      } else {
+        setCfTestResult({ ok: false, text: r.error || (isEn ? 'Unknown error' : '未知错误') })
+        addLog(`[CF 邮箱] ${isEn ? 'Create failed' : '建地址失败'}: ${r.error}`)
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setCfTestResult({ ok: false, text: msg })
+      addLog(`[CF 邮箱] ${isEn ? 'Create error' : '建地址异常'}: ${msg}`)
+    } finally {
+      setCfCreating(false)
+    }
+  }
+
+  /** 第二步：轮询查码（前端循环，可取消，带倒计时；每次查询都打日志让用户看到进展） */
+  const pollCfTest = async (): Promise<void> => {
+    if (!cfTestAddress || cfPolling) return
+    const totalSec = 60
+    const intervalSec = 3
+    const maxRounds = Math.floor(totalSec / intervalSec)
+    cfPollCancel.current = false
+    setCfPolling(true)
+    setCfTestResult(null)
+    setCfPollCountdown(totalSec)
+    addLog(isEn ? `[CF Mail] Polling for code (${totalSec}s, every ${intervalSec}s)...` : `[CF 邮箱] 开始轮询查码（${totalSec}s，每 ${intervalSec}s 查一次）...`)
+    try {
+      for (let round = 1; round <= maxRounds; round++) {
+        if (cfPollCancel.current) {
+          setCfTestResult({ ok: false, text: isEn ? 'Polling cancelled — enter code manually' : '已取消查询 — 请手动填写验证码' })
+          addLog(`[CF 邮箱] ${isEn ? 'Poll cancelled' : '查询已取消'}`)
+          return
+        }
+        setCfPollCountdown(totalSec - (round - 1) * intervalSec)
+        // 等 intervalSec 再查（首次也等，给邮件投递时间）
+        for (let w = 0; w < intervalSec * 10 && !cfPollCancel.current; w++) {
+          await new Promise((r) => setTimeout(r, 100))
+        }
+        if (cfPollCancel.current) break
+        try {
+          const r = await window.api.cfMailPoll(cfTestCfg(), cfTestAddress, 1)
+          if (r.ok && r.receivedCode) {
+            setCfTestOtp(r.receivedCode)
+            setCfTestResult({ ok: true, text: isEn ? `✓ Code received: ${r.receivedCode}` : `✓ 已收到验证码：${r.receivedCode}` })
+            addLog(`[CF 邮箱] [${round}/${maxRounds}] ${isEn ? '✓ Code received' : '✓ 已收到验证码'}: ${r.receivedCode}`)
+            return
+          }
+          if (r.mailCount && r.mailCount > 0) {
+            addLog(`[CF 邮箱] [${round}/${maxRounds}] ${isEn ? `Found ${r.mailCount} email(s) but no 6-digit code` : `查到 ${r.mailCount} 封邮件，但未提取到 6 位验证码`}`)
+          } else {
+            addLog(`[CF 邮箱] [${round}/${maxRounds}] ${isEn ? 'No email yet...' : '暂无邮件...'}（剩余 ${totalSec - round * intervalSec}s）`)
+          }
+        } catch (e) {
+          addLog(`[CF 邮箱] [${round}/${maxRounds}] ${isEn ? 'Query failed, retrying' : '查询失败，重试中'}: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+      setCfTestResult({ ok: false, text: isEn
+        ? `No code found in ${totalSec}s — enter it manually below`
+        : `${totalSec}s 内未查到验证码 — 请在下方手动填写` })
+      addLog(`[CF 邮箱] ${isEn ? 'Poll timeout, manual fallback' : '轮询超时，转手动填写'}`)
+    } finally {
+      setCfPolling(false)
+      setCfPollCountdown(0)
+    }
+  }
+
+  /** 取消轮询 */
+  const cancelCfPoll = (): void => {
+    cfPollCancel.current = true
+  }
+
+  /** 复制测试地址到剪贴板 */
+  const copyTestAddress = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(cfTestAddress)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    } catch { /* ignore */ }
+  }
+
+  /** 验证码提交确认（手动或自动填入的码） */
+  const submitCfTestOtp = (): void => {
+    const code = cfTestOtp.trim()
+    if (!code) return
+    setCfTestResult({ ok: true, text: isEn ? `✓ Code confirmed: ${code}` : `✓ 验证码已确认：${code}` })
+    addLog(`[CF 邮箱] ${isEn ? 'Code confirmed' : '验证码已确认'}: ${code}`)
   }
 
   // ============ 导入账号 ============
@@ -1127,7 +1274,7 @@ export function RegisterPage(): React.JSX.Element {
       const raw = localStorage.getItem('kiro-register-mixed-sources')
       if (raw) {
         const arr = JSON.parse(raw) as string[]
-        mixed = arr.filter((x): x is AutoEmailSource => x === 'outlook' || x === 'tempmail' || x === 'proton' || x === 'gptmail')
+        mixed = arr.filter((x): x is AutoEmailSource => x === 'outlook' || x === 'tempmail' || x === 'proton' || x === 'gptmail' || x === 'cfmail')
         if (mixed.length === 0) mixed = ['outlook', 'tempmail']
       }
     } catch { /* ignore */ }
@@ -1151,11 +1298,15 @@ export function RegisterPage(): React.JSX.Element {
       gptMailDomain,
       gptMailPrefix,
       gptMailPrivatePassword,
+      cfMailBaseURL,
+      cfMailAdminPassword,
+      cfMailDomain,
+      cfMailPrefix,
       manualParentEmail: parentEmail,
       manualAnonymousEmail: anonymousEmail,
       mixedEnabledSources: mixed
     }
-  }, [mode, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, proPlanType, tempMailEmail, tempMailEpin, tempMailDomain, protonBaseEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, parentEmail, anonymousEmail])
+  }, [mode, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, proPlanType, tempMailEmail, tempMailEpin, tempMailDomain, protonBaseEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, cfMailBaseURL, cfMailAdminPassword, cfMailDomain, cfMailPrefix, parentEmail, anonymousEmail])
 
   const applyTemplate = useCallback((tpl: RegisterTemplate) => {
     const c = tpl.config
@@ -1179,6 +1330,10 @@ export function RegisterPage(): React.JSX.Element {
     setGptMailDomain(c.gptMailDomain || '')
     setGptMailPrefix(c.gptMailPrefix || '')
     setGptMailPrivatePassword(c.gptMailPrivatePassword || '')
+    setCfMailBaseURL(c.cfMailBaseURL || '')
+    setCfMailAdminPassword(c.cfMailAdminPassword || '')
+    setCfMailDomain(c.cfMailDomain || '')
+    setCfMailPrefix(c.cfMailPrefix || '')
     setParentEmail(c.manualParentEmail || '')
     setAnonymousEmail(c.manualAnonymousEmail ?? false)
     if (c.mixedEnabledSources) setMixedEnabledSources(c.mixedEnabledSources)
@@ -1352,8 +1507,8 @@ export function RegisterPage(): React.JSX.Element {
 
   // 自动保存配置到 localStorage
   useEffect(() => {
-    saveConfig({ mode, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, proPlanType, tempMailEmail, tempMailEpin, tempMailDomain, protonBaseEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, manualParentEmail: parentEmail, manualAnonymousEmail: anonymousEmail })
-  }, [mode, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, proPlanType, tempMailEmail, tempMailEpin, tempMailDomain, protonBaseEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, parentEmail, anonymousEmail])
+    saveConfig({ mode, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, proPlanType, tempMailEmail, tempMailEpin, tempMailDomain, protonBaseEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, cfMailBaseURL, cfMailAdminPassword, cfMailDomain, cfMailPrefix, manualParentEmail: parentEmail, manualAnonymousEmail: anonymousEmail })
+  }, [mode, outlookData, fullName, batchCount, batchInterval, batchAutoImport, batchRetries, batchConcurrency, autoFetchProLink, proPlanType, tempMailEmail, tempMailEpin, tempMailDomain, protonBaseEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, cfMailBaseURL, cfMailAdminPassword, cfMailDomain, cfMailPrefix, parentEmail, anonymousEmail])
 
   // 匿名邮箱预览计算 — 以 anonymousEmail/parentEmail/accounts 为依赖实时冷算下一个变体
   const anonymousPreview = useMemo(() => {
@@ -1613,7 +1768,7 @@ export function RegisterPage(): React.JSX.Element {
       if (raw) {
         // 兼容老数据：过滤掉已废弃的 moemail
         const arr = JSON.parse(raw) as string[]
-        const valid = arr.filter((x): x is AutoEmailSource => x === 'outlook' || x === 'tempmail' || x === 'proton' || x === 'gptmail')
+        const valid = arr.filter((x): x is AutoEmailSource => x === 'outlook' || x === 'tempmail' || x === 'proton' || x === 'gptmail' || x === 'cfmail')
         return valid.length > 0 ? valid : ['outlook', 'tempmail']
       }
     } catch { /* ignore */ }
@@ -1625,10 +1780,10 @@ export function RegisterPage(): React.JSX.Element {
       const raw = localStorage.getItem('kiro-register-mixed-weights')
       if (raw) {
         const parsed = JSON.parse(raw) as Record<string, number>
-        return { outlook: parsed.outlook ?? 1, tempmail: parsed.tempmail ?? 1, proton: parsed.proton ?? 1, gptmail: parsed.gptmail ?? 1 }
+        return { outlook: parsed.outlook ?? 1, tempmail: parsed.tempmail ?? 1, proton: parsed.proton ?? 1, gptmail: parsed.gptmail ?? 1, cfmail: parsed.cfmail ?? 1 }
       }
     } catch { /* ignore */ }
-    return { outlook: 1, tempmail: 1, proton: 1, gptmail: 1 }
+    return { outlook: 1, tempmail: 1, proton: 1, gptmail: 1, cfmail: 1 }
   })
   useEffect(() => {
     try { localStorage.setItem('kiro-register-mixed-sources', JSON.stringify(mixedEnabledSources)) } catch { /* ignore */ }
@@ -1639,7 +1794,7 @@ export function RegisterPage(): React.JSX.Element {
 
   // 加权轮询调度：维护各源的"信用"分数，每次选信用最高的，扣除后累积
   // 这是 Smooth Weighted Round-Robin 算法（nginx 用的同款）
-  const mixedCredits = useRef<Record<AutoEmailSource, number>>({ outlook: 0, tempmail: 0, proton: 0, gptmail: 0 })
+  const mixedCredits = useRef<Record<AutoEmailSource, number>>({ outlook: 0, tempmail: 0, proton: 0, gptmail: 0, cfmail: 0 })
 
   /** 在混合模式下按加权轮询挑选下一个有效子源 */
   const pickNextSource = useCallback((): AutoEmailSource | null => {
@@ -1650,6 +1805,8 @@ export function RegisterPage(): React.JSX.Element {
       if (src === 'proton') return !!protonBaseEmail.trim()
       // GPTmail：只要有域名就 OK（inboxEmail 留空 = 私有直收模式）
       if (src === 'gptmail') return !!gptMailDomain.trim()
+      // CF 自建邮箱：需要 worker 地址 + admin 密码 + 域名
+      if (src === 'cfmail') return !!(cfMailBaseURL.trim() && cfMailAdminPassword.trim() && cfMailDomain.trim())
       return false
     })
     if (candidates.length === 0) return null
@@ -1674,7 +1831,7 @@ export function RegisterPage(): React.JSX.Element {
       mixedCredits.current[best] -= totalWeight
     }
     return best
-  }, [mixedEnabledSources, mixedWeights, outlookData, tempMailDomain, tempMailEmail, tempMailEpin, protonBaseEmail, gptMailDomain, gptMailInboxEmail])
+  }, [mixedEnabledSources, mixedWeights, outlookData, tempMailDomain, tempMailEmail, tempMailEpin, protonBaseEmail, gptMailDomain, gptMailInboxEmail, cfMailBaseURL, cfMailAdminPassword, cfMailDomain])
 
   // 构建自动模式配置
   const buildAutoConfig = useCallback((): Parameters<typeof window.api.registrationStartAuto>[0] => {
@@ -1704,9 +1861,15 @@ export function RegisterPage(): React.JSX.Element {
       config.gptMailDomain = gptMailDomain
       config.gptMailPrefix = gptMailPrefix.trim()
       config.gptMailPrivatePassword = gptMailPrivatePassword
+    } else if (effectiveMode === 'cfmail') {
+      config.useCfMail = true
+      config.cfMailBaseURL = cfMailBaseURL.trim()
+      config.cfMailAdminPassword = cfMailAdminPassword
+      config.cfMailDomain = cfMailDomain
+      config.cfMailPrefix = cfMailPrefix.trim()
     }
     return config as Parameters<typeof window.api.registrationStartAuto>[0]
-  }, [mode, pickNextSource, outlookData, tempMailEmail, tempMailEpin, tempMailDomain, generateProtonEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword])
+  }, [mode, pickNextSource, outlookData, tempMailEmail, tempMailEpin, tempMailDomain, generateProtonEmail, gptMailBaseURL, gptMailInboxEmail, gptMailDomain, gptMailPrefix, gptMailPrivatePassword, cfMailBaseURL, cfMailAdminPassword, cfMailDomain, cfMailPrefix])
 
   // 代理池：注册时为每个任务自动挑选一个出口代理（启用后生效）
   const { proxyPool, proxyPoolConfig, pickNextProxy, reportProxyResult } = useAccountsStore()
@@ -1983,7 +2146,7 @@ export function RegisterPage(): React.JSX.Element {
     const taskCenterId = taskCenter.createTask({
       kind: 'register-batch',
       title: retryItems ? `重试 ${totalCount} 个失败任务` : `批量注册 ${totalCount} 个账号`,
-      subtitle: `${mode === 'outlook' ? 'Outlook' : mode === 'tempmail' ? 'TempMail.Plus' : mode === 'proton' ? 'Proton' : mode === 'gptmail' ? 'GPTmail' : mode === 'mixed' ? 'Mixed' : 'Manual'}，并发 ${concurrency}${proxyPoolConfig.enabled ? ' + 代理池' : ''}${rateLimitEnabled ? ` + ${maxPerMinute}/分钟` : ''}`,
+      subtitle: `${mode === 'outlook' ? 'Outlook' : mode === 'tempmail' ? 'TempMail.Plus' : mode === 'proton' ? 'Proton' : mode === 'gptmail' ? 'GPTmail' : mode === 'cfmail' ? 'CF Mail' : mode === 'mixed' ? 'Mixed' : 'Manual'}，并发 ${concurrency}${proxyPoolConfig.enabled ? ' + 代理池' : ''}${rateLimitEnabled ? ` + ${maxPerMinute}/分钟` : ''}`,
       total: totalCount,
       onPause: () => {
         batchPause.current = true
@@ -2082,7 +2245,7 @@ export function RegisterPage(): React.JSX.Element {
       message: `共 ${totalCount} 个任务，成功 ${_batchSuccess}，失败 ${_batchFail}`,
       level: _batchFail === 0 ? 'success' : (_batchSuccess === 0 ? 'error' : 'warn'),
       fields: {
-        模式: mode === 'outlook' ? 'Outlook' : mode === 'tempmail' ? 'TempMail.Plus' : mode === 'proton' ? 'Proton' : mode === 'gptmail' ? 'GPTmail' : mode === 'mixed' ? 'Mixed' : 'Manual',
+        模式: mode === 'outlook' ? 'Outlook' : mode === 'tempmail' ? 'TempMail.Plus' : mode === 'proton' ? 'Proton' : mode === 'gptmail' ? 'GPTmail' : mode === 'cfmail' ? 'CF Mail' : mode === 'mixed' ? 'Mixed' : 'Manual',
         并发: concurrency,
         成功: _batchSuccess,
         失败: _batchFail,
@@ -2214,6 +2377,7 @@ export function RegisterPage(): React.JSX.Element {
               ['tempmail', t('register.tempmail')],
               ['proton', 'Proton'],
               ['gptmail', 'GPTmail'],
+              ['cfmail', isEn ? 'CF Mail' : 'CF邮箱'],
               ['mixed', isEn ? 'Mixed' : '混合']
             ] as [RegMode, string][]).map(([m, label]) => (
               <button
@@ -2314,12 +2478,13 @@ export function RegisterPage(): React.JSX.Element {
             <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-3">
               <Label>{isEn ? 'Enabled email sources (Weighted Round-Robin)' : '启用的邮箱源（加权轮询）'}</Label>
               <div className="space-y-2">
-                {(['outlook', 'tempmail', 'proton', 'gptmail'] as AutoEmailSource[]).map((src) => {
+                {(['outlook', 'tempmail', 'proton', 'gptmail', 'cfmail'] as AutoEmailSource[]).map((src) => {
                   const enabled = mixedEnabledSources.includes(src)
-                  const label = src === 'outlook' ? 'Outlook' : src === 'tempmail' ? 'TempMail.Plus' : src === 'proton' ? 'Proton' : 'GPTmail'
+                  const label = src === 'outlook' ? 'Outlook' : src === 'tempmail' ? 'TempMail.Plus' : src === 'proton' ? 'Proton' : src === 'gptmail' ? 'GPTmail' : (isEn ? 'CF Mail' : 'CF邮箱')
                   const configured = src === 'outlook' ? !!outlookData.trim()
                     : src === 'proton' ? !!protonBaseEmail.trim()
                     : src === 'gptmail' ? !!gptMailDomain.trim()
+                    : src === 'cfmail' ? !!(cfMailBaseURL.trim() && cfMailAdminPassword.trim() && cfMailDomain.trim())
                     : !!(tempMailDomain.trim() && tempMailEmail.trim() && tempMailEpin.trim())
                   return (
                     <div key={src} className="flex items-center gap-2">
@@ -2623,6 +2788,166 @@ export function RegisterPage(): React.JSX.Element {
             </div>
             )
           })()}
+
+          {/* CF 自建邮箱 (dreamhunter2333/cloudflare_temp_email) 配置 */}
+          {(mode === 'cfmail' || (mode === 'mixed' && mixedEnabledSources.includes('cfmail'))) && (
+            <div className="p-4 bg-muted/30 rounded-lg border border-dashed space-y-4">
+              {/* 模式状态标签 */}
+              <div className="flex items-center gap-2 text-xs">
+                <Cloud className="h-3.5 w-3.5 text-primary" />
+                <span className="text-muted-foreground">{isEn ? 'Backend:' : '后端：'}</span>
+                <span className="px-2 py-0.5 rounded-full font-medium bg-primary/10 text-primary">
+                  {isEn ? 'cloudflare_temp_email (self-hosted)' : 'cloudflare_temp_email（自建）'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label>{isEn ? 'Worker URL' : 'Worker 地址'} <span className="text-destructive">*</span></Label>
+                  <Input
+                    value={cfMailBaseURL}
+                    onChange={(e) => setCfMailBaseURL(e.target.value)}
+                    placeholder="https://temp-mail.xxx.workers.dev"
+                    disabled={isRunning || batchRunning || cfCreating || cfPolling}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[11px] text-muted-foreground">{isEn ? 'cloudflare_temp_email worker URL (not the frontend Pages URL)' : 'cloudflare_temp_email worker 地址（注意是 worker，不是前端 Pages 地址）'}</p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>{isEn ? 'Admin password' : 'admin 密码'} <span className="text-destructive">*</span></Label>
+                  <Input
+                    type="password"
+                    value={cfMailAdminPassword}
+                    onChange={(e) => setCfMailAdminPassword(e.target.value)}
+                    placeholder={isEn ? 'ADMIN_PASSWORDS[0]' : '后台管理员密码'}
+                    disabled={isRunning || batchRunning || cfCreating || cfPolling}
+                    autoComplete="off"
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    {isEn
+                      ? 'x-admin-auth header. Query mails via GET /admin/mails (no JWT/Turnstile).'
+                      : '对应 x-admin-auth 头。走 GET /admin/mails 查邮件，无需 JWT/Turnstile。'}
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>{isEn ? 'Your domain pool' : '自建域名池'} <span className="text-destructive">*</span></Label>
+                  <Input
+                    value={cfMailDomain}
+                    onChange={(e) => setCfMailDomain(e.target.value)}
+                    placeholder="example.com  domain2.com"
+                    disabled={isRunning || batchRunning || cfCreating || cfPolling}
+                    className="font-mono text-xs"
+                  />
+                  {cfMailDomain.trim() && (() => {
+                    const list = cfMailDomain.split(/[\s,;]+/).filter(Boolean)
+                    return list.length > 1
+                      ? <p className="text-[11px] text-muted-foreground">{isEn ? `Domain pool: ${list.length}, randomized per account` : `域名池 ${list.length} 个，每个账号随机挑一个（降低关联）`}</p>
+                      : <p className="text-[11px] text-muted-foreground">{isEn ? 'catch-all: any prefix@domain is received' : 'catch-all 模式：任意 prefix@domain 都会被收下'}</p>
+                  })()}
+                </div>
+
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label>{isEn ? 'Fixed prefix (optional)' : '固定前缀（可选）'}</Label>
+                  <Input
+                    value={cfMailPrefix}
+                    onChange={(e) => setCfMailPrefix(e.target.value)}
+                    placeholder={isEn ? 'leave empty for random' : '留空则自动生成随机前缀'}
+                    disabled={isRunning || batchRunning || cfCreating || cfPolling}
+                    className="font-mono text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* 收码测试：①建地址 → ②外部邮箱发件 → ③查询轮询 → 自动填码/手动兜底 */}
+              <div className="space-y-3 pt-1">
+                {/* 步骤 ①：生成测试地址 */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={createCfTestAddr}
+                    disabled={isRunning || batchRunning || cfCreating || !cfMailBaseURL.trim() || !cfMailAdminPassword.trim() || !cfMailDomain.trim()}
+                    className="gap-1.5"
+                  >
+                    {cfCreating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                    {isEn ? 'Generate test address' : '生成测试地址'}
+                  </Button>
+                  {cfTestAddress && (
+                    <div className="flex items-center gap-1.5">
+                      <code className="px-2 py-0.5 bg-muted rounded text-xs font-mono">{cfTestAddress}</code>
+                      <button onClick={copyTestAddress} className="text-xs text-primary hover:underline shrink-0">
+                        {copied ? (isEn ? 'Copied!' : '已复制') : (isEn ? 'Copy' : '复制')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* 步骤 ②③：外部发件后查询 + 验证码输入 */}
+                {cfTestAddress && (
+                  <div className="space-y-2 p-3 bg-background/60 rounded-lg border">
+                    <p className="text-[11px] text-muted-foreground leading-snug">
+                      {isEn
+                        ? 'Send an email with a 6-digit code to the address above from an external mailbox (Gmail/QQ), then click "Poll for code"'
+                        : '从外部邮箱（Gmail/QQ）发一封含 6 位验证码的邮件到上方地址，然后点「查询验证码」'}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {cfPolling ? (
+                        <Button variant="destructive" size="sm" onClick={cancelCfPoll} className="gap-1.5">
+                          <Square className="h-3.5 w-3.5" />
+                          {isEn ? `Cancel (${cfPollCountdown}s)` : `取消（${cfPollCountdown}s）`}
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={pollCfTest}
+                          disabled={isRunning || batchRunning || !cfTestAddress}
+                          className="gap-1.5"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          {isEn ? 'Poll for code' : '查询验证码'}
+                        </Button>
+                      )}
+                      <Input
+                        value={cfTestOtp}
+                        onChange={(e) => setCfTestOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder={isEn ? '6-digit code' : '6 位验证码'}
+                        maxLength={6}
+                        disabled={cfPolling}
+                        onKeyDown={(e) => e.key === 'Enter' && submitCfTestOtp()}
+                        className="font-mono text-base tracking-widest h-8 w-56"
+                      />
+                      <Button size="sm" onClick={submitCfTestOtp} disabled={cfPolling || !cfTestOtp.trim()}>
+                        <Key className="h-3.5 w-3.5 mr-1" />
+                        {isEn ? 'Confirm' : '确认'}
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {cfTestResult && (
+                  <span className={cn('text-xs', cfTestResult.ok ? 'text-emerald-600' : 'text-destructive')}>
+                    {cfTestResult.ok ? <CheckCircle2 className="inline h-3.5 w-3.5 mr-1" /> : <XCircle className="inline h-3.5 w-3.5 mr-1" />}
+                    {cfTestResult.text}
+                  </span>
+                )}
+              </div>
+
+              {/* 模式说明 */}
+              <div className="p-2.5 bg-background/60 rounded border-l-2 border-primary/60 text-xs leading-relaxed text-muted-foreground space-y-1">
+                <p className="font-medium text-foreground">{isEn ? 'CF self-hosted email — admin mode (dreamhunter2333/cloudflare_temp_email):' : 'CF 自建邮箱 · admin 模式（dreamhunter2333/cloudflare_temp_email）：'}</p>
+                <ol className="list-decimal pl-5 space-y-0.5">
+                  <li>{isEn ? 'Deploy cloudflare_temp_email worker + D1 + Email Routing (catch-all → Send to Worker)' : '部署 cloudflare_temp_email worker + D1 + Email Routing（catch-all → Send to Worker）'}</li>
+                  <li>{isEn ? 'Fill the worker URL, admin password and your catch-all domain above' : '在上面填写 worker 地址、admin 密码和 catch-all 域名'}</li>
+                  <li>{isEn ? 'Each registration uses prefix@yourdomain; catch-all receives it, we poll GET /admin/mails and extract the code' : '每次注册用 prefix@你的域名；catch-all 收下后，轮询 GET /admin/mails 提取验证码'}</li>
+                  <li>{isEn ? '"Generate test address" → send a code email from external mailbox → "Poll for code" auto-fills it; manual fallback supported' : '「生成测试地址」→ 从外部邮箱发一封验证码邮件 → 「查询验证码」自动填入；查不到可手动填写'}</li>
+                </ol>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -2829,6 +3154,7 @@ export function RegisterPage(): React.JSX.Element {
                   (mode === 'outlook' && !outlookData.trim()) ||
                   (mode === 'tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim())) ||
                   (mode === 'gptmail' && !gptMailDomain.trim()) ||
+                  (mode === 'cfmail' && (!cfMailBaseURL.trim() || !cfMailAdminPassword.trim() || !cfMailDomain.trim())) ||
                   (mode === 'proton' && !protonBaseEmail.trim()) ||
                   (mode === 'mixed' && pickNextSource() == null)
                 }
@@ -3049,6 +3375,7 @@ export function RegisterPage(): React.JSX.Element {
                   (mode === 'outlook' && !outlookData.trim()) ||
                   (mode === 'tempmail' && (!tempMailDomain.trim() || !tempMailEmail.trim() || !tempMailEpin.trim())) ||
                   (mode === 'gptmail' && !gptMailDomain.trim()) ||
+                  (mode === 'cfmail' && (!cfMailBaseURL.trim() || !cfMailAdminPassword.trim() || !cfMailDomain.trim())) ||
                   (mode === 'proton' && !protonBaseEmail.trim()) ||
                   (mode === 'mixed' && pickNextSource() == null)
                 }

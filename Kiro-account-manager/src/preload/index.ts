@@ -1171,11 +1171,34 @@ const api = {
     gptMailDomain?: string
     gptMailPrefix?: string
     gptMailPrivatePassword?: string
+    useCfMail?: boolean
+    cfMailBaseURL?: string
+    cfMailAdminPassword?: string
+    cfMailDomain?: string
+    cfMailPrefix?: string
     password?: string
     fullName?: string
     taskId?: string
   }): Promise<{ success: boolean; result?: unknown; error?: string }> => {
     return ipcRenderer.invoke('registration-start-auto', config)
+  },
+
+  // CF 邮箱测试 · 第一步：建测试地址（不碰 AWS 注册接口）
+  cfMailCreate: (config: {
+    baseURL: string
+    adminPassword: string
+    domain: string
+  }): Promise<{ ok: boolean; address?: string; error?: string }> => {
+    return ipcRenderer.invoke('registration-cf-create', config)
+  },
+
+  // CF 邮箱测试 · 第二步：轮询查码（用户外部发件后调用；超时可手动填写兜底）
+  cfMailPoll: (config: {
+    baseURL: string
+    adminPassword: string
+    domain: string
+  }, address: string, timeoutSec?: number): Promise<{ ok: boolean; receivedCode?: string; mailCount?: number; note?: string; error?: string }> => {
+    return ipcRenderer.invoke('registration-cf-poll', config, address, timeoutSec)
   },
 
   // 手动模式 Phase1: 初始化 OIDC + 设备授权

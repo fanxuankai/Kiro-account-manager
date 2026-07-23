@@ -1,5 +1,5 @@
 import { ipcMain, BrowserWindow } from 'electron'
-import { Registrar, newConfig, type RegistrationConfig } from './index'
+import { Registrar, newConfig, type RegistrationConfig, createCfTestAddress, pollCfTestCode, type CfMailTestConfig } from './index'
 import type { RegStepEvent } from './registrar'
 import { openProtonLogin, getProtonLoginStatus, closeProtonWindow } from './proton-mail-window'
 
@@ -144,5 +144,27 @@ export function registerIPCHandlers(getMainWindow: () => BrowserWindow | null): 
   ipcMain.handle('proton-close', async () => {
     closeProtonWindow()
     return { success: true }
+  })
+
+  // ===== CF 自建邮箱测试（外部发件 + 查询模式）=====
+  // 不自发自收（CF send_email 发到自己域名会被循环检测丢弃），
+  // 改为：建地址 → 用户从外部邮箱手动发件 → 轮询查码。与真实注册（AWS 发 OTP）通路一致。
+
+  // 第一步：建测试地址
+  ipcMain.handle('registration-cf-create', async (_event, cfg: CfMailTestConfig) => {
+    try {
+      return await createCfTestAddress(cfg)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // 第二步：轮询查码（用户外部发件后调用）
+  ipcMain.handle('registration-cf-poll', async (_event, cfg: CfMailTestConfig, address: string, timeoutSec?: number) => {
+    try {
+      return await pollCfTestCode(cfg, address, timeoutSec)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   })
 }

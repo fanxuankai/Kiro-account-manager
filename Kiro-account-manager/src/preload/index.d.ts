@@ -890,10 +890,29 @@ interface KiroApi {
     gptMailDomain?: string
     gptMailPrefix?: string
     gptMailPrivatePassword?: string
+    useCfMail?: boolean
+    cfMailBaseURL?: string
+    cfMailAdminPassword?: string
+    cfMailDomain?: string
+    cfMailPrefix?: string
     password?: string
     fullName?: string
     taskId?: string
   }) => Promise<{ success: boolean; result?: unknown; error?: string }>
+
+  /** CF 邮箱测试 · 第一步：建测试地址（不碰 AWS 注册接口） */
+  cfMailCreate: (config: {
+    baseURL: string
+    adminPassword: string
+    domain: string
+  }) => Promise<{ ok: boolean; address?: string; error?: string }>
+
+  /** CF 邮箱测试 · 第二步：轮询查码（超时可手动填写兜底） */
+  cfMailPoll: (config: {
+    baseURL: string
+    adminPassword: string
+    domain: string
+  }, address: string, timeoutSec?: number) => Promise<{ ok: boolean; receivedCode?: string; mailCount?: number; note?: string; error?: string }>
 
   registrationManualPhase1: (config: {
     proxy?: string
