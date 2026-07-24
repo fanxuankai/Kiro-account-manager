@@ -60,6 +60,32 @@ export interface CfPollCodeResult {
   error?: string
 }
 
+/** GET /admin/mails 公共实现（实例方法 + 测试通道共用） */
+async function fetchAdminMails(
+  baseURL: string,
+  adminPassword: string,
+  address: string,
+  limit = 20
+): Promise<Array<Record<string, unknown>>> {
+  const url = `${baseURL}/admin/mails?address=${encodeURIComponent(address)}&limit=${limit}&offset=0`
+  const resp = await proxyFetch(url, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json, text/plain, */*',
+      'x-admin-auth': adminPassword
+    },
+    signal: AbortSignal.timeout(15000)
+  })
+  if (resp.status === 401) {
+    throw new Error('admin 密码错误（x-admin-auth 校验失败）')
+  }
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}`)
+  }
+  const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>
+  return (data.results as Array<Record<string, unknown>>) || []
+}
+
 /**
  * 从一封 raw MIME 邮件提取 6 位验证码（独立函数，供实例方法和测试函数共用）。
  * 多策略兜底：Subject 头 → 结构化正文解析 + 上下文优先提码 → 暴力解码兜底。
@@ -75,8 +101,8 @@ function extractOtpFromRaw(raw: string): string {
   // 2. 结构化解析正文
   const code = CfMailService.extractCfCode(CfMailService.parseMimeBody(raw))
   if (code) return code
-  // 3. 暴力兜底
-  return CfMailService.extractCfCode(CfMailService.bruteDecode(raw))
+  // 3. 暴力兜底：强制上下文匹配，避免 DKIM/签名噪声被当成验证码
+  return CfMailService.extractCfCodeWithContextOnly(CfMailService.bruteDecode(raw))
 }
 
 export class CfMailService {
@@ -159,27 +185,7 @@ export class CfMailService {
 
   /** GET /admin/mails?address=&limit=&offset= 查指定地址的邮件列表 */
   private async fetchMails(): Promise<Array<Record<string, unknown>>> {
-    const url = `${this.baseURL}/admin/mails?address=${encodeURIComponent(this.address)}&limit=20&offset=0`
-    const resp = await proxyFetch(url, {
-      method: 'GET',
-      headers: this.buildHeaders(),
-      signal: AbortSignal.timeout(15000)
-    })
-    if (resp.status === 401) {
-      throw new Error('admin 密码错误（x-admin-auth 校验失败）')
-    }
-    if (!resp.ok) {
-      throw new Error(`HTTP ${resp.status}`)
-    }
-    const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>
-    return (data.results as Array<Record<string, unknown>>) || []
-  }
-
-  private buildHeaders(): Record<string, string> {
-    return {
-      'accept': 'application/json, text/plain, */*',
-      'x-admin-auth': this.adminPassword
-    }
+    return fetchAdminMails(this.baseURL, this.adminPassword, this.address)
   }
 
   /**
@@ -194,6 +200,23 @@ export class CfMailService {
   }
 
   /**
+   * 仅按关键词上下文提取 6 位验证码（不 fallback 取任意 6 位数字）。
+   * 用于暴力解码兜底等噪声较多的场景，避免误取 DKIM/颜色值。
+   */
+  static extractCfCodeWithContextOnly(text: string): string {
+    if (!text) return ''
+    // 中英文关键词：验证码 / code / verification / otp / pin / 授权码 / 动态码
+    // 故意不含「密码」—— 注册邮件里可能指账号密码，误匹配风险高
+    const ctxRe = /(?:验证码|verification\s*code|code|otp|pin|授权码|动态码)[^\d]{0,20}(\d{6})\b/i
+    const ctxMatch = text.match(ctxRe)
+    if (ctxMatch) return ctxMatch[1]
+    const revRe = /\b(\d{6})[^\d]{0,10}(?:验证码|verification|code|otp|授权码)/i
+    const revMatch = text.match(revRe)
+    if (revMatch) return revMatch[1]
+    return ''
+  }
+
+  /**
    * 从文本中智能提取 6 位验证码（上下文优先）。
    *
    * 优先返回"验证码/code/verification"等关键词附近的 6 位数字，
@@ -202,15 +225,8 @@ export class CfMailService {
    */
   static extractCfCode(text: string): string {
     if (!text) return ''
-    // 上下文优先：关键词后紧跟（允许少量中间字符）的 6 位数字
-    // 中英文关键词：验证码 / code / verification / otp / pin / 授权码 / 动态码
-    const ctxRe = /(?:验证码|verification\s*code|code|otp|pin|授权码|动态码|密码)[^\d]{0,20}(\d{6})\b/i
-    const ctxMatch = text.match(ctxRe)
-    if (ctxMatch) return ctxMatch[1]
-    // 也匹配 "数字 是验证码" 的反向语序
-    const revRe = /\b(\d{6})[^\d]{0,10}(?:验证码|verification|code|otp|授权码)/i
-    const revMatch = text.match(revRe)
-    if (revMatch) return revMatch[1]
+    const ctx = CfMailService.extractCfCodeWithContextOnly(text)
+    if (ctx) return ctx
     // 兜底：最后一个独立的 6 位数字（跳过全 0 的噪声值）
     const all = text.match(/\b(\d{6})\b/g)
     if (all) {
@@ -280,12 +296,16 @@ export class CfMailService {
     if (!m) return ''
     let val = m[1].replace(/\r?\n[ \t]+/g, ' ').trim() // 展开折行
     // 解码 RFC 2047 encoded-word：=?charset?Q?text?= 或 =?charset?B?text?=
+    // 注意：B 已直接解出 UTF-8 字符串；Q 先解成 0-255 字节序列，需二次组 Buffer 再 utf-8。
+    // 绝不能对整段 val 无条件做二次解码 —— 会破坏 B 解码结果和直出 UTF-8 subject。
+    let sawQ = false
     val = val.replace(/=\?([^?]+)\?([qQbB])\?([^?]*)\?=/g, (_full, _charset: string, enc: string, text: string) => {
       try {
         if (enc.toUpperCase() === 'B') {
           return Buffer.from(text, 'base64').toString('utf-8')
         }
-        // Q-encoding：=XX 十六进制，_ 表示空格
+        // Q-encoding：=XX 十六进制，_ 表示空格；输出是字节序列（每个 charCode 0-255）
+        sawQ = true
         return text.replace(/_/g, ' ').replace(/=([0-9a-fA-F]{2})/g, (_h: string, hex: string) =>
           String.fromCharCode(parseInt(hex, 16))
         )
@@ -293,14 +313,16 @@ export class CfMailService {
         return text
       }
     })
-    // 二次解码：Q-encoding 解出的是字节序列，若是 UTF-8 多字节需整体解码
-    try {
-      const buf = Buffer.from(val.split('').map((c) => c.charCodeAt(0)))
-      const decoded = buf.toString('utf-8')
-      return decoded
-    } catch {
-      return val
+    // 仅 Q-encoding 需要把"字节序列字符串"重组为 Buffer 再按 utf-8 解码多字节字符
+    if (sawQ) {
+      try {
+        const buf = Buffer.from(val.split('').map((c) => c.charCodeAt(0) & 0xff))
+        return buf.toString('utf-8')
+      } catch {
+        return val
+      }
     }
+    return val
   }
 
   /**
@@ -456,15 +478,19 @@ export class CfMailService {
 }
 
 /**
-/**
- * CF 邮箱测试 · 第一步：建测试地址（供测试按钮"生成测试地址"调用）。
+ * CF 邮箱测试 · 第一步：生成测试地址（供测试按钮"生成测试地址"调用）。
  *
  * 全程只打 worker 的 admin API（x-admin-auth），**不创建 Registrar、不碰 AWS 注册接口**。
  *
  * 流程：
  *  1. health_check 探活（确认是 worker 而非前端 Pages）
- *  2. POST /admin/new_address 建测试地址 kiro-cftest-xxxx@domain
- *  3. 返回地址 —— 用户从外部邮箱（Gmail/QQ 等）手动发一封带验证码的邮件到该地址
+ *  2. GET /admin/mails 校验 admin 密码（401 立即报错）
+ *  3. 与真实注册 create() 同路径：随机选域名 + 拼 prefix@domain（靠 catch-all，不 POST 建地址）
+ *  4. 返回地址 —— 用户从外部邮箱（Gmail/QQ 等）手动发一封带验证码的邮件到该地址
+ *
+ * 为什么不 POST /admin/new_address：
+ *  真实注册靠域名 catch-all，地址无需预先创建；若测试走"显式建地址"，
+ *  未配 catch-all 的域名仍可能测试通过，给虚假信心。对齐生产路径更可信。
  *
  * 为什么不自发自收：CF 的 send_email 发到自己域名会被循环检测丢弃，
  * 所以测试必须用外部邮箱发件，这才与真实注册（AWS 发 OTP）通路一致。
@@ -480,12 +506,8 @@ export async function createCfTestAddress(cfg: CfMailTestConfig): Promise<CfCrea
   if (domains.length === 0) {
     return { ok: false, error: '域名为空' }
   }
-  const domain = domains[0]
-  const headers: Record<string, string> = {
-    'accept': 'application/json, text/plain, */*',
-    'content-type': 'application/json',
-    'x-admin-auth': adminPassword
-  }
+  // 与真实注册 create() 一致：多域名时随机挑一个
+  const domain = domains[Math.floor(Math.random() * domains.length)]
 
   // 1. 探活
   try {
@@ -498,26 +520,15 @@ export async function createCfTestAddress(cfg: CfMailTestConfig): Promise<CfCrea
     return { ok: false, error: `后端不可达: ${e instanceof Error ? e.message : String(e)}` }
   }
 
-  // 2. admin 建地址
+  // 2. 与真实注册同路径：只拼地址，靠 catch-all 收信（不 POST 建地址）
+  //    顺手用 GET /admin/mails 校验 admin 密码，避免密码错了却生成地址、后续查码才暴露
   const localPart = `kiro-cftest-${Math.random().toString(36).slice(2, 8)}`
+  const address = `${localPart}@${domain}`
   try {
-    const r = await proxyFetch(`${baseURL}/admin/new_address`, {
-      method: 'POST', headers,
-      body: JSON.stringify({ name: localPart, domain, enablePrefix: false }),
-      signal: AbortSignal.timeout(15000)
-    })
-    if (r.status === 401) {
-      return { ok: false, error: 'admin 密码错误（x-admin-auth 校验失败）' }
-    }
-    if (!r.ok) {
-      const t = (await r.text().catch(() => '')).slice(0, 200)
-      return { ok: false, error: `建地址失败: HTTP ${r.status} ${t}` }
-    }
-    const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
-    const address = String(d.address || `${localPart}@${domain}`)
+    await fetchAdminMails(baseURL, adminPassword, address, 1)
     return { ok: true, address }
   } catch (e) {
-    return { ok: false, error: `建地址失败: ${e instanceof Error ? e.message : String(e)}` }
+    return { ok: false, error: `校验失败: ${e instanceof Error ? e.message : String(e)}` }
   }
 }
 
@@ -538,7 +549,6 @@ export async function pollCfTestCode(cfg: CfMailTestConfig, address: string, tim
   if (!address) {
     return { ok: false, error: '地址为空' }
   }
-  const headers: Record<string, string> = { 'accept': 'application/json, text/plain, */*', 'x-admin-auth': adminPassword }
   const checkedIds = new Set<number>()
   // 至少查一次；前端以小 timeoutSec（如 1）调用时 maxAttempts=1，查完立即返回
   const maxAttempts = Math.max(1, Math.floor(timeoutSec / 3))
@@ -549,12 +559,8 @@ export async function pollCfTestCode(cfg: CfMailTestConfig, address: string, tim
       await new Promise((resolve) => setTimeout(resolve, 3000))
     }
     try {
-      const r = await proxyFetch(`${baseURL}/admin/mails?address=${encodeURIComponent(address)}&limit=20&offset=0`, {
-        method: 'GET', headers, signal: AbortSignal.timeout(15000)
-      })
-      if (!r.ok) continue
-      const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
-      const mails = (d.results as Array<Record<string, unknown>>) || []
+      // 复用公共 fetchAdminMails（与真实注册 waitForCode 同一路径）
+      const mails = await fetchAdminMails(baseURL, adminPassword, address)
       for (const mail of mails) {
         const id = Number(mail.id)
         if (!Number.isFinite(id) || checkedIds.has(id)) continue
@@ -572,7 +578,13 @@ export async function pollCfTestCode(cfg: CfMailTestConfig, address: string, tim
       if (mails.length > 0) {
         return { ok: false, mailCount: mails.length, error: `查到 ${mails.length} 封邮件但未提取到 6 位验证码` }
       }
-    } catch { /* 重试 */ }
+    } catch (e) {
+      // 401 等硬错误直接返回，其余网络抖动继续重试
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes('admin 密码错误')) {
+        return { ok: false, error: msg }
+      }
+    }
   }
   return { ok: false, mailCount: 0, error: `${timeoutSec}s 内未查到邮件` }
 }
