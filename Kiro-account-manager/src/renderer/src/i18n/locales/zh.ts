@@ -54,6 +54,7 @@ const zh = {
     configSync: '配置同步',
     register: '注册',
     subscription: '批量订阅',
+    creditCards: '信用卡',
     logs: '系统日志',
     settings: '设置',
     about: '关于'

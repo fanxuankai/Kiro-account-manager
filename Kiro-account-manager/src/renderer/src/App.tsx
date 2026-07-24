@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AccountManager } from './components/accounts'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
-import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, LogsPage } from './components/pages'
+import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, LogsPage, CreditCardsPage } from './components/pages'
 import { useWebhookStore } from './store/webhooks'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { useAccountsStore, isBannedAccountError } from './store/accounts'
+import { useCreditCardsStore } from './store/creditCards'
 
 // 托盘信息防抖延迟：后台刷新风暴时合并多次跨进程 IPC 为单次
 const TRAY_UPDATE_DEBOUNCE_MS = 400
@@ -95,6 +96,8 @@ function App(): React.JSX.Element {
     useAccountsStore.getState().loadProactiveRenewalEnabled()
     // 加载 Webhook 配置
     useWebhookStore.getState().loadFromStorage()
+    // 加载信用卡数据
+    useCreditCardsStore.getState().loadFromStorage()
 
     return () => {
       stopAutoTokenRefresh()
@@ -337,6 +340,8 @@ function App(): React.JSX.Element {
         return <RegisterPage />
       case 'subscription':
         return <SubscriptionPage />
+      case 'creditCards':
+        return <CreditCardsPage />
       case 'webhooks':
         return <WebhooksPage />
       case 'diagnose':
