@@ -7,7 +7,10 @@ import {
   Wallet,
   Building2,
   CalendarClock,
-  AlertTriangle
+  AlertTriangle,
+  Users,
+  ChevronDown,
+  X
 } from 'lucide-react'
 import {
   useCreditCardsStore,
@@ -15,12 +18,24 @@ import {
   CARD_STATUSES,
   availableCredit,
   utilization,
+  usageStats,
   type CreditCard,
   type CardNetwork,
   type CardStatus
 } from '@/store/creditCards'
+import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import { Card, CardContent, CardHeader, CardTitle, Button, Input, Label, Badge } from '../ui'
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Button,
+  Input,
+  Label,
+  Badge,
+  Select
+} from '../ui'
 import { cn } from '@/lib/utils'
 
 /** 使用率颜色：<50% 绿，<80% 黄，>=80% 红 */
@@ -35,6 +50,13 @@ function fmtMoney(v: number, currency: string): string {
   return `${currency} ${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
 }
 
+/** 格式化使用记录时间：YYYY-MM-DD HH:mm */
+function fmtDate(ts: number): string {
+  const d = new Date(ts)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 const EMPTY_CARD: Partial<CreditCard> = {
   network: 'visa',
   status: 'active',
@@ -46,7 +68,7 @@ const EMPTY_CARD: Partial<CreditCard> = {
 export function CreditCardsPage(): React.ReactNode {
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
-  const { cards, addCard, updateCard, removeCard } = useCreditCardsStore()
+  const { cards, addCard, updateCard, removeCard, addUsage, removeUsage } = useCreditCardsStore()
 
   const [editing, setEditing] = useState<Partial<CreditCard> | null>(null)
 
@@ -179,6 +201,8 @@ export function CreditCardsPage(): React.ReactNode {
                       removeCard(c.id)
                     }
                   }}
+                  onAddUsage={(account) => addUsage(c.id, account)}
+                  onRemoveUsage={(usageId) => removeUsage(c.id, usageId)}
                 />
               ))}
             </div>
@@ -205,15 +229,67 @@ function CardRow({
   card,
   isEn,
   onEdit,
-  onDelete
+  onDelete,
+  onAddUsage,
+  onRemoveUsage
 }: {
   card: CreditCard
   isEn: boolean
   onEdit: () => void
   onDelete: () => void
+  onAddUsage: (account: { id: string; email: string }) => void
+  onRemoveUsage: (usageId: string) => void
 }): React.ReactNode {
   const ratio = utilization(card)
   const avail = availableCredit(card)
+  const stats = usageStats(card)
+
+  // 使用记录展开 + 账号选择
+  const accounts = useAccountsStore((s) => s.accounts)
+  const [expanded, setExpanded] = useState(false)
+  const [picking, setPicking] = useState(false)
+  const [pickedId, setPickedId] = useState('')
+  // 记账模式：从现有账号下拉选 / 手动输入邮箱（已删账号补录用）
+  const [manualMode, setManualMode] = useState(false)
+  const [manualEmail, setManualEmail] = useState('')
+
+  // 账号下拉选项：label 用 nickname || email
+  const accountOptions = useMemo(
+    () =>
+      Array.from(accounts.values()).map((a) => ({
+        value: a.id,
+        label: a.nickname || a.email,
+        description: a.nickname ? a.email : undefined
+      })),
+    [accounts]
+  )
+
+  // 明细按时间倒序（最近的在前）
+  const sortedUsages = useMemo(
+    () => [...(card.usages || [])].sort((a, b) => b.at - a.at),
+    [card.usages]
+  )
+
+  // 无现有账号时自动切到手动输入模式
+  const hasAccounts = accountOptions.length > 0
+  const effectiveManual = manualMode || !hasAccounts
+
+  const handleAddUsage = (): void => {
+    if (effectiveManual) {
+      const email = manualEmail.trim()
+      if (!email) return
+      // 手动补录：无 accountId，仅存邮箱
+      onAddUsage({ id: '', email })
+    } else {
+      const acc = accounts.get(pickedId)
+      if (!acc) return
+      onAddUsage({ id: acc.id, email: acc.email })
+    }
+    setPickedId('')
+    setManualEmail('')
+    setPicking(false)
+    setExpanded(true)
+  }
   const netOpt = CARD_NETWORKS.find((n) => n.value === card.network)
   const netLabel = netOpt ? (isEn ? netOpt.labelEn : netOpt.label) : card.network
   const statusOpt = CARD_STATUSES.find((s) => s.value === card.status)
@@ -321,6 +397,127 @@ function CardRow({
           {isEn ? 'High utilization' : '使用率偏高'}
         </div>
       )}
+
+      {/* 使用记录 */}
+      <div className="mt-3 border-t pt-2">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            disabled={stats.count === 0}
+          >
+            <Users className="h-3 w-3" />
+            {stats.count === 0
+              ? isEn
+                ? 'Not used yet'
+                : '未记录使用'
+              : isEn
+                ? `Used ${stats.count} time${stats.count > 1 ? 's' : ''} · ${stats.accounts} account${stats.accounts > 1 ? 's' : ''}`
+                : `已用 ${stats.count} 次 · ${stats.accounts} 个账号`}
+            {stats.count > 0 && (
+              <ChevronDown
+                className={cn('h-3 w-3 transition-transform', expanded && 'rotate-180')}
+              />
+            )}
+          </button>
+          <button
+            onClick={() => setPicking((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-primary hover:underline"
+          >
+            <Plus className="h-3 w-3" />
+            {isEn ? 'Log usage' : '记一笔'}
+          </button>
+        </div>
+
+        {/* 记一笔：账号选择 / 手动输入邮箱 */}
+        {picking && (
+          <div className="mt-2 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                {effectiveManual ? (
+                  <Input
+                    value={manualEmail}
+                    onChange={(e) => setManualEmail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddUsage()
+                    }}
+                    placeholder={isEn ? 'Enter account email' : '输入账号邮箱'}
+                    className="h-9"
+                  />
+                ) : (
+                  <Select
+                    value={pickedId}
+                    options={accountOptions}
+                    onChange={setPickedId}
+                    placeholder={isEn ? 'Select account' : '选择账号'}
+                  />
+                )}
+              </div>
+              <Button
+                size="sm"
+                onClick={handleAddUsage}
+                disabled={effectiveManual ? !manualEmail.trim() : !pickedId}
+              >
+                {isEn ? 'Add' : '添加'}
+              </Button>
+            </div>
+            {/* 模式切换：仅当有现有账号时才显示（无账号时强制手动） */}
+            {hasAccounts && (
+              <button
+                onClick={() => {
+                  setManualMode((v) => !v)
+                  setPickedId('')
+                  setManualEmail('')
+                }}
+                className="text-[11px] text-muted-foreground hover:text-primary transition-colors"
+              >
+                {effectiveManual
+                  ? isEn
+                    ? '← Pick from existing accounts'
+                    : '← 从现有账号选择'
+                  : isEn
+                    ? 'Account deleted? Enter email manually →'
+                    : '账号已删除？手动输入邮箱 →'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* 使用明细 */}
+        {expanded && stats.count > 0 && (
+          <div className="mt-2 space-y-1">
+            {sortedUsages.map((u) => {
+              // accountId 存在但账号已不在 store 中 = 账号已删除
+              const deleted = !u.accountId || !accounts.has(u.accountId)
+              return (
+                <div
+                  key={u.id}
+                  className="flex items-center justify-between gap-2 text-[11px] py-1 px-2 rounded bg-muted/40"
+                >
+                  <span className="flex items-center gap-1.5 truncate min-w-0">
+                    <span className="truncate">{u.accountEmail}</span>
+                    {deleted && (
+                      <Badge variant="outline" className="text-[9px] shrink-0 opacity-70">
+                        {isEn ? 'deleted' : '已删除'}
+                      </Badge>
+                    )}
+                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-muted-foreground font-mono">{fmtDate(u.at)}</span>
+                    <button
+                      onClick={() => onRemoveUsage(u.id)}
+                      className="text-muted-foreground hover:text-destructive transition-colors"
+                      title={isEn ? 'Remove' : '删除'}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       {card.note && (
         <p className="text-[11px] text-muted-foreground mt-2 border-t pt-2">{card.note}</p>

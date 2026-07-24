@@ -14,6 +14,20 @@ export type CardNetwork = 'visa' | 'mastercard' | 'amex' | 'unionpay' | 'jcb' | 
 /** 卡片状态 */
 export type CardStatus = 'active' | 'frozen' | 'closed'
 
+/**
+ * 单条使用记录：标记这张卡被哪个账号用过一次。
+ * 冗余保存 accountEmail 快照——即使账号后来被删除，历史记录仍可读，不会变成孤儿 id。
+ */
+export interface CardUsage {
+  id: string
+  /** 关联账号 id */
+  accountId: string
+  /** 记录时的账号邮箱快照 */
+  accountEmail: string
+  /** 记录时间 */
+  at: number
+}
+
 export interface CreditCard {
   id: string
   /** 备注名（如"招行经典白"） */
@@ -53,6 +67,9 @@ export interface CreditCard {
   /** 备注 */
   note?: string
 
+  /** 使用记录：这张卡被哪些账号用过（每条一次） */
+  usages?: CardUsage[]
+
   createdAt: number
   updatedAt: number
 }
@@ -86,6 +103,13 @@ export function utilization(card: Pick<CreditCard, 'creditLimit' | 'usedAmount'>
   return Math.min(1, Math.max(0, (card.usedAmount || 0) / card.creditLimit))
 }
 
+/** 派生：使用统计（总次数 + 去重账号数）。手动补录的记录无 accountId，用邮箱作去重键 */
+export function usageStats(card: Pick<CreditCard, 'usages'>): { count: number; accounts: number } {
+  const usages = card.usages || []
+  const uniqueAccounts = new Set(usages.map((u) => u.accountId || `email:${u.accountEmail}`))
+  return { count: usages.length, accounts: uniqueAccounts.size }
+}
+
 interface CreditCardsState {
   cards: Map<string, CreditCard>
 }
@@ -94,6 +118,10 @@ interface CreditCardsActions {
   addCard: (input: Omit<CreditCard, 'id' | 'createdAt' | 'updatedAt'>) => string
   updateCard: (id: string, updates: Partial<Omit<CreditCard, 'id' | 'createdAt'>>) => void
   removeCard: (id: string) => void
+  /** 记一笔使用：标记某账号用了这张卡 */
+  addUsage: (cardId: string, account: { id: string; email: string }) => void
+  /** 删除一条使用记录 */
+  removeUsage: (cardId: string, usageId: string) => void
   loadFromStorage: () => void
   saveToStorage: () => void
 }
@@ -132,6 +160,44 @@ export const useCreditCardsStore = create<CreditCardsStore>()((set, get) => ({
     set((state) => {
       const next = new Map(state.cards)
       next.delete(id)
+      return { cards: next }
+    })
+    get().saveToStorage()
+  },
+
+  addUsage: (cardId, account) => {
+    set((state) => {
+      const next = new Map(state.cards)
+      const existing = next.get(cardId)
+      if (existing) {
+        const usage: CardUsage = {
+          id: crypto.randomUUID(),
+          accountId: account.id,
+          accountEmail: account.email,
+          at: Date.now()
+        }
+        next.set(cardId, {
+          ...existing,
+          usages: [...(existing.usages || []), usage],
+          updatedAt: Date.now()
+        })
+      }
+      return { cards: next }
+    })
+    get().saveToStorage()
+  },
+
+  removeUsage: (cardId, usageId) => {
+    set((state) => {
+      const next = new Map(state.cards)
+      const existing = next.get(cardId)
+      if (existing) {
+        next.set(cardId, {
+          ...existing,
+          usages: (existing.usages || []).filter((u) => u.id !== usageId),
+          updatedAt: Date.now()
+        })
+      }
       return { cards: next }
     })
     get().saveToStorage()
