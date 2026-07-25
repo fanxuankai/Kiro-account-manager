@@ -195,19 +195,33 @@ function checkAndRecordRate(webhookId: string): boolean {
 
 /**
  * 按 webhook 类型构造消息体并 POST（含重试 + 速率限制）
- * 网络错误不会抛到调用方（仅 console.warn），避免影响主业务流程
+ * 失败会抛错；triggerEvent 侧用 allSettled 吞掉，避免影响主业务流程。
+ * testWebhook 可据此展示真实错误。
  */
 async function sendWebhook(webhook: WebhookEntry, payload: WebhookMessage): Promise<void> {
   // C9: 速率限制
   if (!checkAndRecordRate(webhook.id)) {
-    console.warn(`[Webhook] ${webhook.kind} ${webhook.label || webhook.id} rate limit exceeded (>${MAX_PER_MINUTE}/min), drop`)
-    return
+    const msg = `rate limit exceeded (>${MAX_PER_MINUTE}/min)`
+    console.warn(`[Webhook] ${webhook.kind} ${webhook.label || webhook.id} ${msg}, drop`)
+    throw new Error(msg)
   }
 
-  const body = buildWebhookBody(webhook, payload)
+  let body: unknown
+  try {
+    body = buildWebhookBody(webhook, payload)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[Webhook] ${webhook.kind} body build failed:`, msg)
+    throw new Error(`构造请求体失败: ${msg}`)
+  }
+
   const url = webhook.kind === 'telegram'
     ? buildTelegramUrl(webhook)
     : webhook.url
+
+  if (!url || !/^https?:\/\//i.test(url)) {
+    throw new Error(`无效的 Webhook URL: ${url || '(空)'}`)
+  }
 
   // C9: 重试逻辑（指数退避）
   let lastError: unknown
@@ -228,22 +242,55 @@ async function sendWebhook(webhook: WebhookEntry, payload: WebhookMessage): Prom
       })
       clearTimeout(timer)
       if (resp.ok) {
+        // 部分自定义接口 HTTP 200 但业务码失败（如 code !== 2xxxx）
+        const text = await resp.text().catch(() => '')
+        if (text) {
+          try {
+            const json = JSON.parse(text) as {
+              code?: number | string
+              message?: string
+              msg?: string
+              success?: boolean
+              ok?: boolean
+            }
+            const bizFail =
+              json.success === false ||
+              json.ok === false ||
+              (typeof json.code === 'number' && json.code >= 40000) ||
+              (typeof json.code === 'string' && /^(4|5)\d{4}$/.test(json.code))
+            if (bizFail) {
+              const detail = json.message || json.msg || `code=${json.code}`
+              throw new Error(`业务失败: ${detail}`)
+            }
+          } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message.startsWith('业务失败:')) throw parseErr
+            // 非 JSON 响应，HTTP ok 即视为成功
+          }
+        }
         if (attempt > 0) {
           console.log(`[Webhook] ${webhook.kind} ${webhook.label || webhook.id} succeeded on retry ${attempt}`)
         }
         return
       }
+      const errText = await resp.text().catch(() => '')
+      const detail = errText ? `HTTP ${resp.status}: ${errText.slice(0, 200)}` : `HTTP ${resp.status}`
       // 4xx 客户端错误（除 408/429）不重试
       if (resp.status >= 400 && resp.status < 500 && resp.status !== 408 && resp.status !== 429) {
-        console.warn(`[Webhook] ${webhook.kind} ${webhook.label || webhook.id} HTTP ${resp.status} (no retry)`)
-        return
+        console.warn(`[Webhook] ${webhook.kind} ${webhook.label || webhook.id} ${detail} (no retry)`)
+        throw new Error(detail)
       }
-      lastError = new Error(`HTTP ${resp.status}`)
+      lastError = new Error(detail)
     } catch (err) {
+      // 业务失败 / 明确 4xx 不再重试
+      if (err instanceof Error && (err.message.startsWith('业务失败:') || /^HTTP 4\d\d/.test(err.message))) {
+        throw err
+      }
       lastError = err
     }
   }
+  const finalMsg = lastError instanceof Error ? lastError.message : String(lastError)
   console.warn(`[Webhook] ${webhook.kind} ${webhook.label || webhook.id} failed after ${RETRY_COUNT} retries:`, lastError)
+  throw new Error(finalMsg || `发送失败（已重试 ${RETRY_COUNT} 次）`)
 }
 
 function buildTelegramUrl(webhook: WebhookEntry): string {
@@ -310,8 +357,8 @@ function buildWebhookBody(webhook: WebhookEntry, payload: WebhookMessage): unkno
       }
     case 'custom':
     default: {
-      if (webhook.customTemplate) {
-        // 简易模板替换
+      if (webhook.customTemplate?.trim()) {
+        // 简易模板替换；失败直接抛错，避免静默回退成对方不认识的字段
         try {
           const tpl = webhook.customTemplate
             .replace(/\{\{title\}\}/g, escapeJsonString(payload.title))
@@ -319,8 +366,9 @@ function buildWebhookBody(webhook: WebhookEntry, payload: WebhookMessage): unkno
             .replace(/\{\{level\}\}/g, payload.level)
             .replace(/\{\{icon\}\}/g, icon)
           return JSON.parse(tpl)
-        } catch {
-          // 模板解析失败：退回简单 JSON
+        } catch (err) {
+          const detail = err instanceof Error ? err.message : String(err)
+          throw new Error(`自定义 JSON 模板无效: ${detail}`)
         }
       }
       return {
