@@ -319,6 +319,35 @@ export const AccountCard = memo(function AccountCard({
     }
   }
 
+  // 打开账号订阅门户（无痕浏览器）
+  const [isOpeningPortal, setIsOpeningPortal] = useState(false)
+  const handleOpenPortal = async (e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation()
+    if (isOpeningPortal || !account.credentials?.accessToken) return
+    setIsOpeningPortal(true)
+    try {
+      const result = await window.api.accountGetSubscriptionUrl(
+        account.credentials.accessToken,
+        undefined,
+        account.credentials?.region,
+        account.profileArn,
+        account.machineId,
+        account.credentials?.provider || account.idp,
+        account.credentials?.authMethod,
+        account.id
+      )
+      if (result.success && result.url) {
+        await window.api.openSubscriptionWindow(result.url)
+      } else {
+        alert(result.error || (isEn ? 'Failed to open portal' : '打开门户失败'))
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : (isEn ? 'Failed to open portal' : '打开门户失败'))
+    } finally {
+      setIsOpeningPortal(false)
+    }
+  }
+
   const handleDelete = (): void => {
     if (confirm(isEn ? `Delete account ${getDisplayName(account)}?` : `确定要删除账号 ${getDisplayName(account)} 吗？`)) {
       removeAccount(account.id)
@@ -359,6 +388,9 @@ export const AccountCard = memo(function AccountCard({
   // percentUsed 是 0~1 的小数（如 0.85 = 85%），超 1 表示 >100%
   const isHighUsage = account.usage.percentUsed > 0.8
   const isCritical = account.usage.percentUsed > 1
+  // 超额开关：纯本地缓存字段，不调接口
+  const overageEnabled = account.usage.resourceDetail?.overageEnabled === true
+  const overageCapable = account.subscription.overageCapability === 'OVERAGE_CAPABLE'
 
   // 检测账号是否被封禁/暂停（多种错误格式）
   const lowerError = account.lastError?.toLowerCase()
@@ -654,6 +686,34 @@ export const AccountCard = memo(function AccountCard({
                 <span className="ml-0.5">{boundProxy.host.length > 15 ? boundProxy.host.slice(0, 12) + '…' : boundProxy.host}</span>
               </Badge>
             )}
+            {/* 用量已超额（本地 percentUsed > 1，不调接口） */}
+            {isCritical && (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-5 px-1.5 font-medium border-red-500/40 text-red-600 dark:text-red-400 bg-red-500/10"
+                title={isEn ? 'Usage exceeds plan quota (local cache)' : '用量已超过套餐额度（本地缓存）'}
+              >
+                {isEn ? 'Over Quota' : '已超额'}
+              </Badge>
+            )}
+            {/* 超额开关状态（本地 overageEnabled，不调接口） */}
+            {overageEnabled ? (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-5 px-1.5 font-medium border-violet-500/40 text-violet-700 dark:text-violet-300 bg-violet-500/10"
+                title={isEn ? 'Overage billing enabled (local cache)' : '超额计费已开启（本地缓存）'}
+              >
+                {isEn ? 'Overage On' : '超额开'}
+              </Badge>
+            ) : overageCapable ? (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-5 px-1.5 font-normal border-muted-foreground/30 text-muted-foreground bg-muted/30"
+                title={isEn ? 'Overage capable but disabled (local cache)' : '具备超额能力但未开启（本地缓存）'}
+              >
+                {isEn ? 'Overage Off' : '超额关'}
+              </Badge>
+            ) : null}
             {account.isActive && (
               <Badge variant="default" className="ml-auto h-5 bg-success text-white border-0 hover:bg-success/90">
                 {isEn ? 'Active' : '当前使用'}
@@ -851,7 +911,17 @@ export const AccountCard = memo(function AccountCard({
                <Button size="icon" variant="ghost" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={(e) => { e.stopPropagation(); handleRefreshToken() }} disabled={isRefreshingToken} title={isEn ? 'Refresh Token' : '刷新 Token（仅刷新访问令牌）'}>
                   <KeyRound className={cn("h-3.5 w-3.5", isRefreshingToken && "animate-pulse")} />
                </Button>
-               
+               <Button
+                 size="icon"
+                 variant="ghost"
+                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                 onClick={handleOpenPortal}
+                 disabled={isOpeningPortal || !account.credentials?.accessToken}
+                 title={isEn ? 'Open subscription portal (incognito)' : '打开订阅门户（无痕）'}
+               >
+                  {isOpeningPortal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+               </Button>
+
                <Button size="icon" variant="ghost" className={cn("h-7 w-7 text-muted-foreground hover:text-foreground", copied && "text-success")} onClick={(e) => { e.stopPropagation(); handleCopyCredentials() }} title={isEn ? 'Copy credentials' : '复制凭证'}>
                   {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                </Button>

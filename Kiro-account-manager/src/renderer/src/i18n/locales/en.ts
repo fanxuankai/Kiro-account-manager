@@ -54,7 +54,6 @@ const en = {
     configSync: 'Config Sync',
     register: 'Register',
     subscription: 'Subscription',
-    creditCards: 'Credit Cards',
     logs: 'Logs',
     settings: 'Settings',
     about: 'About'
