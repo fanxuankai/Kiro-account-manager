@@ -15,9 +15,12 @@ import { randomEmailPrefix } from './names'
  * 认证：单一请求头 x-admin-auth: <ADMIN_PASSWORDS[0]>（明文比对，见 worker/src/utils.ts checkIsAdmin）。
  *
  * 关键端点（GET，均带 x-admin-auth）：
- *  - GET /health_check                              -> "OK"
  *  - GET /admin/mails?address=&limit=&offset=        -> {results:[{id,source,address,raw,created_at}], count}
  *  - GET /admin/address?limit=&offset=               -> 地址列表（诊断用）
+ *
+ * 注：worker 还提供 GET /health_check -> "OK"，但 worker 一旦绑了 [assets]，
+ * 该路径会被静态资源中间件拦截返回 index.html（上游 API_PATHS 白名单不含它），
+ * 不可靠，本服务不用它探活——改用 /admin/mails 一步完成探活 + 密码校验。
  *
  * raw 字段是完整 MIME 源文（含 headers + body），提码时从 Subject 头 + text/html 正文提取。
  */
@@ -81,6 +84,13 @@ async function fetchAdminMails(
   }
   if (!resp.ok) {
     throw new Error(`HTTP ${resp.status}`)
+  }
+  // 200 但返回的是 HTML（SPA 的 index.html）：填错成纯前端 Pages 地址了。
+  // Pages 没有 /admin/* 后端，会走 SPA fallback 吐回 index.html。不能交给
+  // resp.json() —— 它会 catch 成 {}，调用方误判成"密码对、空收件箱"。
+  const ctype = (resp.headers.get('content-type') || '').toLowerCase()
+  if (ctype.includes('text/html')) {
+    throw new Error('该地址返回的是前端页面而非 worker（请确认填的是 worker 地址，不是 Pages 地址）')
   }
   const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>
   return (data.results as Array<Record<string, unknown>>) || []
@@ -483,17 +493,23 @@ export class CfMailService {
  * 全程只打 worker 的 admin API（x-admin-auth），**不创建 Registrar、不碰 AWS 注册接口**。
  *
  * 流程：
- *  1. health_check 探活（确认是 worker 而非前端 Pages）
- *  2. GET /admin/mails 校验 admin 密码（401 立即报错）
- *  3. 与真实注册 create() 同路径：随机选域名 + 拼 prefix@domain（靠 catch-all，不 POST 建地址）
- *  4. 返回地址 —— 用户从外部邮箱（Gmail/QQ 等）手动发一封带验证码的邮件到该地址
+ *  1. GET /admin/mails?address=<测试址> 一次完成三件事：
+ *     - 探活（200 = worker 在）
+ *     - 密码校验（401 立即报错）
+ *     - Pages 误填识别（200 但 content-type 是 text/html = 填错成纯前端 Pages 地址）
+ *  2. 与真实注册 create() 同路径：随机选域名 + 拼 prefix@domain（靠 catch-all，不 POST 建地址）
+ *  3. 返回地址 —— 用户从外部邮箱（Gmail/QQ 等）手动发一封带验证码的邮件到该地址
+ *
+ * 为什么不用 /health_check 探活：worker 一旦绑了 [assets]，/health_check 会被
+ * 静态资源中间件拦截返回 index.html（上游 API_PATHS 白名单不含 /health_check），
+ * 误判成"填错 Pages"。直接打带密码的 /admin/mails 更准，还顺带校验了密码。
  *
  * 为什么不 POST /admin/new_address：
  *  真实注册靠域名 catch-all，地址无需预先创建；若测试走"显式建地址"，
  *  未配 catch-all 的域名仍可能测试通过，给虚假信心。对齐生产路径更可信。
  *
  * 为什么不自发自收：CF 的 send_email 发到自己域名会被循环检测丢弃，
- * 所以测试必须用外部邮箱发件，这才与真实注册（AWS 发 OTP）通路一致。
+ *  所以测试必须用外部邮箱发件，这才与真实注册（AWS 发 OTP）通路一致。
  */
 export async function createCfTestAddress(cfg: CfMailTestConfig): Promise<CfCreateAddressResult> {
   const baseURL = CfMailService.normalizeBaseURL(cfg.baseURL)
@@ -509,19 +525,7 @@ export async function createCfTestAddress(cfg: CfMailTestConfig): Promise<CfCrea
   // 与真实注册 create() 一致：多域名时随机挑一个
   const domain = domains[Math.floor(Math.random() * domains.length)]
 
-  // 1. 探活
-  try {
-    const r = await proxyFetch(`${baseURL}/health_check`, { method: 'GET', signal: AbortSignal.timeout(10000) })
-    const body = (await r.text()).trim()
-    if (!r.ok || body.toLowerCase().includes('<!doctype') || body.toLowerCase().includes('<html')) {
-      return { ok: false, error: '该地址返回的是前端页面而非 worker（请确认填的是 worker 地址，不是 Pages 地址）' }
-    }
-  } catch (e) {
-    return { ok: false, error: `后端不可达: ${e instanceof Error ? e.message : String(e)}` }
-  }
-
-  // 2. 与真实注册同路径：只拼地址，靠 catch-all 收信（不 POST 建地址）
-  //    顺手用 GET /admin/mails 校验 admin 密码，避免密码错了却生成地址、后续查码才暴露
+  // 1. 一次请求完成：探活 + 密码校验 + Pages 误填识别（fetchAdminMails 内部三者都判）
   const localPart = `kiro-cftest-${Math.random().toString(36).slice(2, 8)}`
   const address = `${localPart}@${domain}`
   try {
