@@ -47,3 +47,6 @@ docs/mail.chatgpt.org.uk/
 
 # 编辑器/工具本地目录
 .zcode/
+
+# macOS 系统文件
+.DS_Store
