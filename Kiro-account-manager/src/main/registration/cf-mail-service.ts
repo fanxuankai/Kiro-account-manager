@@ -1,5 +1,23 @@
 import { proxyFetch, abortableSleep, extractCode } from './email-service'
-import { randomEmailPrefix } from './names'
+
+/**
+ * CF 邮箱专用前缀生成器：字母段 + 数字段（如 kqmzxawer748）。
+ *
+ * 不复用 names.ts 的 randomEmailPrefix()——后者模拟真人英文名，对 CF catch-all
+ * 这种纯收件场景太"重"；这里只要唯一性，简单字母+数字即可，短且零重复风险。
+ *
+ * 字母段 6 位 + 数字段 4 位 ≈ 26^6 * 10^4 ≈ 3089 亿种组合。
+ * 之所以比"够用"更长：CF catch-all 下前缀重复 = 两个账号共用收件箱，
+ * waitForCode 会取到对方验证码导致注册错乱（非地址冲突报错）。
+ * 按生日攻击算：1 万账号碰撞率约 0.0001%，5 万账号约 0.004%。
+ */
+function randomCfPrefix(): string {
+  let letters = ''
+  for (let i = 0; i < 6; i++) letters += String.fromCharCode(97 + Math.floor(Math.random() * 26))
+  let digits = ''
+  for (let i = 0; i < 4; i++) digits += Math.floor(Math.random() * 10)
+  return `${letters}${digits}`
+}
 
 /**
  * CF 自建邮箱取码源（dreamhunter2333/cloudflare_temp_email）—— admin 模式。
@@ -32,7 +50,7 @@ export interface CfMailServiceOptions {
   adminPassword: string
   /** 必填：CF Email Routing 已配 catch-all 的域名（多个用空格/逗号分隔，每次随机挑一个降低关联） */
   domain: string
-  /** 可选：固定前缀，留空则 randomEmailPrefix() 生成 */
+  /** 可选：固定前缀，留空则 randomCfPrefix() 生成（字母段+数字段，如 kqmzxawer748） */
   prefix?: string
   /** 可选：日志回调（注册流程传入，与其它取码源保持一致的日志风格） */
   log?: (msg: string) => void
@@ -146,7 +164,7 @@ export class CfMailService {
   /** admin 模式：地址无需"创建"，catch-all 下任意 prefix@domain 都能收。这里只是拼一个地址。 */
   async create(): Promise<string> {
     const domain = this.domains[Math.floor(Math.random() * this.domains.length)]
-    const prefix = this.fixedPrefix || randomEmailPrefix()
+    const prefix = this.fixedPrefix || randomCfPrefix()
     this.address = `${prefix}@${domain}`
     if (this.domains.length > 1) {
       this.log(`[CfMail] 使用邮箱: ${this.address}  (域名池 ${this.domains.length} 个)`)
