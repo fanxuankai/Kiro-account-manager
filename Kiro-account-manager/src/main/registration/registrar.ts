@@ -268,7 +268,9 @@ export class Registrar {
         || process.env.HTTP_PROXY || process.env.http_proxy
         || getSystemProxy() || undefined)
     return {
-      tlsClientIdentifier: 'chrome_146' as const,
+      // chrome_146 / 146_PSK 的 tls-client 指纹已被 AWS WAF 拦截（提交邮箱返回 202 空 body，2026-08 实测）
+      // chrome_144 指纹目前可用；若再次出现批量 202，优先换此标识验证
+      tlsClientIdentifier: 'chrome_144' as const,
       // 25s：AWS 注册 API 正常响应 1-5s，慢住宅代理 10-15s；超过基本是挂起。
       // 配合 sendRequest 的 3 次重试，单步最坏 ~75s（旧值 60s 会到 ~180s，是批量卡 1-5 分钟主因）
       timeoutSeconds: 25,
