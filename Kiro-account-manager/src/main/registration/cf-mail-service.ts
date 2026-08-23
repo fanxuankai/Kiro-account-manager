@@ -1,22 +1,24 @@
 import { proxyFetch, abortableSleep, extractCode } from './email-service'
 
 /**
- * CF 邮箱专用前缀生成器：字母段 + 数字段（如 kqmzxawer748）。
+ * CF 邮箱专用前缀生成器：12 位 base36 混排（a-z0-9 随机混排，如 x7k2mq9p4r8t）。
  *
  * 不复用 names.ts 的 randomEmailPrefix()——后者模拟真人英文名，对 CF catch-all
- * 这种纯收件场景太"重"；这里只要唯一性，简单字母+数字即可，短且零重复风险。
+ * 这种纯收件场景太"重"；这里只要唯一性。
  *
- * 字母段 6 位 + 数字段 4 位 ≈ 26^6 * 10^4 ≈ 3089 亿种组合。
- * 之所以比"够用"更长：CF catch-all 下前缀重复 = 两个账号共用收件箱，
+ * 36^12 ≈ 4.7e18 组合。之所以留足余量：CF catch-all 下前缀重复 = 两个账号共用收件箱，
  * waitForCode 会取到对方验证码导致注册错乱（非地址冲突报错）。
- * 按生日攻击算：1 万账号碰撞率约 0.0001%，5 万账号约 0.004%。
+ * 10 万账号生日碰撞率约百万分之一，且 create() 查收件箱兜底（撞了自动换）。
+ * 注：不先造 UUID 再编码——编码转换不改变随机熵（唯一性只由位数决定），
+ * 12 位 base36 无论来源如何防碰撞能力相同，直接生成即最优。
  */
 function randomCfPrefix(): string {
-  let letters = ''
-  for (let i = 0; i < 6; i++) letters += String.fromCharCode(97 + Math.floor(Math.random() * 26))
-  let digits = ''
-  for (let i = 0; i < 4; i++) digits += Math.floor(Math.random() * 10)
-  return `${letters}${digits}`
+  let s = ''
+  for (let i = 0; i < 12; i++) {
+    const j = Math.floor(Math.random() * 36)
+    s += j < 26 ? String.fromCharCode(97 + j) : String(j - 26)
+  }
+  return s
 }
 
 /**
@@ -50,7 +52,7 @@ export interface CfMailServiceOptions {
   adminPassword: string
   /** 必填：CF Email Routing 已配 catch-all 的域名（多个用空格/逗号分隔，每次随机挑一个降低关联） */
   domain: string
-  /** 可选：固定前缀，留空则 randomCfPrefix() 生成（字母段+数字段，如 kqmzxawer748） */
+  /** 可选：固定前缀，留空则 randomCfPrefix() 生成（12 位 base36 混排，如 x7k2mq9p4r8t） */
   prefix?: string
   /** 可选：日志回调（注册流程传入，与其它取码源保持一致的日志风格） */
   log?: (msg: string) => void
@@ -161,11 +163,32 @@ export class CfMailService {
     this.log = opts.log || ((m: string) => console.log(m))
   }
 
-  /** admin 模式：地址无需"创建"，catch-all 下任意 prefix@domain 都能收。这里只是拼一个地址。 */
+  /** admin 模式：地址无需"创建"，catch-all 下任意 prefix@domain 都能收。这里拼地址并查重。 */
   async create(): Promise<string> {
-    const domain = this.domains[Math.floor(Math.random() * this.domains.length)]
-    const prefix = this.fixedPrefix || randomCfPrefix()
-    this.address = `${prefix}@${domain}`
+    const maxAttempts = 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const domain = this.domains[Math.floor(Math.random() * this.domains.length)]
+      const prefix = this.fixedPrefix || randomCfPrefix()
+      this.address = `${prefix}@${domain}`
+
+      // 固定前缀由用户指定，语义就是"每次同一个"，跳过查重
+      if (this.fixedPrefix) break
+
+      // 随机前缀查重：地址收件箱非空 = 用过（注册过必收到 AWS OTP 邮件）。
+      // catch-all 下撞号 = 两个账号共用收件箱，waitForCode 会取错验证码。
+      // 查重失败（网络类）不阻断——前缀随机空间 4.7e18，碰撞本身趋近 0。
+      try {
+        const existing = await fetchAdminMails(this.baseURL, this.adminPassword, this.address, 1)
+        if (existing.length === 0) break
+        this.log(`[CfMail] ${this.address} 已有历史邮件（地址用过），重新生成 (${attempt}/${maxAttempts})`)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // 配置类错误（密码错 / 填错 Pages 地址）直接抛，不要拖到 waitForCode 才暴露
+        if (msg.includes('admin 密码错误') || msg.includes('Pages')) throw err
+        this.log(`[CfMail] 地址查重失败：${msg}，直接使用随机地址`)
+        break
+      }
+    }
     if (this.domains.length > 1) {
       this.log(`[CfMail] 使用邮箱: ${this.address}  (域名池 ${this.domains.length} 个)`)
     } else {
