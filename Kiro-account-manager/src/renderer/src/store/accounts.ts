@@ -1018,6 +1018,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       )
     }
 
+    // 来源筛选：source 为空的旧账号归入 'other'
+    if (filter.sources?.length) {
+      result = result.filter((a) => filter.sources!.includes(a.source || 'other'))
+    }
+
     // 封禁筛选
     if (filter.bannedOnly) {
       result = result.filter((a) => isBannedAccountError(a.lastError))

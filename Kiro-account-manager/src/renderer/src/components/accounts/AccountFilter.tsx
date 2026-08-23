@@ -87,6 +87,16 @@ export function AccountFilterPanel(): React.ReactNode {
     return top
   }, [domainCounts, showAllDomains, filter.emailDomains])
 
+  // 来源计数：registered=本应用注册产生；other=手动/导入（source 为空）
+  const sourceCounts = useMemo(() => {
+    let registered = 0, other = 0
+    for (const account of accounts.values()) {
+      if (account.source === 'registered') registered++
+      else other++
+    }
+    return { registered, other }
+  }, [accounts])
+
   const hasActiveFilters = Boolean(
     filter.subscriptionTypes?.length ||
     filter.statuses?.length ||
@@ -94,6 +104,7 @@ export function AccountFilterPanel(): React.ReactNode {
     filter.groupIds?.length ||
     filter.tagIds?.length ||
     filter.emailDomains?.length ||
+    filter.sources?.length ||
     filter.usageMin !== undefined ||
     filter.usageMax !== undefined ||
     filter.daysRemainingMin !== undefined ||
@@ -202,6 +213,35 @@ export function AccountFilterPanel(): React.ReactNode {
                   onClick={() => setFilter({ ...filter, bannedOnly: !filter.bannedOnly })}
                 >
                   {isEn ? 'Banned' : '已封禁'}({stats.bannedCount})
+                </button>
+              </div>
+            </div>
+
+            {/* 来源 */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground shrink-0">{isEn ? 'Source:' : '来源:'}</span>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  className={cn(
+                    'px-2 py-0.5 text-xs rounded border transition-colors',
+                    filter.sources?.includes('registered')
+                      ? 'bg-emerald-500 text-white border-emerald-500'
+                      : 'hover:bg-muted/50 text-emerald-600 border-emerald-200'
+                  )}
+                  onClick={() => toggleArrayFilter('sources', 'registered')}
+                >
+                  {isEn ? 'Registered' : '注册'}({sourceCounts.registered})
+                </button>
+                <button
+                  className={cn(
+                    'px-2 py-0.5 text-xs rounded border transition-colors',
+                    filter.sources?.includes('other')
+                      ? 'bg-slate-500 text-white border-slate-500'
+                      : 'hover:bg-muted/50 text-slate-500 border-slate-300'
+                  )}
+                  onClick={() => toggleArrayFilter('sources', 'other')}
+                >
+                  {isEn ? 'Imported/Manual' : '导入·手动'}({sourceCounts.other})
                 </button>
               </div>
             </div>

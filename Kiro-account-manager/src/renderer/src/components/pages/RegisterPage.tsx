@@ -208,6 +208,19 @@ interface FingerprintSnapshot {
   exitIP?: string
 }
 
+/** 注册导入时自动附加的来源元数据：source/regMeta（供大规模账号筛选与封控追溯） */
+const regMetaFrom = (r: { fingerprint?: FingerprintSnapshot }): {
+  source: string
+  regMeta: { registeredAt: number; exitIP?: string; tlsProfile?: string }
+} => ({
+  source: 'registered',
+  regMeta: {
+    registeredAt: Date.now(),
+    exitIP: r.fingerprint?.exitIP,
+    tlsProfile: r.fingerprint?.chromeVer ? `Chrome/${r.fingerprint.chromeVer.split('.')[0]}` : undefined
+  }
+})
+
 interface RegResult {
   status: 'success' | 'failed'
   email: string
@@ -1154,6 +1167,7 @@ export function RegisterPage(): React.JSX.Element {
           email: verifyResult.data.email || result.email,
           idp: 'BuilderId',
           status: 'active',
+          ...regMetaFrom(result),
           credentials: {
             refreshToken: result.refreshToken,
             clientId: result.clientId!,
@@ -1181,6 +1195,7 @@ export function RegisterPage(): React.JSX.Element {
           email: result.email,
           idp: 'BuilderId',
           status: 'active',
+          ...regMetaFrom(result),
           credentials: {
             refreshToken: result.refreshToken,
             clientId: result.clientId!,
@@ -1603,6 +1618,7 @@ export function RegisterPage(): React.JSX.Element {
         password: regResult.password,
         idp: 'BuilderId',
         status: 'active',
+        ...regMetaFrom(regResult),
         credentials: {
           refreshToken: regResult.refreshToken,
           clientId: regResult.clientId,
@@ -1642,6 +1658,7 @@ export function RegisterPage(): React.JSX.Element {
           : defaultUsage
         addAccount({
           email: verifyResult.data.email || regResult.email, password: regResult.password, idp: 'BuilderId', status: 'active',
+          ...regMetaFrom(regResult),
           credentials: { refreshToken: regResult.refreshToken, clientId: regResult.clientId, clientSecret: regResult.clientSecret, accessToken: verifyResult.data.accessToken || regResult.accessToken || '', csrfToken: '', region: regResult.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt },
           subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
           usage, tags: [], lastUsedAt: now
@@ -1649,6 +1666,7 @@ export function RegisterPage(): React.JSX.Element {
       } else {
         addAccount({
           email: regResult.email, password: regResult.password, idp: 'BuilderId', status: 'active',
+          ...regMetaFrom(regResult),
           credentials: { refreshToken: regResult.refreshToken, clientId: regResult.clientId, clientSecret: regResult.clientSecret, accessToken: regResult.accessToken || '', csrfToken: '', region: regResult.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt: now + 3600000 },
           subscription: { type: 'Free', title: 'Free Tier' }, usage: defaultUsage, tags: [], lastUsedAt: now
         })
@@ -2328,6 +2346,7 @@ export function RegisterPage(): React.JSX.Element {
         addAccount({
           email: verifyResult.data.email || r.email,
           idp: 'BuilderId', status: 'active',
+          ...regMetaFrom(r),
           credentials: { refreshToken: r.refreshToken!, clientId: r.clientId!, clientSecret: r.clientSecret!, accessToken: verifyResult.data.accessToken || r.accessToken || '', csrfToken: '', region: r.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt },
           subscription: { type: (verifyResult.data.subscriptionType as 'Free' | 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Enterprise' | 'Teams') || 'Free', title: verifyResult.data.subscriptionTitle || 'Free Tier' },
           usage, tags: [], lastUsedAt: now
@@ -2335,6 +2354,7 @@ export function RegisterPage(): React.JSX.Element {
       } else {
         addAccount({
           email: r.email, idp: 'BuilderId', status: 'active',
+          ...regMetaFrom(r),
           credentials: { refreshToken: r.refreshToken!, clientId: r.clientId!, clientSecret: r.clientSecret!, accessToken: r.accessToken || '', csrfToken: '', region: r.region || 'us-east-1', authMethod: 'IdC' as const, provider: 'BuilderId' as const, expiresAt: now + 3600000 },
           subscription: { type: 'Free', title: 'Free Tier' }, usage: defaultUsage, tags: [], lastUsedAt: now
         })

@@ -8,6 +8,7 @@ import { encode, decode } from 'cbor-x'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Dispatcher } from 'undici'
 import icon from '../../resources/icon.png?asset'
 import { ProxyServer, configureProxyClients, type ProxyAccount, type ProxyConfig, type ProxyClientTarget, type ProxyClientModel } from './proxy'
+import { getAccountData, saveAccountData } from './accountDb'
 import { 
   initKProxyService, 
   getKProxyService, 
@@ -453,7 +454,7 @@ function initProxyServer(): ProxyServer {
       onPoolEmpty: async () => {
         await initStore()
         if (!store) return
-        const accountData = store.get('accountData') as {
+        const accountData = getAccountData() as {
           accounts?: Record<string, any>
           accountProxyBindings?: Record<string, string>
           proxyPool?: Record<string, { url?: string; enabled?: boolean; status?: string }>
@@ -1422,6 +1423,7 @@ async function initStore(): Promise<void> {
   store = storeInstance as unknown as typeof store
   
   // 尝试从备份恢复数据（如果主数据损坏）。备份优先读加密 .enc，兼容旧明文 .json
+  let legacyForDb: unknown = null
   try {
     const mainData = storeInstance.get('accountData')
 
@@ -1432,14 +1434,26 @@ async function initStore(): Promise<void> {
         if (backupData && backupData.accounts) {
           console.log('[Store] Restoring data from backup...')
           storeInstance.set('accountData', backupData)
+          legacyForDb = backupData
           console.log('[Store] Data restored from backup successfully')
         }
       } catch {
         // 备份也不存在，忽略
       }
+    } else {
+      legacyForDb = mainData
     }
   } catch (error) {
     console.error('[Store] Error checking backup:', error)
+  }
+
+  // 初始化 SQLite 账号库：首次运行自动把旧 JSON accountData 迁入（旧 JSON 保留作回退保险）
+  try {
+    const { app } = await import('electron')
+    const { initAccountDb } = await import('./accountDb')
+    initAccountDb(app.getPath('userData'), legacyForDb)
+  } catch (error) {
+    console.error('[AccountDb] init failed:', error)
   }
 
   // 一次性迁移：清理 BuilderId 占位符 profileArn 等脏数据
@@ -1517,7 +1531,7 @@ async function syncIdeTokenChangeToStore(token: {
       return
     }
   }
-  const accountData = store?.get('accountData') as
+  const accountData = getAccountData() as
     | { accounts?: Record<string, { id?: string; email?: string; credentials?: { accessToken?: string; refreshToken?: string; expiresAt?: number } }> }
     | null
     | undefined
@@ -1583,7 +1597,7 @@ async function syncIdeTokenChangeToStore(token: {
     expiresAt: Date.parse(token.expiresAt) || Date.now() + 3600 * 1000
   }
 
-  store!.set('accountData', accountData)
+  saveAccountData(accountData)
   console.log(
     `[KiroAuthSync] Synced IDE-refreshed token back to account ${accountToUpdate.email || matchedId} (${matchedReason})`
   )
@@ -1649,7 +1663,7 @@ async function runProactiveRenewal(accountId: string): Promise<void> {
       return
     }
   }
-  const accountData = store?.get('accountData') as
+  const accountData = getAccountData() as
     | { accounts?: Record<string, { id?: string; email?: string; profileArn?: string; proxyUrl?: string; credentials?: { refreshToken?: string; clientId?: string; clientSecret?: string; region?: string; authMethod?: string; startUrl?: string; provider?: string; accessToken?: string; expiresAt?: number } }> }
     | null
     | undefined
@@ -1727,7 +1741,7 @@ async function runProactiveRenewal(accountId: string): Promise<void> {
       refreshToken: newRefresh,
       expiresAt: newExpiresAt
     }
-    store.set('accountData', accountData)
+    saveAccountData(accountData)
   }
 
   // 3. 通知 renderer reload
@@ -1759,7 +1773,7 @@ function migrateAccountDataIfNeeded(): void {
   const MIGRATION_KEY = 'accountDataMigration'
   const FLAG = 'builderIdArn'
   const migrationState = (store.get(MIGRATION_KEY, {}) as Record<string, number>) || {}
-  const accountData = store.get('accountData') as
+  const accountData = getAccountData() as
     | { accounts?: Record<string, { id?: string; provider?: string; profileArn?: string; email?: string }> }
     | null
     | undefined
@@ -1921,7 +1935,7 @@ async function runMainPoolTokenRefreshTick(): Promise<void> {
   try {
     if (!store) { await initStore() }
     if (!store) return
-    const data = store.get('accountData') as {
+    const data = getAccountData() as {
       accounts?: Record<string, {
         id?: string
         email?: string
@@ -2208,7 +2222,7 @@ function createWindow(): void {
         
         // 自启动时同步账号到代理池（含重试机制应对冷启动数据延迟）
         const syncAccountsToPool = (): number => {
-          const accountData = store!.get('accountData') as {
+          const accountData = getAccountData() as {
             accounts?: Record<string, any>
             accountProxyBindings?: Record<string, string>
             proxyPool?: Record<string, { url?: string; enabled?: boolean; status?: string }>
@@ -2343,7 +2357,7 @@ function createWindow(): void {
     if (lastSavedData && store) {
       try {
         console.log('[Window] Saving data before close...')
-        store.set('accountData', lastSavedData)
+        saveAccountData(lastSavedData as Record<string, unknown>)
         // 备份异步进行，不阻塞关闭
         createBackup(lastSavedData).then(() => {
           console.log('[Window] Backup created')
@@ -2946,7 +2960,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('load-accounts', async () => {
     try {
       await initStore()
-      return store!.get('accountData', null)
+      return getAccountData()
     } catch (error) {
       console.error('Failed to load accounts:', error)
       return null
@@ -2957,7 +2971,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('save-accounts', async (_event, data) => {
     try {
       await initStore()
-      store!.set('accountData', data)
+      saveAccountData(data as Record<string, unknown>)
       
       // 保存最后的数据（用于崩溃恢复）
       lastSavedData = data
@@ -3118,7 +3132,7 @@ app.whenReady().then(async () => {
       if (proactiveRenewalEnabled) {
         // 启用时：若当前已有 IDE 激活账号，立刻 schedule
         if (lastSwitchedAccountId) {
-          const accountData = store?.get('accountData') as
+          const accountData = getAccountData() as
             | { accounts?: Record<string, { credentials?: { expiresAt?: number } }> }
             | null
             | undefined
@@ -5697,7 +5711,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-kiro-available-models', async () => {
     try {
       if (!store) return { models: [] }
-      const accountData = store.get('accountData') as { accounts?: Record<string, any> } | undefined
+      const accountData = getAccountData() as { accounts?: Record<string, any> } | undefined
       if (!accountData?.accounts) return { models: [] }
 
       // 优先使用当前激活账号（isActive），其次使用第一个 active 且有 accessToken 的账号
@@ -6652,7 +6666,7 @@ app.whenReady().then(async () => {
       }
       // 持久化清除 lastError
       if (store) {
-        const accountData = store.get('accountData') as { accounts?: Record<string, Record<string, unknown>> } | undefined
+        const accountData = getAccountData() as { accounts?: Record<string, Record<string, unknown>> } | undefined
         if (accountData?.accounts?.[accountId]) {
           const acc = accountData.accounts[accountId]
           accountData.accounts[accountId] = {
@@ -6661,7 +6675,7 @@ app.whenReady().then(async () => {
             lastError: undefined,
             lastCheckedAt: Date.now()
           }
-          store.set('accountData', accountData)
+          saveAccountData(accountData)
           lastSavedData = accountData
         }
       }
@@ -7322,7 +7336,7 @@ app.on('will-quit', async (event) => {
       console.log('[Exit] Saving data before quit...')
       // 刷新待写入的防抖数据
       flushStoreWrites()
-      store.set('accountData', lastSavedData)
+      saveAccountData(lastSavedData as Record<string, unknown>)
       // 退出场景跳过节流，确保备份立即落盘
       await createBackup(lastSavedData)
       await flushBackupNow()
@@ -7339,6 +7353,13 @@ app.on('will-quit', async (event) => {
         await shutdownTlsClientPool()
       } catch (err) {
         console.error('[Exit] Failed to shutdown TLS client pool:', err)
+      }
+      // 关闭 SQLite 账号库（WAL checkpoint）
+      try {
+        const { closeAccountDb } = await import('./accountDb')
+        closeAccountDb()
+      } catch (err) {
+        console.error('[Exit] Failed to close account db:', err)
       }
       console.log('[Exit] Data saved successfully')
     } catch (error) {
