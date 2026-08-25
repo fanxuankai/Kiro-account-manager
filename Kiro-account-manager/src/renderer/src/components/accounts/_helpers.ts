@@ -164,6 +164,18 @@ export function formatTokenExpiry(expiresAt: number, isEn: boolean): string {
   }
 }
 
+// ============ 来源标签 ============
+
+// 来源字段显示文本：registered=本应用注册 / import=导入 / manual=手动 / 空=未标记
+export function getSourceLabel(source: string | undefined, isEn: boolean): string {
+  switch (source) {
+    case 'registered': return isEn ? 'Registered' : '注册'
+    case 'import': return isEn ? 'Imported' : '导入'
+    case 'manual': return isEn ? 'Manual' : '手动'
+    default: return isEn ? 'Unmarked' : '未标记'
+  }
+}
+
 // ============ 封禁错误识别 ============
 
 export function isBannedError(error: string | undefined): boolean {

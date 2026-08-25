@@ -120,13 +120,17 @@ export interface Account {
   groupId?: string
   tags: string[] // tag ids
 
-  // 来源元数据（注册时自动写入，大规模账号筛选/封控追溯用）
-  source?: string // 'registered'=本应用注册产生；手动/卡密导入暂不标记
+  // 来源元数据（注册时自动写入，大规模账号筛选/封控追溯用；可在编辑对话框手动修改）
+  source?: string // 'registered'=本应用注册产生；'import'=导入；'manual'=手动添加；空=未标记
   regMeta?: {
     registeredAt?: number // 注册时间
     exitIP?: string // 注册出口 IP（排查同 IP 连坐封控）
     tlsProfile?: string // 注册用的浏览器指纹版本（如 Chrome/142，排查指纹标记）
   }
+
+  // 售出标记（卖号场景：标记已交付买家的账号）
+  sold?: boolean // true=已售
+  soldAt?: number // 售出时间戳
 
   // 状态
   status: AccountStatus
@@ -167,6 +171,7 @@ export interface AccountFilter {
   daysRemainingMin?: number
   daysRemainingMax?: number
   bannedOnly?: boolean // 仅显示封禁账号
+  sold?: boolean // 售出筛选：true=仅已售；false=仅未售；undefined=不过滤
   sources?: string[] // 来源筛选：'registered'=本应用注册产生；'other'=手动/导入（source 为空）
 }
 

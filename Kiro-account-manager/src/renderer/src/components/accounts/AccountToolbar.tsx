@@ -31,7 +31,8 @@ import {
   ArrowRightLeft,
   Zap,
   Activity,
-  KeyRound
+  KeyRound,
+  HandCoins
 } from 'lucide-react'
 
 export type AccountViewMode = 'grid' | 'list'
@@ -83,7 +84,8 @@ export function AccountToolbar({
     proxyPool,
     accountProxyBindings,
     bindAccountsToProxy,
-    unbindAccountFromProxy
+    unbindAccountFromProxy,
+    setAccountsSold
   } = useAccountsStore()
 
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -164,6 +166,15 @@ export function AccountToolbar({
       }
     })
     return { selectedAccounts, tagCounts, total: selectedAccounts.length }
+  }, [selectedIds, accounts])
+
+  // 选中账号的已售数量（全已售 → 批量按钮改为取消标记）
+  const selectedSoldCount = useMemo(() => {
+    let sold = 0
+    for (const id of selectedIds) {
+      if (accounts.get(id)?.sold) sold++
+    }
+    return sold
   }, [selectedIds, accounts])
 
   // 兼容入口：保持现有调用签名
@@ -293,6 +304,12 @@ export function AccountToolbar({
     if (confirm(isEn ? `Delete ${selectedCount} selected accounts?` : `确定要删除选中的 ${selectedCount} 个账号吗？`)) {
       removeAccounts(Array.from(selectedIds))
     }
+  }
+
+  // 批量切换已售：选中里还有未售 → 全部标记已售；全已售 → 取消标记
+  const handleBatchToggleSold = (): void => {
+    if (selectedCount === 0) return
+    setAccountsSold(Array.from(selectedIds), selectedSoldCount < selectedCount)
   }
 
   const handleToggleSelectAll = (): void => {
@@ -835,6 +852,22 @@ export function AccountToolbar({
             }
           >
             <Zap className="h-4 w-4" />
+          </Button>
+          {/* 批量标记/取消已售 */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-amber-600/80 hover:text-amber-600 hover:bg-amber-500/10"
+            onClick={handleBatchToggleSold}
+            disabled={selectedCount === 0}
+            title={selectedCount === 0
+              ? (isEn ? 'Toggle sold (select first)' : '标记已售（请先选中账号）')
+              : selectedSoldCount === selectedCount
+                ? (isEn ? `Unsold ${selectedCount} selected accounts` : `取消选中 ${selectedCount} 个账号的已售标记（已全售）`)
+                : (isEn ? `Mark ${selectedCount} selected as sold (${selectedSoldCount} already sold)` : `标记选中 ${selectedCount} 个账号为已售（其中 ${selectedSoldCount} 个已售）`)
+            }
+          >
+            <HandCoins className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"

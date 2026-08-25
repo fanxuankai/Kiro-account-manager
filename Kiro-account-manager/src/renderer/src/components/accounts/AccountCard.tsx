@@ -165,7 +165,8 @@ export const AccountCard = memo(function AccountCard({
     updateAccountStatus,
     accountProxyBindings,
     proxyPool,
-    unbindAccountFromProxy
+    unbindAccountFromProxy,
+    setAccountsSold
   } = useAccountsStore()
 
   // 该账号绑定的代理（如有）
@@ -352,6 +353,12 @@ export const AccountCard = memo(function AccountCard({
     if (confirm(isEn ? `Delete account ${getDisplayName(account)}?` : `确定要删除账号 ${getDisplayName(account)} 吗？`)) {
       removeAccount(account.id)
     }
+  }
+
+  // 已售标记切换（纯本地标记，无需确认）
+  const handleToggleSold = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    setAccountsSold([account.id], !account.sold)
   }
 
   const [copied, setCopied] = useState(false)
@@ -660,6 +667,29 @@ export const AccountCard = memo(function AccountCard({
             <Badge variant="outline" className="text-[10px] h-5 px-2 text-muted-foreground font-normal border-muted-foreground/30 bg-muted/30">
                 {account.idp}
             </Badge>
+            {/* 来源徽章：本应用注册产生（与筛选按钮同色系） */}
+            {account.source === 'registered' && (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-5 px-1.5 font-medium border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
+                title={isEn ? 'Registered by this app' : '本应用注册产生'}
+              >
+                {isEn ? 'Reg' : '注册'}
+              </Badge>
+            )}
+            {/* 已售徽章：点击切换售出标记 */}
+            {account.sold && (
+              <Badge
+                variant="outline"
+                className="text-[10px] h-5 px-1.5 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 cursor-pointer hover:bg-amber-500/20 transition-colors"
+                title={account.soldAt
+                  ? `${isEn ? 'Sold at' : '售出于'} ${new Date(account.soldAt).toLocaleString(isEn ? 'en-US' : 'zh-CN')}\n${isEn ? 'Click to unsold' : '点击取消已售'}`
+                  : (isEn ? 'Click to unsold' : '点击取消已售')}
+                onClick={handleToggleSold}
+              >
+                {isEn ? 'Sold' : '已售'}
+              </Badge>
+            )}
             {/* 代理绑定徽章：可点击解绑 */}
             {boundProxy && (
               <Badge

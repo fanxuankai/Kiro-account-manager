@@ -97,6 +97,15 @@ export function AccountFilterPanel(): React.ReactNode {
     return { registered, other }
   }, [accounts])
 
+  // 售出计数
+  const soldCounts = useMemo(() => {
+    let sold = 0
+    for (const account of accounts.values()) {
+      if (account.sold) sold++
+    }
+    return { sold, unsold: accounts.size - sold }
+  }, [accounts])
+
   const hasActiveFilters = Boolean(
     filter.subscriptionTypes?.length ||
     filter.statuses?.length ||
@@ -105,6 +114,7 @@ export function AccountFilterPanel(): React.ReactNode {
     filter.tagIds?.length ||
     filter.emailDomains?.length ||
     filter.sources?.length ||
+    filter.sold !== undefined ||
     filter.usageMin !== undefined ||
     filter.usageMax !== undefined ||
     filter.daysRemainingMin !== undefined ||
@@ -125,6 +135,11 @@ export function AccountFilterPanel(): React.ReactNode {
       ...filter,
       [key]: newValue.length > 0 ? newValue : undefined
     })
+  }
+
+  // 已售筛选：三态切换（true=仅已售 / false=仅未售 / undefined=不过滤）
+  const toggleSoldFilter = (value: boolean): void => {
+    setFilter({ ...filter, sold: filter.sold === value ? undefined : value })
   }
 
   const setRangeFilter = (
@@ -242,6 +257,35 @@ export function AccountFilterPanel(): React.ReactNode {
                   onClick={() => toggleArrayFilter('sources', 'other')}
                 >
                   {isEn ? 'Imported/Manual' : '导入·手动'}({sourceCounts.other})
+                </button>
+              </div>
+            </div>
+
+            {/* 售出 */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground shrink-0">{isEn ? 'Sold:' : '售出:'}</span>
+              <div className="flex flex-wrap gap-1">
+                <button
+                  className={cn(
+                    'px-2 py-0.5 text-xs rounded border transition-colors',
+                    filter.sold === true
+                      ? 'bg-amber-500 text-white border-amber-500'
+                      : 'hover:bg-muted/50 text-amber-600 border-amber-300'
+                  )}
+                  onClick={() => toggleSoldFilter(true)}
+                >
+                  {isEn ? 'Sold' : '已售'}({soldCounts.sold})
+                </button>
+                <button
+                  className={cn(
+                    'px-2 py-0.5 text-xs rounded border transition-colors',
+                    filter.sold === false
+                      ? 'bg-teal-500 text-white border-teal-500'
+                      : 'hover:bg-muted/50 text-teal-600 border-teal-200'
+                  )}
+                  onClick={() => toggleSoldFilter(false)}
+                >
+                  {isEn ? 'Unsold' : '未售'}({soldCounts.unsold})
                 </button>
               </div>
             </div>
