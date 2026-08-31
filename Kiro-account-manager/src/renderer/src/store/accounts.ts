@@ -631,7 +631,26 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const accounts = new Map(state.accounts)
       const account = accounts.get(id)
       if (account) {
-        accounts.set(id, { ...account, ...updates })
+        let merged = updates
+        // 主进程"检查账号/刷新 token"返回的 subscription 是全新对象，不含本地已查的续费标记；
+        // 订阅类型未变化时自动保留 willRenew/renewalCheckedAt/scheduledToFree，
+        // 避免一次检查就把"检查续费"的结果清空
+        const incoming = updates.subscription
+        if (incoming && account.subscription?.willRenew !== undefined && incoming.willRenew === undefined) {
+          const typeChanged = incoming.type !== undefined && incoming.type !== account.subscription.type
+          if (!typeChanged) {
+            merged = {
+              ...updates,
+              subscription: {
+                ...incoming,
+                willRenew: account.subscription.willRenew,
+                renewalCheckedAt: account.subscription.renewalCheckedAt,
+                scheduledToFree: account.subscription.scheduledToFree
+              }
+            }
+          }
+        }
+        accounts.set(id, { ...account, ...merged })
       }
       return { accounts }
     })

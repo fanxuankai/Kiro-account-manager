@@ -676,6 +676,12 @@ interface KiroApi {
   // 在新窗口打开订阅链接
   openSubscriptionWindow: (url: string) => Promise<{ success: boolean; error?: string }>
 
+  // 自动切订阅到 Free（dryRun=true 只读校验链路，不提交变更）
+  accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean) => Promise<{ success: boolean; error?: string; alreadyFree?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }>
+
+  // 只读检查订阅续费状态（cancelAtPeriodEnd=false 表示下周期会自动续费扣款）
+  accountCheckRenewal: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => Promise<{ success: boolean; error?: string; cancelAtPeriodEnd?: boolean; currentPeriodEnd?: number; planName?: string; subId?: string; isFreePlan?: boolean; scheduledToFree?: boolean; transitionAt?: number; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }>
+
   // 保存代理日志
   proxySaveLogs: (logs: Array<{ time: string; path: string; status: number; tokens?: number }>) => Promise<{ success: boolean; error?: string }>
 

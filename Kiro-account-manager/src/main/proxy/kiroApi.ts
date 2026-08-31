@@ -134,7 +134,8 @@ function getNetworkAgent(account?: ProxyAccount): Dispatcher | undefined {
  * 使用代理的 fetch 函数
  * 传入 account 时会优先使用账号绑定的代理（账号-代理 N:1 分桶）
  */
-async function fetchWithProxy(url: string, options: RequestInit, account?: ProxyAccount): Promise<Response> {
+// 走账号代理发请求（无代理配置时退化为全局 fetch）；stripePortal 等模块共用
+export async function fetchWithProxy(url: string, options: RequestInit, account?: ProxyAccount): Promise<Response> {
   const agent = getNetworkAgent(account)
   if (agent) {
     proxyLogger.debug('KiroAPI', `Using proxy agent: ${agent.constructor.name}`)

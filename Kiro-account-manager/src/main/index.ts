@@ -18,6 +18,7 @@ import {
   type DeviceIdMapping
 } from './kproxy'
 import { fetchKiroModels, fetchSubscriptionToken, fetchAvailableSubscriptions, setUserPreference, setUseKProxyForApiInProxy, setLogStreamEvents, setPayloadSizeLimitKB, setTokenBufferReserve, setEnableTokenBufferReserve, callKiroApi, fetchEnterpriseProfileArn, setProfileArnPersistCallback, setAgentMode } from './proxy/kiroApi'
+import { switchSubscriptionToFree, checkRenewalStatus } from './proxy/stripePortal'
 import {
   writeKiroAuthTokenFile,
   readKiroAuthTokenFile,
@@ -705,6 +706,48 @@ async function refreshOidcToken(
   } catch (error) {
     console.error(`[OIDC] Refresh error:`, error)
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+  }
+}
+
+// 判断错误文本是否为 token 失效（检查续费/切 Free 的过期兜底触发条件）
+function isTokenExpiredError(error?: string): boolean {
+  return /token|expired|expire|401|unauthorized|session/i.test(error || '')
+}
+
+// 用账号库里存的 refreshToken 刷新 accessToken（social 走 Kiro 刷新端点，BuilderId 走 OIDC）
+// 供检查续费/切 Free 在 accessToken 过期时兜底；失败返回 null
+async function refreshAccountAccessToken(accountId: string): Promise<{ accessToken: string; refreshToken?: string; expiresIn?: number } | null> {
+  try {
+    const data = getAccountData() as { accounts?: Record<string, any> } | null
+    const acc = data?.accounts?.[accountId]
+    const cred = acc?.credentials
+    if (!cred?.refreshToken) return null
+    const isSocial = cred.authMethod === 'social' || ['Github', 'Google'].includes(cred.provider)
+    const result = isSocial
+      ? await refreshSocialToken(cred.refreshToken)
+      : await refreshOidcToken(cred.refreshToken, cred.clientId || '', cred.clientSecret || '', cred.region || 'us-east-1')
+    if (!result.success || !result.accessToken) return null
+    const refreshed = { accessToken: result.accessToken, refreshToken: result.refreshToken, expiresIn: result.expiresIn }
+    // refreshToken 是轮换制：刷新成功即作废旧 token，必须立刻落库，
+    // 否则后续调用若失败，新 refreshToken 丢失、账号将失去刷新能力
+    try {
+      const snapshot = JSON.parse(JSON.stringify(data)) as Record<string, unknown>
+      const target = (snapshot.accounts as Record<string, { credentials?: Record<string, unknown> }> | undefined)?.[accountId]
+      if (target?.credentials) {
+        target.credentials = {
+          ...target.credentials,
+          ...refreshed,
+          ...(refreshed.expiresIn ? { expiresAt: Date.now() + refreshed.expiresIn * 1000 } : {})
+        }
+        saveAccountData(snapshot)
+      }
+    } catch (persistErr) {
+      console.warn('[StripePortal] 新凭据落库失败（仍会返回给渲染进程持久化）:', persistErr)
+    }
+    return refreshed
+  } catch (err) {
+    console.warn('[StripePortal] token 刷新兜底失败:', err)
+    return null
   }
 }
 
@@ -6609,6 +6652,49 @@ app.whenReady().then(async () => {
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to open URL' }
+    }
+  })
+
+  // IPC: 自动把账号订阅切到 Free（走 Stripe 门户纯 HTTP 链路；dryRun 只读不提交）
+  ipcMain.handle('account-switch-plan-free', async (_event, accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean) => {
+    try {
+      const run = (token: string) => switchSubscriptionToFree(
+        { id: accountId || 'switch-free-request', accessToken: token, region: region || 'us-east-1', profileArn, machineId, provider, authMethod } as ProxyAccount,
+        { dryRun: dryRun === true }
+      )
+      let result = await run(accessToken)
+      // accessToken 过期兜底：刷新后重试一次，并把新凭据带回 renderer 持久化
+      if (!result.success && accountId && isTokenExpiredError(result.error)) {
+        const refreshed = await refreshAccountAccessToken(accountId)
+        if (refreshed) {
+          result = await run(refreshed.accessToken)
+          if (result.success) return { ...result, credentials: refreshed }
+        }
+      }
+      return result
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to switch plan' }
+    }
+  })
+
+  // IPC: 只读检查订阅续费状态（cancel_at_period_end）
+  ipcMain.handle('account-check-renewal', async (_event, accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => {
+    try {
+      const run = (token: string) => checkRenewalStatus(
+        { id: accountId || 'check-renewal-request', accessToken: token, region: region || 'us-east-1', profileArn, machineId, provider, authMethod } as ProxyAccount
+      )
+      let result = await run(accessToken)
+      // accessToken 过期兜底：刷新后重试一次，并把新凭据带回 renderer 持久化
+      if (!result.success && accountId && isTokenExpiredError(result.error)) {
+        const refreshed = await refreshAccountAccessToken(accountId)
+        if (refreshed) {
+          result = await run(refreshed.accessToken)
+          if (result.success) return { ...result, credentials: refreshed }
+        }
+      }
+      return result
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to check renewal' }
     }
   })
 

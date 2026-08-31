@@ -22,7 +22,8 @@ import {
   Ban,
   Upload,
   ListChecks,
-  X
+  X,
+  ArrowDownCircle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -1831,6 +1832,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isBatchOpening, setIsBatchOpening] = useState(false)
   const [isBatchDisablingOverage, setIsBatchDisablingOverage] = useState(false)
+  const [isSwitchingFree, setIsSwitchingFree] = useState(false)
+  const [isCheckingRenewal, setIsCheckingRenewal] = useState(false)
 
   const toggleSelect = (id: string): void => {
     setSelectedIds((prev) => {
@@ -1944,6 +1947,310 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
     }
   }
 
+  /** 主进程在 accessToken 过期时会自动刷新重试，这里把返回的新凭据持久化到账号 */
+  const persistRefreshedCredentials = (acc: AccountType, cred?: { accessToken: string; refreshToken?: string; expiresIn?: number }): void => {
+    if (!cred?.accessToken || cred.accessToken === acc.credentials?.accessToken) return
+    updateAccount(acc.id, {
+      credentials: {
+        ...acc.credentials,
+        accessToken: cred.accessToken,
+        refreshToken: cred.refreshToken ?? acc.credentials?.refreshToken,
+        ...(cred.expiresIn ? { expiresAt: Date.now() + cred.expiresIn * 1000 } : {})
+      } as AccountType['credentials']
+    })
+  }
+
+  /** 单账号检查续费状态（只读），结果写入本地 subscription.willRenew */
+  const checkRenewalOne = async (acc: AccountType): Promise<'renew' | 'no-renew' | 'already-free' | 'scheduled-free' | 'failed'> => {
+    const r = await window.api.accountCheckRenewal(
+      acc.credentials.accessToken,
+      acc.credentials?.region,
+      acc.profileArn,
+      acc.machineId,
+      acc.credentials?.provider || acc.idp,
+      acc.credentials?.authMethod,
+      acc.id
+    )
+    persistRefreshedCredentials(acc, r.credentials)
+    if (r.success) {
+      // 门户侧已是 Free（本地可能滞后）：更正本地订阅状态，续费标记无意义
+      if (r.isFreePlan) {
+        updateAccount(acc.id, {
+          subscription: {
+            ...acc.subscription,
+            type: 'Free',
+            title: 'Kiro Free',
+            willRenew: undefined,
+            renewalCheckedAt: undefined,
+            ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+          } as AccountType['subscription']
+        })
+        return 'already-free'
+      }
+      // 已安排周期末切 Free（网页"周期末生效"降级）：本周期仍付费、下周期起 $0，不再扣款
+      if (r.scheduledToFree) {
+        updateAccount(acc.id, {
+          subscription: {
+            ...acc.subscription,
+            willRenew: false,
+            scheduledToFree: true,
+            renewalCheckedAt: Date.now(),
+            ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+          } as AccountType['subscription']
+        })
+        return 'scheduled-free'
+      }
+      const willRenew = r.cancelAtPeriodEnd === false // 未设置到期取消 → 会自动续费
+      updateAccount(acc.id, {
+        subscription: {
+          ...acc.subscription,
+          willRenew,
+          scheduledToFree: false,
+          renewalCheckedAt: Date.now(),
+          // 顺带刷新到期时间为门户侧的下周期时间（如有）
+          ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+        } as AccountType['subscription']
+      })
+      return willRenew ? 'renew' : 'no-renew'
+    }
+    console.warn('[CheckRenewal] failed for', acc.email, r.error)
+    alert(isEn
+      ? `Check failed for ${acc.email}:\n${r.error || 'Unknown error'}`
+      : `${acc.email} 检查失败：\n${r.error || '未知错误'}`
+    )
+    return 'failed'
+  }
+
+  /** 批量检查续费状态（只读，点按钮触发，不自动读取） */
+  const handleBatchCheckRenewal = async (mode: 'selected' | 'all'): Promise<void> => {
+    const targets = (mode === 'selected'
+      ? subscribed.filter((a) => a && selectedIds.has(a.id))
+      : subscribed
+    ).filter((a) => {
+      if (!a) return false
+      const type = (a.subscription?.type || '').toUpperCase()
+      const title = (a.subscription?.title || '').toUpperCase()
+      const isFreeTier = type.includes('FREE') || title.includes('FREE') || (!type && !title)
+      return !isFreeTier && !!a.credentials?.accessToken
+    })
+    if (targets.length === 0) {
+      alert(isEn ? 'No paid accounts to check' : '没有可检查的付费账号')
+      return
+    }
+    if (!confirm(isEn
+      ? `Check renewal status for ${targets.length} paid account(s)? (read-only, no changes)`
+      : `检查 ${targets.length} 个付费账号的续费状态？（只读，不做任何变更）`
+    )) return
+
+    setIsCheckingRenewal(true)
+    const fail: Array<{ email: string; error?: string }> = []
+    let renewCount = 0
+    let noRenewCount = 0
+    let alreadyFreeCount = 0
+    let scheduledFreeCount = 0
+    try {
+      let cursor = 0
+      const worker = async (): Promise<void> => {
+        while (cursor < targets.length) {
+          const idx = cursor++
+          const acc = targets[idx]
+          if (!acc) continue
+          const r = await window.api.accountCheckRenewal(
+            acc.credentials.accessToken,
+            acc.credentials?.region,
+            acc.profileArn,
+            acc.machineId,
+            acc.credentials?.provider || acc.idp,
+            acc.credentials?.authMethod,
+            acc.id
+          )
+          persistRefreshedCredentials(acc, r.credentials)
+          if (r.success) {
+            // 门户侧已是 Free：更正本地状态（切过 Free 的订阅仍会"$0 续费"，不算将续费）
+            if (r.isFreePlan) {
+              alreadyFreeCount++
+              updateAccount(acc.id, {
+                subscription: {
+                  ...acc.subscription,
+                  type: 'Free',
+                  title: 'Kiro Free',
+                  willRenew: undefined,
+                  renewalCheckedAt: undefined,
+                  ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+                } as AccountType['subscription']
+              })
+              continue
+            }
+            if (r.scheduledToFree) {
+              scheduledFreeCount++
+              updateAccount(acc.id, {
+                subscription: {
+                  ...acc.subscription,
+                  willRenew: false,
+                  scheduledToFree: true,
+                  renewalCheckedAt: Date.now(),
+                  ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+                } as AccountType['subscription']
+              })
+              continue
+            }
+            const willRenew = r.cancelAtPeriodEnd === false
+            if (willRenew) renewCount++
+            else noRenewCount++
+            updateAccount(acc.id, {
+              subscription: {
+                ...acc.subscription,
+                willRenew,
+                scheduledToFree: false,
+                renewalCheckedAt: Date.now(),
+                ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+              } as AccountType['subscription']
+            })
+          } else {
+            fail.push({ email: acc.email || acc.id, error: r.error })
+          }
+        }
+      }
+      const workers = Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
+      await Promise.all(workers)
+
+      const failDetail = fail.slice(0, 5).map((f) => `\n${f.email}: ${f.error || ''}`).join('')
+      alert(isEn
+        ? `Renews (will be charged): ${renewCount}\nFree at period end (no charge): ${scheduledFreeCount}\nWon't renew: ${noRenewCount}\nAlready Free: ${alreadyFreeCount}\nFailed: ${fail.length}${failDetail}${fail.length > 5 ? '\n...' : ''}`
+        : `续费（会扣款）：${renewCount}\n已切Free（周期末生效，不扣款）：${scheduledFreeCount}\n不续费：${noRenewCount}\n已是 Free：${alreadyFreeCount}\n失败：${fail.length}${failDetail}${fail.length > 5 ? '\n...' : ''}`
+      )
+    } finally {
+      setIsCheckingRenewal(false)
+    }
+  }
+
+  /** 单账号切 Free：调主进程走 Stripe 门户链路，成功后本地更新订阅显示 */
+  const switchOneToFree = async (acc: AccountType): Promise<'switched' | 'already-free' | 'failed'> => {
+    const r = await window.api.accountSwitchPlanFree(
+      acc.credentials.accessToken,
+      acc.credentials?.region,
+      acc.profileArn,
+      acc.machineId,
+      acc.credentials?.provider || acc.idp,
+      acc.credentials?.authMethod,
+      acc.id
+    )
+    persistRefreshedCredentials(acc, r.credentials)
+    if (r.success && r.switched) {
+      // 切 Free 实为"下周期生效"：当前周期保持原计划与额度，仅标记已安排降级；
+      // 只有 Stripe 复核为立即生效时才把本地计划改为 Free
+      if (r.scheduledToFree) {
+        updateAccount(acc.id, {
+          subscription: {
+            ...acc.subscription,
+            willRenew: false,
+            scheduledToFree: true,
+            renewalCheckedAt: Date.now(),
+            ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+          } as AccountType['subscription']
+        })
+        alert(isEn
+          ? `${acc.email}: Free takes effect next cycle; current plan and quota unchanged until then.`
+          : `${acc.email}：已切 Free，下周期生效；当前周期保持原计划与额度不变。`
+        )
+      } else {
+        updateAccount(acc.id, {
+          subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, renewalCheckedAt: Date.now() } as AccountType['subscription']
+        })
+      }
+      return 'switched'
+    }
+    if (r.success && r.alreadyFree) return 'already-free'
+    console.warn('[SwitchFree] failed for', acc.email, r.error)
+    alert(isEn
+      ? `Switch failed for ${acc.email}:\n${r.error || 'Unknown error'}`
+      : `${acc.email} 切换失败：\n${r.error || '未知错误'}`
+    )
+    return 'failed'
+  }
+
+  /** 批量切 Free（自动走 Stripe 门户，无需打开浏览器） */
+  const handleBatchSwitchFree = async (mode: 'selected' | 'all'): Promise<void> => {
+    const targets = (mode === 'selected'
+      ? subscribed.filter((a) => a && selectedIds.has(a.id))
+      : subscribed
+    ).filter((a) => {
+      if (!a) return false
+      const type = (a.subscription?.type || '').toUpperCase()
+      const title = (a.subscription?.title || '').toUpperCase()
+      const isFreeTier = type.includes('FREE') || title.includes('FREE') || (!type && !title)
+      return !isFreeTier && !!a.credentials?.accessToken
+    })
+    if (targets.length === 0) {
+      alert(isEn ? 'No paid accounts to switch' : '没有可切换的付费账号')
+      return
+    }
+    if (!confirm(isEn
+      ? `Switch ${targets.length} account(s) to Kiro Free?\n\n- Takes effect immediately, Free is $0/month, no charge\n- Current paid plan is downgraded right away (no refund for remaining period)\n- To go back to a paid plan you must subscribe again`
+      : `把 ${targets.length} 个账号切到 Kiro Free？\n\n- 立即生效，Free 为 $0/月，不产生扣费\n- 当前付费计划立即降级（剩余周期不退款）\n- 如需恢复付费计划需重新订阅`
+    )) return
+
+    setIsSwitchingFree(true)
+    const results: Array<{ email: string; outcome: 'switched' | 'already-free' | 'failed'; error?: string; scheduled?: boolean }> = []
+    try {
+      let cursor = 0
+      const worker = async (): Promise<void> => {
+        while (cursor < targets.length) {
+          const idx = cursor++
+          const acc = targets[idx]
+          if (!acc) continue
+          const r = await window.api.accountSwitchPlanFree(
+            acc.credentials.accessToken,
+            acc.credentials?.region,
+            acc.profileArn,
+            acc.machineId,
+            acc.credentials?.provider || acc.idp,
+            acc.credentials?.authMethod,
+            acc.id
+          )
+          persistRefreshedCredentials(acc, r.credentials)
+          if (r.success && r.switched) {
+            // 切 Free 实为"下周期生效"：当前周期保持原计划，仅标记已安排降级
+            if (r.scheduledToFree) {
+              updateAccount(acc.id, {
+                subscription: {
+                  ...acc.subscription,
+                  willRenew: false,
+                  scheduledToFree: true,
+                  renewalCheckedAt: Date.now(),
+                  ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+                } as AccountType['subscription']
+              })
+            } else {
+              updateAccount(acc.id, {
+                subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, renewalCheckedAt: Date.now() } as AccountType['subscription']
+              })
+            }
+            results.push({ email: acc.email || acc.id, outcome: 'switched', scheduled: r.scheduledToFree === true })
+          } else if (r.success && r.alreadyFree) {
+            results.push({ email: acc.email || acc.id, outcome: 'already-free' })
+          } else {
+            results.push({ email: acc.email || acc.id, outcome: 'failed', error: r.error })
+          }
+        }
+      }
+      const workers = Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
+      await Promise.all(workers)
+
+      const switched = results.filter((r) => r.outcome === 'switched').length
+      const switchedScheduled = results.filter((r) => r.outcome === 'switched' && r.scheduled).length
+      const already = results.filter((r) => r.outcome === 'already-free').length
+      const failed = results.filter((r) => r.outcome === 'failed')
+      const failedDetail = failed.slice(0, 5).map((r) => `\n${r.email}: ${r.error || ''}`).join('')
+      alert(isEn
+        ? `Switched: ${switched} (${switchedScheduled} effective next cycle, current plan unchanged), already Free: ${already}, failed: ${failed.length}${failedDetail}${failed.length > 5 ? '\n...' : ''}`
+        : `已切换：${switched}（其中 ${switchedScheduled} 个下周期生效、当前计划不变），已是 Free：${already}，失败：${failed.length}${failedDetail}${failed.length > 5 ? '\n...' : ''}`
+      )
+    } finally {
+      setIsSwitchingFree(false)
+    }
+  }
+
   if (subscribed.length === 0) {
     return (
       <Card>
@@ -1962,6 +2269,13 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
 
   const selectedCount = selectedIds.size
   const overageEnabledCount = subscribed.filter((a) => a?.usage?.resourceDetail?.overageEnabled === true).length
+  // 非 Free（可切）账号数：type/title 均为空也按 Free 处理，与升级页判定保持一致
+  const paidCount = subscribed.filter((a) => {
+    if (!a) return false
+    const type = (a.subscription?.type || '').toUpperCase()
+    const title = (a.subscription?.title || '').toUpperCase()
+    return !(type.includes('FREE') || title.includes('FREE') || (!type && !title)) && !!a.credentials?.accessToken
+  }).length
 
   return (
     <>
@@ -1976,8 +2290,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
           </div>
           <p className="text-xs text-muted-foreground">
             {isEn
-              ? 'Bulk open subscription portals in browser (cancel/manage there), or bulk disable overage.'
-              : '批量打开订阅门户（在浏览器内取消/管理），或批量关闭超额。'
+              ? 'Switch plans to Free automatically via Stripe billing portal (no browser/payment needed), bulk open portals to manage manually, or bulk disable overage.'
+              : '自动经 Stripe 订阅门户切到 Free（无需打开浏览器/支付），或批量打开门户手动管理、批量关闭超额。'
             }
           </p>
         </CardContent>
@@ -2025,6 +2339,49 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             {isEn ? `Disable All Overage (${overageEnabledCount})` : `关全部超额 (${overageEnabledCount})`}
           </Button>
 
+          <div className="w-px h-6 bg-border" />
+
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleBatchCheckRenewal('selected')}
+            disabled={isCheckingRenewal || selectedCount === 0}
+          >
+            {isCheckingRenewal ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+            {isEn ? 'Check Renewal (Selected)' : '检查续费（已选）'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleBatchCheckRenewal('all')}
+            disabled={isCheckingRenewal || paidCount === 0}
+          >
+            {isEn ? `Check All Renewal (${paidCount})` : `检查全部续费 (${paidCount})`}
+          </Button>
+
+          <div className="w-px h-6 bg-border" />
+
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-green-600 hover:text-green-700"
+            onClick={() => handleBatchSwitchFree('selected')}
+            disabled={isSwitchingFree || selectedCount === 0}
+          >
+            {isSwitchingFree ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ArrowDownCircle className="h-4 w-4 mr-1" />}
+            {isEn ? 'Switch to Free (Selected)' : '切 Free（已选）'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-green-600 hover:text-green-700"
+            onClick={() => handleBatchSwitchFree('all')}
+            disabled={isSwitchingFree || paidCount === 0}
+          >
+            {isSwitchingFree ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <ArrowDownCircle className="h-4 w-4 mr-1" />}
+            {isEn ? `Switch All to Free (${paidCount})` : `全部切 Free (${paidCount})`}
+          </Button>
+
           <span className="ml-auto text-xs text-muted-foreground">
             {selectedCount > 0
               ? (isEn ? `${selectedCount} of ${subscribed.length} selected` : `已选 ${selectedCount} / ${subscribed.length}`)
@@ -2050,8 +2407,9 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             <span className="flex-1">{isEn ? 'Email' : '邮箱'}</span>
             <span className="w-28 text-center">{isEn ? 'Plan' : '订阅类型'}</span>
             <span className="w-20 text-center">{isEn ? 'Days Left' : '剩余天数'}</span>
+            <span className="w-20 text-center">{isEn ? 'Renewal' : '续费'}</span>
             <span className="w-24 text-center">{isEn ? 'Overage' : '超额状态'}</span>
-            <span className="w-32 text-center">{isEn ? 'Actions' : '操作'}</span>
+            <span className="w-36 text-center">{isEn ? 'Actions' : '操作'}</span>
           </div>
 
           <SubscribedAccountsVirtualList
@@ -2060,6 +2418,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             toggleSelect={toggleSelect}
             updateAccount={updateAccount}
             isEn={isEn}
+            onSwitchFree={switchOneToFree}
+            onCheckRenewal={checkRenewalOne}
           />
 
           {/* 占位防止下面 dead code 被误删（实际渲染走 SubscribedAccountsVirtualList） */}
@@ -2167,9 +2527,11 @@ interface SubscribedListProps {
   toggleSelect: (id: string) => void
   updateAccount: ReturnType<typeof useAccountsStore.getState>['updateAccount']
   isEn: boolean
+  onSwitchFree?: (acc: AccountType) => Promise<'switched' | 'already-free' | 'failed'>
+  onCheckRenewal?: (acc: AccountType) => Promise<'renew' | 'no-renew' | 'already-free' | 'scheduled-free' | 'failed'>
 }
 
-function SubscribedAccountsVirtualList({ subscribed, selectedIds, toggleSelect, updateAccount, isEn }: SubscribedListProps): React.ReactNode {
+function SubscribedAccountsVirtualList({ subscribed, selectedIds, toggleSelect, updateAccount, isEn, onSwitchFree, onCheckRenewal }: SubscribedListProps): React.ReactNode {
   void updateAccount  // 暂未使用（保留参数对齐 API）
   const parentRef = useRef<HTMLDivElement>(null)
   const ROW_HEIGHT = 44
@@ -2194,6 +2556,8 @@ function SubscribedAccountsVirtualList({ subscribed, selectedIds, toggleSelect, 
             selected={selectedIds.has(acc.id)}
             onToggleSelect={() => toggleSelect(acc.id)}
             isEn={isEn}
+            onSwitchFree={onSwitchFree ? () => onSwitchFree(acc) : undefined}
+            onCheckRenewal={onCheckRenewal ? () => onCheckRenewal(acc) : undefined}
           />
         ))}
       </div>
@@ -2224,6 +2588,8 @@ function SubscribedAccountsVirtualList({ subscribed, selectedIds, toggleSelect, 
                 selected={selectedIds.has(acc.id)}
                 onToggleSelect={() => toggleSelect(acc.id)}
                 isEn={isEn}
+                onSwitchFree={onSwitchFree ? () => onSwitchFree(acc) : undefined}
+                onCheckRenewal={onCheckRenewal ? () => onCheckRenewal(acc) : undefined}
               />
             </div>
           )
@@ -2233,17 +2599,32 @@ function SubscribedAccountsVirtualList({ subscribed, selectedIds, toggleSelect, 
   )
 }
 
-function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn }: {
+function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn, onSwitchFree, onCheckRenewal }: {
   acc: AccountType
   idx: number
   selected: boolean
   onToggleSelect: () => void
   isEn: boolean
+  onSwitchFree?: () => Promise<'switched' | 'already-free' | 'failed'>
+  onCheckRenewal?: () => Promise<'renew' | 'no-renew' | 'already-free' | 'scheduled-free' | 'failed'>
 }): React.ReactNode {
   const planName = acc.subscription?.title || acc.subscription?.type || '-'
   const daysLeft = acc.subscription?.daysRemaining
   const overageEnabled = acc.usage?.resourceDetail?.overageEnabled === true
   const overageCapable = acc.subscription?.overageCapability === 'OVERAGE_CAPABLE'
+  const [isSwitching, setIsSwitching] = useState(false)
+  const [isChecking, setIsChecking] = useState(false)
+  // 续费状态：willRenew 由"检查续费"按钮写入本地；悬浮显示检查时间
+  const renewalCheckedTitle = acc.subscription?.renewalCheckedAt
+    ? (isEn ? `Checked: ${new Date(acc.subscription.renewalCheckedAt).toLocaleString()}` : `检查于：${new Date(acc.subscription.renewalCheckedAt).toLocaleString()}`)
+    : (isEn ? 'Not checked yet — click the refresh button' : '尚未检查——点击行内刷新按钮查询')
+  // Free（或空）账号不需要切；无回调（旧调用方）也不显示
+  const isFreeTierRow = (() => {
+    const type = (acc.subscription?.type || '').toUpperCase()
+    const title = (acc.subscription?.title || '').toUpperCase()
+    return type.includes('FREE') || title.includes('FREE') || (!type && !title)
+  })()
+  const canSwitchFree = !!onSwitchFree && !isFreeTierRow && !!acc.credentials?.accessToken
 
   return (
     <div
@@ -2280,6 +2661,18 @@ function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn }: {
           : '-'
         }
       </span>
+      <span className="w-20 text-center" title={isFreeTierRow ? undefined : renewalCheckedTitle}>
+        {isFreeTierRow
+          ? <span className="text-muted-foreground text-[10px]">-</span>
+          : acc.subscription?.willRenew === true
+            ? <span className="text-red-500 text-[10px] font-medium">{isEn ? 'RENEWS' : '续费'}</span>
+            : acc.subscription?.scheduledToFree === true
+              ? <span className="text-teal-600 dark:text-teal-300 text-[10px] font-medium">{isEn ? '→ Free @ period end' : '已切Free'}</span>
+              : acc.subscription?.willRenew === false
+                ? <span className="text-green-600 text-[10px] font-medium">{isEn ? "Won't renew" : '不续费'}</span>
+                : <span className="text-muted-foreground text-[10px]">?</span>
+        }
+      </span>
       <span className="w-24 text-center">
         {overageEnabled
           ? <span className="text-green-600 text-[10px]">{isEn ? 'ENABLED' : '已开启'}</span>
@@ -2288,7 +2681,44 @@ function SubscribedRow({ acc, idx, selected, onToggleSelect, isEn }: {
             : <span className="text-muted-foreground text-[10px]">-</span>
         }
       </span>
-      <span className="w-32 flex justify-center gap-1">
+      <span className="w-36 flex justify-center gap-1">
+        {canSwitchFree && (
+          <button
+            onClick={async () => {
+              if (!onCheckRenewal) return
+              setIsChecking(true)
+              try { await onCheckRenewal() } finally { setIsChecking(false) }
+            }}
+            disabled={isChecking}
+            className="px-2 py-1 rounded text-[10px] bg-muted text-muted-foreground hover:bg-muted/70 disabled:opacity-50"
+            title={isEn ? 'Check renewal status (read-only)' : '检查续费状态（只读）'}
+          >
+            {isChecking
+              ? <Loader2 className="h-3 w-3 inline animate-spin" />
+              : <RefreshCw className="h-3 w-3 inline" />}
+          </button>
+        )}
+        {canSwitchFree && (
+          <button
+            onClick={async () => {
+              if (!onSwitchFree) return
+              if (!confirm(isEn
+                ? `Switch ${acc.email} to Kiro Free? Takes effect immediately ($0/month, no charge).${acc.subscription?.willRenew === true ? '\n\n⚠ This account renews (will be charged) — switching avoids the charge.' : ''}`
+                : `把 ${acc.email} 切到 Kiro Free？立即生效（$0/月，不扣费）。${acc.subscription?.willRenew === true ? '\n\n⚠ 该账号为续费状态（会扣款）——切 Free 可避免扣款。' : ''}`
+              )) return
+              setIsSwitching(true)
+              try { await onSwitchFree() } finally { setIsSwitching(false) }
+            }}
+            disabled={isSwitching}
+            className="px-2 py-1 rounded text-[10px] bg-green-500/10 text-green-700 dark:text-green-300 hover:bg-green-500/20 disabled:opacity-50"
+            title={isEn ? 'Switch subscription to Kiro Free automatically (no browser needed)' : '自动切到 Kiro Free（无需打开浏览器）'}
+          >
+            {isSwitching
+              ? <Loader2 className="h-3 w-3 inline mr-1 animate-spin" />
+              : <ArrowDownCircle className="h-3 w-3 inline mr-1" />}
+            {isEn ? 'To Free' : '切Free'}
+          </button>
+        )}
         <button
           onClick={async () => {
             const r = await window.api.accountGetSubscriptionUrl(

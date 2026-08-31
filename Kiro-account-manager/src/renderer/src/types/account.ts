@@ -67,6 +67,9 @@ export interface AccountSubscription {
   upgradeCapability?: string // 可升级能力
   overageCapability?: string // 超额能力
   managementTarget?: string // 订阅管理目标
+  willRenew?: boolean // 是否将于下周期自动续费（Stripe cancel_at_period_end 取反；点"检查续费"时刷新）
+  renewalCheckedAt?: number // 上次检查续费状态的时间戳
+  scheduledToFree?: boolean // 已安排周期末切 Free（网页"周期末生效"降级）：本周期仍付费、下周期起 $0
 }
 
 /**
