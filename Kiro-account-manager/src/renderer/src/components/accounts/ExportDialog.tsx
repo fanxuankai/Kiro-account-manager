@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Badge } from '../ui'
 import { X, FileJson, FileText, Table, Clipboard, Check, Download, Key, Braces } from 'lucide-react'
@@ -7,7 +7,16 @@ import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import type { Account } from '@/types/account'
 
-type ExportFormat = 'json' | 'oidc' | 'txt' | 'csv' | 'kami' | 'clipboard'
+const EXPORT_FORMATS = ['json', 'oidc', 'txt', 'csv', 'kami', 'clipboard'] as const
+type ExportFormat = (typeof EXPORT_FORMATS)[number]
+
+// 记住上次使用的导出格式，非法存量值回退到 json
+function loadExportFormat(): ExportFormat {
+  const saved = localStorage.getItem('accounts_exportFormat')
+  return (EXPORT_FORMATS as readonly string[]).includes(saved ?? '')
+    ? (saved as ExportFormat)
+    : 'json'
+}
 
 interface ExportDialogProps {
   open: boolean
@@ -17,7 +26,11 @@ interface ExportDialogProps {
 }
 
 export function ExportDialog({ open, onClose, accounts, selectedCount }: ExportDialogProps) {
-  const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('json')
+  // 导出格式持久化到 localStorage，账号页/设置页两个入口共用
+  const [selectedFormat, setSelectedFormat] = useState<ExportFormat>(loadExportFormat)
+  useEffect(() => {
+    localStorage.setItem('accounts_exportFormat', selectedFormat)
+  }, [selectedFormat])
   const [includeCredentials, setIncludeCredentials] = useState(true)
   const [copied, setCopied] = useState(false)
   const { exportAccounts } = useAccountsStore()
