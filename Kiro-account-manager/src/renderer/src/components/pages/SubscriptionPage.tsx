@@ -1865,36 +1865,28 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
 
     setIsBatchOpening(true)
     try {
-      // 并发池
-      let cursor = 0
-      const worker = async (): Promise<void> => {
-        while (cursor < targets.length) {
-          const idx = cursor++
-          const acc = targets[idx]
-          if (!acc) continue
-          try {
-            const r = await window.api.accountGetSubscriptionUrl(
-              acc.credentials.accessToken,
-              undefined,
-              acc.credentials?.region,
-              acc.profileArn,
-              acc.machineId,
-              acc.credentials?.provider || acc.idp,
-              acc.credentials?.authMethod,
-              acc.id
-            )
-            if (r.success && r.url) {
-              await window.api.openSubscriptionWindow(r.url)
-              // 每个之间留 500ms，让浏览器有时间响应
-              await new Promise((resolve) => setTimeout(resolve, 500))
-            }
-          } catch (err) {
-            console.warn('Open portal failed for', acc.email, err)
+      // 严格逐个打开，每个之间留 1s，避免门户窗口一次性涌入
+      for (const acc of targets) {
+        if (!acc) continue
+        try {
+          const r = await window.api.accountGetSubscriptionUrl(
+            acc.credentials.accessToken,
+            undefined,
+            acc.credentials?.region,
+            acc.profileArn,
+            acc.machineId,
+            acc.credentials?.provider || acc.idp,
+            acc.credentials?.authMethod,
+            acc.id
+          )
+          if (r.success && r.url) {
+            await window.api.openSubscriptionWindow(r.url)
+            await new Promise((resolve) => setTimeout(resolve, 1000))
           }
+        } catch (err) {
+          console.warn('Open portal failed for', acc.email, err)
         }
       }
-      const workers = Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
-      await Promise.all(workers)
     } finally {
       setIsBatchOpening(false)
     }

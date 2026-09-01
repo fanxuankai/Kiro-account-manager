@@ -15,7 +15,11 @@ const BACKGROUND_RESULT_FLUSH_MS = 120
 
 function App(): React.JSX.Element {
   const [currentPage, setCurrentPage] = useState<PageType>('home')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
+  // 侧边栏收起状态持久化到 localStorage，重启后保持上次状态
+  const [sidebarCollapsed, setSidebarCollapsed] = useState((): boolean => {
+    const saved = localStorage.getItem('sidebar_collapsed')
+    return saved === null ? true : saved === 'true'
+  })
 
   const {
     loadFromStorage,
@@ -362,7 +366,11 @@ function App(): React.JSX.Element {
           currentPage={currentPage}
           onPageChange={setCurrentPage}
           collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+          onToggleCollapse={() => setSidebarCollapsed((prev) => {
+            const next = !prev
+            localStorage.setItem('sidebar_collapsed', String(next))
+            return next
+          })}
         />
         <main className="flex-1 min-w-0 overflow-hidden rounded-3xl page-surface">
           <AnimatePresence mode="wait">
