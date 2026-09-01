@@ -272,6 +272,50 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.12 (2026-9-2) — SQLite Storage & Source/Sold Markers + Batch Switch-to-Free + CF/GPTmail OTP Sources + Main-Process Token Refresh + Export Format Memory
+
+> Cumulative update covering v1.7.6–v1.7.12 (no separate releases since v1.7.5).
+
+#### 💾 Account Storage & Management
+
+- **New**: Account storage migrated to SQLite row-level diff — saves only changed fields; registered accounts auto-tagged with source and filterable by it
+- **New**: Sold marker — badge click to toggle, three-state filter (all/sold/unsold), batch marking; edit dialog supports source & sold settings
+- **New**: Account date-range filter — createdAt from/to plus Today / Last 7 days / Last 30 days shortcuts; selection auto-trimmed on filter change
+- **New**: Export dialog remembers the last selected export format across page switches and restarts (shared by Accounts page and Settings page)
+- **Fix**: Saving an account in the edit dialog without clicking "Verify & Refresh" wiped base/trial/bonus usage and reset dates
+
+#### 🔑 OTP Sources / Registration
+
+- **New**: GPTmail (mail.chatgpt.org.uk) domain mailbox OTP source — private-domain direct receive and CF forwarding modes
+- **New**: CF self-hosted mailbox OTP source (admin mode) — `/admin/mails` health check, Pages misconfig detection, 12-char base36 shuffled prefix to avoid collisions
+- **Fix**: Registration email submission blocked by AWS WAF — TLS fingerprint upgraded to chrome_144
+- **Fix**: Batch subscription links captured stale proPlanType due to a closure bug
+- **Fix**: CF shared-inbox concurrent OTP retrieval now filters by baseline ID, no longer deletes other tasks' verification codes
+
+#### 📦 Subscriptions / Stripe
+
+- **New**: Kiro Pro Max subscription plan support
+- **New**: Stripe portal auto switch-to-Free with renewal status check
+- **Improved**: Batch subscription operations run with lowered concurrency and random intervals; read-only pre-check before switching to Free skips ineligible accounts
+
+#### 🌐 Proxy / Stability
+
+- **Fix**: Tool-use XML leak now parsed across stream frames and deduplicated, fixing tools not executing
+- **Improved**: Token refresh is now single-flight (shared in-flight promise) — waiters get the real result instead of a fixed 1s wait that caused false account switches
+- **Improved**: Full backpressure on SSE write buffer and stream parsing — slow clients no longer accumulate memory
+- **Improved**: 429/402 quota exhaustion auto-recovers per quotaResetMs; accounts are no longer skipped forever
+- **New**: Main-process token refresh scheduler — refreshes soon-to-expire tokens every 60s, works while tray/minimized
+- **New**: Home alert dashboard
+
+#### 🖥️ Desktop
+
+- **New**: Sidebar collapse state persisted across restarts
+- **Changed**: macOS app icon rounded
+- **Fix**: In-app auto-update feed now points to this fork's repo (previously pointed to upstream, upgrading installs to upstream builds)
+- **Fix**: Windows build pinned to the windows-2022 image (VS2026 on windows-latest is not recognized by node-gyp)
+
+---
+
 ### v1.7.5 (2026-6-7) — Thinking Mode + Enterprise profileArn Full Fix + Agent Mode & Steering + Tool Use Leak Fix
 
 #### 🧠 Thinking Mode Support (Claude 4.6+)
