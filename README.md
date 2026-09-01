@@ -274,7 +274,7 @@ The project is configured with GitHub Actions workflow for auto building all pla
 
 ### v1.7.12 (2026-9-2) — SQLite Storage & Source/Sold Markers + Batch Switch-to-Free + CF/GPTmail OTP Sources + Main-Process Token Refresh + Export Format Memory
 
-> Cumulative update covering v1.7.6–v1.7.12 (no separate releases since v1.7.5).
+> Cumulative update covering v1.7.6–v1.7.12 (v1.7.6–1.7.9 had no separate releases; v1.7.10/1.7.11 shipped before this changelog was backfilled).
 
 #### 💾 Account Storage & Management
 
