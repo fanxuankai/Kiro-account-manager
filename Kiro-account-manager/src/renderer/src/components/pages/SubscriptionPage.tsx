@@ -2232,7 +2232,6 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
           const idx = cursor++
           const acc = targets[idx]
           if (!acc) continue
-          await jitterDelay()
           const r = await window.api.accountSwitchPlanFree(
             acc.credentials.accessToken,
             acc.credentials?.region,
