@@ -768,7 +768,7 @@ const api = {
   },
 
   // 自动切订阅到 Free（dryRun=true 只读校验链路，不提交变更）
-  accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean): Promise<{ success: boolean; error?: string; alreadyFree?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
+  accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean): Promise<{ success: boolean; error?: string; alreadyFree?: boolean; alreadyScheduled?: boolean; wontRenew?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
     return ipcRenderer.invoke('account-switch-plan-free', accessToken, region, profileArn, machineId, provider, authMethod, accountId, dryRun)
   },
 

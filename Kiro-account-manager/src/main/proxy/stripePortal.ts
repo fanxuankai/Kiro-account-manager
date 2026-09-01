@@ -33,6 +33,10 @@ export interface SwitchToFreeResult {
   error?: string
   /** 订阅本来就是 Free，未做变更 */
   alreadyFree?: boolean
+  /** 已安排周期末切 Free（本次只读发现后跳过，未提交） */
+  alreadyScheduled?: boolean
+  /** 已设置到期不续费（下周期不会扣款，无需切换） */
+  wontRenew?: boolean
   /** 本次实际提交了切换（非 dry-run 且 POST 成功） */
   switched?: boolean
   /** 提交后经 Stripe 复核：当前周期保持原计划，下周期起才变 Free（Stripe 降级默认周期末生效） */
@@ -287,6 +291,16 @@ export async function switchSubscriptionToFree(
     // 已是 Free → 无需变更
     if (sub.currentPriceId === KIRO_FREE_PRICE_ID) {
       return { success: true, alreadyFree: true, ...base }
+    }
+
+    // 已安排周期末切 Free → 重复提交无意义，跳过（upcomingIsFree 内含 has_update_scheduled 判定）
+    if (sub.upcomingIsFree === true) {
+      return { success: true, alreadyScheduled: true, transitionAt: sub.transitionAt, ...base }
+    }
+
+    // 已设置到期不续费 → 下周期不会扣款，按业务口径无需切
+    if (sub.cancelAtPeriodEnd === true) {
+      return { success: true, wontRenew: true, ...base }
     }
 
     if (opts.dryRun) {
