@@ -173,6 +173,8 @@ export interface AccountFilter {
   usageMax?: number
   daysRemainingMin?: number
   daysRemainingMax?: number
+  createdAtMin?: number // 添加日期下限（时间戳 ms，含当天 0 点起）
+  createdAtMax?: number // 添加日期上限（时间戳 ms，含当天全天）
   bannedOnly?: boolean // 仅显示封禁账号
   sold?: boolean // 售出筛选：true=仅已售；false=仅未售；undefined=不过滤
   sources?: string[] // 来源筛选：'registered'=本应用注册产生；'other'=手动/导入（source 为空）

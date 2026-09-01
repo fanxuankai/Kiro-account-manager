@@ -54,6 +54,13 @@ function toRgba(argbColor: string): string {
 // 域名筛选默认展示的最大数量，超出部分折叠
 const DOMAIN_DISPLAY_LIMIT = 16
 
+// 时间戳 → date input 需要的 yyyy-MM-dd（本地时区）
+const toDateInputValue = (ts: number): string => {
+  const d = new Date(ts)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
 export function AccountFilterPanel(): React.ReactNode {
   const { filter, setFilter, clearFilter, tags, accounts, getStats } = useAccountsStore()
   const { t } = useTranslation()
@@ -119,6 +126,8 @@ export function AccountFilterPanel(): React.ReactNode {
     filter.usageMax !== undefined ||
     filter.daysRemainingMin !== undefined ||
     filter.daysRemainingMax !== undefined ||
+    filter.createdAtMin !== undefined ||
+    filter.createdAtMax !== undefined ||
     filter.bannedOnly
   )
 
@@ -153,6 +162,15 @@ export function AccountFilterPanel(): React.ReactNode {
       [minKey]: min,
       [maxKey]: max
     })
+  }
+
+  // 添加日期快捷筛选：days=0 今天 0 点起，N=近 N+1 天；再次点击同值则取消
+  const setAddedQuick = (days: number): void => {
+    const start = new Date()
+    start.setHours(0, 0, 0, 0)
+    const min = start.getTime() - days * 86400000
+    const isActive = filter.createdAtMin === min && filter.createdAtMax === undefined
+    setRangeFilter('createdAtMin', 'createdAtMax', isActive ? undefined : min, undefined)
   }
 
   return (
@@ -417,6 +435,72 @@ export function AccountFilterPanel(): React.ReactNode {
                 }
               />
               <span className="text-xs text-muted-foreground">{isEn ? 'd' : '天'}</span>
+            </div>
+
+            {/* 添加日期范围 */}
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground">{isEn ? 'Added:' : '添加日期:'}</span>
+              <input
+                type="date"
+                className="w-[7.5rem] px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
+                value={filter.createdAtMin !== undefined ? toDateInputValue(filter.createdAtMin) : ''}
+                onChange={(e) =>
+                  setRangeFilter(
+                    'createdAtMin',
+                    'createdAtMax',
+                    e.target.value ? new Date(`${e.target.value}T00:00:00`).getTime() : undefined,
+                    filter.createdAtMax
+                  )
+                }
+              />
+              <span className="text-muted-foreground text-xs">-</span>
+              <input
+                type="date"
+                className="w-[7.5rem] px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
+                value={filter.createdAtMax !== undefined ? toDateInputValue(filter.createdAtMax) : ''}
+                onChange={(e) =>
+                  setRangeFilter(
+                    'createdAtMin',
+                    'createdAtMax',
+                    filter.createdAtMin,
+                    e.target.value ? new Date(`${e.target.value}T23:59:59.999`).getTime() : undefined
+                  )
+                }
+              />
+              {[
+                { label: isEn ? 'Today' : '今天', days: 0 },
+                { label: isEn ? '7d' : '近7天', days: 6 },
+                { label: isEn ? '30d' : '近30天', days: 29 }
+              ].map((q) => {
+                const start = new Date()
+                start.setHours(0, 0, 0, 0)
+                const isActive =
+                  filter.createdAtMin === start.getTime() - q.days * 86400000 &&
+                  filter.createdAtMax === undefined
+                return (
+                  <button
+                    key={q.days}
+                    className={cn(
+                      'px-2 py-0.5 text-xs rounded border transition-colors',
+                      isActive
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'hover:bg-muted'
+                    )}
+                    onClick={() => setAddedQuick(q.days)}
+                  >
+                    {q.label}
+                  </button>
+                )
+              })}
+              {(filter.createdAtMin !== undefined || filter.createdAtMax !== undefined) && (
+                <button
+                  className="px-1.5 py-0.5 text-xs rounded border transition-colors hover:bg-muted text-muted-foreground"
+                  title={isEn ? 'Clear date filter' : '清除日期筛选'}
+                  onClick={() => setRangeFilter('createdAtMin', 'createdAtMax', undefined, undefined)}
+                >
+                  ✕
+                </button>
+              )}
             </div>
           </div>
 

@@ -535,6 +535,15 @@ type AccountsStore = AccountsState & AccountsActions
 const defaultSort: AccountSort = { field: 'lastUsedAt', order: 'desc' }
 
 // 默认筛选
+// 筛选/分组变化后把选中集裁剪到可见结果：防止"先选后滤"时不可见账号仍被批量操作。
+// 返回 null 表示无需变更。
+function pruneSelectionToVisible(selectedIds: Set<string>, visible: Account[]): Set<string> | null {
+  if (selectedIds.size === 0) return null
+  const visibleIds = new Set(visible.map((a) => a.id))
+  const pruned = new Set(Array.from(selectedIds).filter((id) => visibleIds.has(id)))
+  return pruned.size === selectedIds.size ? null : pruned
+}
+
 const defaultFilter: AccountFilter = {}
 
 // 从 localStorage 恢复分组 Tab（遵循 Electron renderer 环境总是可用）
@@ -959,6 +968,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   setFilter: (filter) => {
     set({ filter })
+    const pruned = pruneSelectionToVisible(get().selectedIds, get().getFilteredAccounts())
+    if (pruned) set({ selectedIds: pruned })
   },
 
   clearFilter: () => {
@@ -968,6 +979,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   setActiveGroupTab: (tab) => {
     try { localStorage.setItem('accounts_activeGroupTab', tab) } catch { /* no-op */ }
     set({ activeGroupTab: tab })
+    const pruned = pruneSelectionToVisible(get().selectedIds, get().getFilteredAccounts())
+    if (pruned) set({ selectedIds: pruned })
   },
 
   setSort: (sort) => {
@@ -1056,6 +1069,15 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         (a) => a.subscription.daysRemaining !== undefined &&
                a.subscription.daysRemaining <= filter.daysRemainingMax!
       )
+    }
+
+    // 添加日期区间过滤
+    if (filter.createdAtMin !== undefined) {
+      result = result.filter((a) => a.createdAt >= filter.createdAtMin!)
+    }
+
+    if (filter.createdAtMax !== undefined) {
+      result = result.filter((a) => a.createdAt <= filter.createdAtMax!)
     }
 
     // 来源筛选：source 为空的旧账号归入 'other'
