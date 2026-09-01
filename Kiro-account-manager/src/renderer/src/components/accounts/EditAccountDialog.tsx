@@ -194,19 +194,22 @@ export function EditAccountDialog({
         expiresAt: accountInfo.expiresAt
       },
       usage: {
+        // 存量打底：未点"验证并刷新"时 accountInfo 只含 current/limit，
+        // 明细字段（baseLimit/nextResetDate 等）沿用账号现有值，避免保存清空
+        ...account.usage,
         current: accountInfo.usage.current,
         limit: accountInfo.usage.limit,
-        percentUsed: accountInfo.usage.limit > 0 
-          ? accountInfo.usage.current / accountInfo.usage.limit 
+        percentUsed: accountInfo.usage.limit > 0
+          ? accountInfo.usage.current / accountInfo.usage.limit
           : 0,
         lastUpdated: now,
-        baseLimit: accountInfo.usage.baseLimit,
-        baseCurrent: accountInfo.usage.baseCurrent,
-        freeTrialLimit: accountInfo.usage.freeTrialLimit,
-        freeTrialCurrent: accountInfo.usage.freeTrialCurrent,
-        freeTrialExpiry: accountInfo.usage.freeTrialExpiry,
-        bonuses: accountInfo.usage.bonuses,
-        nextResetDate: accountInfo.usage.nextResetDate
+        baseLimit: accountInfo.usage.baseLimit ?? account.usage.baseLimit,
+        baseCurrent: accountInfo.usage.baseCurrent ?? account.usage.baseCurrent,
+        freeTrialLimit: accountInfo.usage.freeTrialLimit ?? account.usage.freeTrialLimit,
+        freeTrialCurrent: accountInfo.usage.freeTrialCurrent ?? account.usage.freeTrialCurrent,
+        freeTrialExpiry: accountInfo.usage.freeTrialExpiry ?? account.usage.freeTrialExpiry,
+        bonuses: accountInfo.usage.bonuses ?? account.usage.bonuses,
+        nextResetDate: accountInfo.usage.nextResetDate ?? account.usage.nextResetDate
       },
       status: 'active'
     })
