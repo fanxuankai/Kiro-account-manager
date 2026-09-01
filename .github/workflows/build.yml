@@ -56,7 +56,9 @@ jobs:
 
   build-windows:
     needs: get-version
-    runs-on: windows-latest
+    # 钉住 windows-2022：windows-latest 已换 VS2026，electron-builder 25 内嵌的 node-gyp 识别不了，
+    # better-sqlite3 原生编译会报 "Could not find any Visual Studio installation"
+    runs-on: windows-2022
     strategy:
       matrix:
         arch: [x64, ia32]
@@ -106,7 +108,8 @@ jobs:
 
   build-windows-arm64:
     needs: get-version
-    runs-on: windows-latest
+    # 同上：钉住 windows-2022 保证 VS2022 可被 node-gyp 识别
+    runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
