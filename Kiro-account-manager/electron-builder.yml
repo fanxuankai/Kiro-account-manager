@@ -84,7 +84,8 @@ snap:
     provider: generic
     url: https://example.com/auto-updates
 npmRebuild: false
+# 应用内自动更新源：必须指向本 fork 仓库，否则 autoUpdater 会把用户升级到 upstream 版本
 publish:
   provider: github
-  owner: chaogei
+  owner: fanxuankai
   repo: Kiro-account-manager
