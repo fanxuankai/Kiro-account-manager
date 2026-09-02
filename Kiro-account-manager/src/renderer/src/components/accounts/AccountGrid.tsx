@@ -4,6 +4,7 @@ import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import { AccountCard } from './AccountCard'
 import { AccountDetailDialog } from './AccountDetailDialog'
+import { CARD_HEIGHT, CARD_GAP as GAP } from './_helpers'
 import type { Account } from '@/types/account'
 import { Plus } from 'lucide-react'
 
@@ -12,12 +13,8 @@ interface AccountGridProps {
   onEditAccount: (account: Account) => void
 }
 
-// 卡片高度（包含间距）- 需要足够容纳有多个奖励的 PRO 账号
-const CARD_HEIGHT = 340
 // 卡片最小宽度（小于该宽度自动减少列数）
 const MIN_CARD_WIDTH = 300
-// 卡片间距
-const GAP = 16
 // 内部 px-1 (4px*2 = 8px) 给 box-shadow 留 buffer
 const PADDING_X = 8
 
@@ -120,12 +117,13 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
           return (
             <div
               key={virtualRow.key}
+              ref={virtualizer.measureElement}
+              data-index={virtualRow.index}
               style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 width: '100%',
-                height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start + 8}px)` // +8px 为标签光环留空间
               }}
             >
@@ -144,7 +142,7 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
                       </div>
                     </div>
                   ) : (
-                    <div key={item.id} className="flex-shrink-0" style={{ width: cardWidth, height: CARD_HEIGHT - GAP }}>
+                    <div key={item.id} className="flex-shrink-0" style={{ width: cardWidth }}>
                       <AccountCard
                         account={item}
                         tags={tags}

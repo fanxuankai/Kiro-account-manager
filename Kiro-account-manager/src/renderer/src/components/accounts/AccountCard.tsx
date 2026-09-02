@@ -27,6 +27,7 @@ import {
   RotateCcw
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CARD_HEIGHT, CARD_GAP } from './_helpers'
 
 // 解析 ARGB 颜色转换为 CSS rgba
 function toRgba(argbColor: string): string {
@@ -555,7 +556,7 @@ export const AccountCard = memo(function AccountCard({
   return (
     <Card
       className={cn(
-        'relative cursor-pointer h-full flex flex-col overflow-hidden bg-solid-card',
+        'relative cursor-pointer flex flex-col overflow-hidden bg-solid-card',
         // 默认 hover 浮起 + 阴影增强（除 active/封禁状态外，状态自带样式）
         !account.isActive && !isUnauthorized && 'hover-lift',
         // 当前使用：流光边框，去掉默认边框
@@ -565,7 +566,9 @@ export const AccountCard = memo(function AccountCard({
         // 有标签光环：透明边框给光环让位
         accountTags.length > 0 && !account.isActive && !isUnauthorized && 'border-transparent'
       )}
-      style={finalStyle}
+      // minHeight 与 AccountGrid 的行高联动：内容少于基准时保持等高（Footer 靠 mt-auto 贴底），
+        // 标签/奖励明细多时按内容撑开，行高由 virtualizer.measureElement 动态测量，不再被固定高度压缩
+      style={{ ...finalStyle, minHeight: CARD_HEIGHT - CARD_GAP }}
       onClick={() => toggleSelection(account.id)}
     >
       {/* 选中态独立覆盖层 — 避免被标签光环的 inline style (box-shadow/background) 覆盖

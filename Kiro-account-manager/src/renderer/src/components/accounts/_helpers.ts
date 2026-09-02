@@ -5,6 +5,15 @@
 import type { CSSProperties } from 'react'
 import type { Account } from '@/types/account'
 
+// ============ 卡片布局常量 ============
+// AccountGrid 与 AccountCard 共用（放此处避免组件间循环 import）
+
+// 卡片高度基准（含行间距）- 内容较少卡片的"最小高度"；
+// 标签/明细多的卡片按内容撑开，行高由 virtualizer 动态测量
+export const CARD_HEIGHT = 340
+// 卡片间距
+export const CARD_GAP = 16
+
 // ============ 颜色解析 ============
 
 // 解析 ARGB 颜色转换为 CSS rgba（支持 #AARRGGBB 与 #RRGGBB）
