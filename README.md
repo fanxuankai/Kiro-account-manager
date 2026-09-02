@@ -272,6 +272,19 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.13 (2026-9-2) — Card Layout Fix (Tag Overlap) + Remove Source/Sold Fields
+
+#### 🐛 Account Card Layout Fix
+
+- **Fix**: Cards had a fixed 324px height; fully-loaded cards (badges + usage + quota details + tags + footer buttons) got compressed, with the tag row overlapping the quota details — now uses a minimum height with dynamically measured virtual-scroll row heights: light cards stay equal-height, heavy cards expand as needed
+
+#### 🗑️ Removed Source/Sold Fields
+
+- **Removed**: The full source (registered/import/manual) and sold-marker feature set for accounts — card/list badges, filter sections, batch-mark button, edit dialog & detail views, and auto-tagging on registration; use custom tags instead
+- **Kept**: Registration metadata (registered-at / exit IP / fingerprint version, for ban-tracing); existing legacy fields in stored data are simply no longer read or written (no migration)
+
+---
+
 ### v1.7.12 (2026-9-2) — SQLite Storage & Source/Sold Markers + Batch Switch-to-Free + CF/GPTmail OTP Sources + Main-Process Token Refresh + Export Format Memory
 
 > Cumulative update covering v1.7.6–v1.7.12 (v1.7.6–1.7.9 had no separate releases; v1.7.10/1.7.11 shipped before this changelog was backfilled).
