@@ -272,6 +272,12 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.14 (2026-9-2) — Restore Equal-Height Card Grid
+
+- **Changed**: v1.7.13's dynamic row heights made cards on screen uneven — restored a uniform card height for all cards; raised from 340px to 384px to fit fully-loaded cards (badges + usage + details + tags + footer), so tags no longer overlap details
+
+---
+
 ### v1.7.13 (2026-9-2) — Card Layout Fix (Tag Overlap) + Remove Source/Sold Fields
 
 #### 🐛 Account Card Layout Fix

@@ -8,9 +8,9 @@ import type { Account } from '@/types/account'
 // ============ 卡片布局常量 ============
 // AccountGrid 与 AccountCard 共用（放此处避免组件间循环 import）
 
-// 卡片高度基准（含行间距）- 内容较少卡片的"最小高度"；
-// 标签/明细多的卡片按内容撑开，行高由 virtualizer 动态测量
-export const CARD_HEIGHT = 340
+// 卡片统一高度（含行间距）- 所有卡片等高；需容纳满配内容
+// （徽章行 + 用量区 + 明细 4 行 + 标签行 + 底部按钮区），不够时明细列表内部滚动而非挤压重叠
+export const CARD_HEIGHT = 384
 // 卡片间距
 export const CARD_GAP = 16
 

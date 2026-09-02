@@ -117,18 +117,17 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
           return (
             <div
               key={virtualRow.key}
-              ref={virtualizer.measureElement}
-              data-index={virtualRow.index}
               style={{
                 position: 'absolute',
                 top: 0,
                 left: 0,
                 width: '100%',
+                height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start + 8}px)` // +8px 为标签光环留空间
               }}
             >
               <div className="flex gap-4 items-start px-1">
-                {row.map((item) => 
+                {row.map((item) =>
                   item === 'add' ? (
                     <div
                       key="add-button"
@@ -142,7 +141,7 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
                       </div>
                     </div>
                   ) : (
-                    <div key={item.id} className="flex-shrink-0" style={{ width: cardWidth }}>
+                    <div key={item.id} className="flex-shrink-0" style={{ width: cardWidth, height: CARD_HEIGHT - GAP }}>
                       <AccountCard
                         account={item}
                         tags={tags}
