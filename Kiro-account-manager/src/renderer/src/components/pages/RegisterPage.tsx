@@ -208,12 +208,10 @@ interface FingerprintSnapshot {
   exitIP?: string
 }
 
-/** 注册导入时自动附加的来源元数据：source/regMeta（供大规模账号筛选与封控追溯） */
+/** 注册导入时自动附加的注册元数据（封控追溯用；不再写 source 来源标记） */
 const regMetaFrom = (r: { fingerprint?: FingerprintSnapshot }): {
-  source: string
   regMeta: { registeredAt: number; exitIP?: string; tlsProfile?: string }
 } => ({
-  source: 'registered',
   regMeta: {
     registeredAt: Date.now(),
     exitIP: r.fingerprint?.exitIP,

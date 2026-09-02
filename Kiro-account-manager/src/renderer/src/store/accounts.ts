@@ -363,9 +363,6 @@ interface AccountsActions {
   addTagToAccounts: (accountIds: string[], tagId: string) => void
   removeTagFromAccounts: (accountIds: string[], tagId: string) => void
 
-  // 售出标记（批量标记已售/取消已售；首次标记写入 soldAt）
-  setAccountsSold: (accountIds: string[], sold: boolean) => void
-
   // 筛选和排序
   setFilter: (filter: AccountFilter) => void
   clearFilter: () => void
@@ -946,24 +943,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     get().saveToStorage()
   },
 
-  setAccountsSold: (accountIds, sold) => {
-    const now = Date.now()
-    set((state) => {
-      const accounts = new Map(state.accounts)
-      for (const id of accountIds) {
-        const account = accounts.get(id)
-        if (account) {
-          // 未售时清掉 sold/soldAt 字段，保持 JSON 干净
-          accounts.set(id, sold
-            ? { ...account, sold: true, soldAt: account.soldAt ?? now }
-            : { ...account, sold: undefined, soldAt: undefined })
-        }
-      }
-      return { accounts }
-    })
-    get().saveToStorage()
-  },
-
   // ==================== 筛选和排序 ====================
 
   setFilter: (filter) => {
@@ -1078,16 +1057,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     if (filter.createdAtMax !== undefined) {
       result = result.filter((a) => a.createdAt <= filter.createdAtMax!)
-    }
-
-    // 来源筛选：source 为空的旧账号归入 'other'
-    if (filter.sources?.length) {
-      result = result.filter((a) => filter.sources!.includes(a.source || 'other'))
-    }
-
-    // 售出筛选：sold=true 仅已售，sold=false 仅未售
-    if (filter.sold !== undefined) {
-      result = result.filter((a) => (a.sold === true) === filter.sold)
     }
 
     // 封禁筛选

@@ -28,8 +28,6 @@ export function EditAccountDialog({
 
   // 可编辑字段
   const [nickname, setNickname] = useState('')
-  const [source, setSource] = useState('')
-  const [sold, setSold] = useState(false)
 
   // 自动获取的信息（只读显示）
   const [accountInfo, setAccountInfo] = useState<{
@@ -74,9 +72,7 @@ export function EditAccountDialog({
       setClientSecret(account.credentials.clientSecret || '')
       setRegion(account.credentials.region || 'us-east-1')
       setNickname(account.nickname || '')
-      setSource(account.source || '')
-      setSold(account.sold === true)
-      
+
       // 设置当前账号信息
       setAccountInfo({
         email: account.email,
@@ -173,10 +169,6 @@ export function EditAccountDialog({
       email: accountInfo.email,
       userId: accountInfo.userId,
       nickname: nickname || undefined,
-      source: source || undefined,
-      sold: sold || undefined,
-      // 首次标记已售写入时间，重复保存沿用原时间；取消已售则清除
-      soldAt: sold ? (account.soldAt ?? now) : undefined,
       credentials: {
         ...account.credentials,
         accessToken: accountInfo.accessToken,
@@ -279,46 +271,6 @@ export function EditAccountDialog({
               placeholder={isEn ? 'Give this account a memorable name' : '给这个账号起个好记的名字'}
               className="w-full h-10 px-3 py-2 text-sm rounded-xl border border-input bg-background/50 ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
             />
-          </div>
-
-          {/* 来源 + 已售 */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">{isEn ? 'Source' : '来源'}</label>
-              <select
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-                className="w-full h-10 px-3 py-2 text-sm rounded-xl border border-input bg-background/50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-              >
-                <option value="">{isEn ? 'Unmarked (Manual/Imported)' : '未标记（手动/导入）'}</option>
-                <option value="registered">{isEn ? 'Registered' : '注册'}</option>
-                <option value="import">{isEn ? 'Imported' : '导入'}</option>
-                <option value="manual">{isEn ? 'Manual' : '手动'}</option>
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">{isEn ? 'Sold' : '已售'}</label>
-              <label
-                className="flex items-center gap-2.5 h-10 px-3 rounded-xl border border-input bg-background/50 cursor-pointer select-none"
-                title={sold && account.soldAt
-                  ? (isEn ? `Sold at ${new Date(account.soldAt).toLocaleString('en-US')}` : `售出于 ${new Date(account.soldAt).toLocaleString('zh-CN')}`)
-                  : undefined}
-              >
-                <input
-                  type="checkbox"
-                  checked={sold}
-                  onChange={(e) => setSold(e.target.checked)}
-                  className="h-4 w-4 rounded border-input accent-[var(--color-primary)] cursor-pointer"
-                />
-                <span className="text-sm text-muted-foreground">
-                  {sold
-                    ? (account.soldAt
-                        ? (isEn ? `Sold · ${new Date(account.soldAt).toLocaleDateString('en-US')}` : `已售 · ${new Date(account.soldAt).toLocaleDateString('zh-CN')}`)
-                        : (isEn ? 'Sold' : '已售'))
-                    : (isEn ? 'Mark as sold' : '标记为已售')}
-                </span>
-              </label>
-            </div>
           </div>
 
           {/* 凭证配置 */}

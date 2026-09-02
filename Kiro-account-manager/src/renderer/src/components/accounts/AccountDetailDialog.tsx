@@ -8,7 +8,6 @@ import type { Account } from '@/types/account'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import { getSourceLabel } from './_helpers'
 
 interface ModelInfo {
   id: string
@@ -311,20 +310,6 @@ export function AccountDetailDialog({
                    <div className="space-y-1">
                       <label className="text-xs font-medium text-muted-foreground">{isEn ? 'Provider' : '身份提供商'}</label>
                       <div className="text-sm font-medium">{account.idp}</div>
-                   </div>
-                   <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">{isEn ? 'Source' : '来源'}</label>
-                      <div className="text-sm font-medium">{getSourceLabel(account.source, isEn)}</div>
-                   </div>
-                   <div className="space-y-1">
-                      <label className="text-xs font-medium text-muted-foreground">{isEn ? 'Sold' : '售出状态'}</label>
-                      {account.sold ? (
-                        <div className="text-sm font-medium text-amber-600 dark:text-amber-400" title={account.soldAt ? `${isEn ? 'Sold at' : '售出于'} ${formatDateTime(account.soldAt)}` : undefined}>
-                          {isEn ? 'Sold' : '已售'}{account.soldAt ? ` · ${formatDateTime(account.soldAt)}` : ''}
-                        </div>
-                      ) : (
-                        <div className="text-sm font-medium text-muted-foreground">{isEn ? 'Not sold' : '未售'}</div>
-                      )}
                    </div>
                  </div>
                  <div className="space-y-1">

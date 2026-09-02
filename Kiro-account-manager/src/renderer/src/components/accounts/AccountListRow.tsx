@@ -64,8 +64,7 @@ function AccountListRowComponent({
     updateAccountStatus,
     accountProxyBindings,
     proxyPool,
-    unbindAccountFromProxy,
-    setAccountsSold
+    unbindAccountFromProxy
   } = useAccountsStore()
 
   // 该账号绑定的代理（如有）
@@ -269,12 +268,6 @@ function AccountListRowComponent({
     }
   }, [account.email, account.userId])
 
-  // 已售标记切换（纯本地标记，无需确认）
-  const handleToggleSold = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation()
-    setAccountsSold([account.id], !account.sold)
-  }, [account.id, account.sold, setAccountsSold])
-
   // 打开账号订阅门户（无痕浏览器）
   const handleOpenPortal = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -449,31 +442,6 @@ function AccountListRowComponent({
         >
           {account.idp}
         </Badge>
-
-        {/* 来源徽章：本应用注册产生（与筛选按钮同色系） */}
-        {account.source === 'registered' && (
-          <Badge
-            variant="outline"
-            className="text-[10px] h-5 px-1.5 font-medium border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
-            title={isEn ? 'Registered by this app' : '本应用注册产生'}
-          >
-            {isEn ? 'Reg' : '注册'}
-          </Badge>
-        )}
-
-        {/* 已售徽章：点击切换售出标记 */}
-        {account.sold && (
-          <Badge
-            variant="outline"
-            className="text-[10px] h-5 px-1.5 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 cursor-pointer hover:bg-amber-500/20 transition-colors"
-            title={account.soldAt
-              ? `${isEn ? 'Sold at' : '售出于'} ${new Date(account.soldAt).toLocaleString(isEn ? 'en-US' : 'zh-CN')}\n${isEn ? 'Click to unsold' : '点击取消已售'}`
-              : (isEn ? 'Click to unsold' : '点击取消已售')}
-            onClick={handleToggleSold}
-          >
-            {isEn ? 'Sold' : '已售'}
-          </Badge>
-        )}
 
         {/* 代理绑定徽章：可点击解绑（仅有绑定时显示） */}
         {boundProxy && (
