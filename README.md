@@ -272,6 +272,13 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.16 (2026-9-3) — Switch-to-Free Count Fix + Per-Account Link Fetching
+
+- **Fix**: "Switch All to Free / Check All Renewal" counts included accounts already scheduled to switch to Free at period end (their plan name stays Pro until then) — scheduled accounts are now excluded
+- **New**: Account picker (select all / clear) on the Batch Subscription "Links" tab — fetch subscription links only for checked accounts; leave unchecked to keep the all-upgradeable behavior, with live button counts
+
+---
+
 ### v1.7.15 (2026-9-3) — Quick GitHub Incognito Login + Register Shortcut + Esc to Deselect
 
 #### ⚡ Account Shortcuts

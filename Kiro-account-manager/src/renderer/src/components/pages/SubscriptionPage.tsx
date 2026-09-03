@@ -284,9 +284,15 @@ export function SubscriptionPage() {
   // 删除失败链接时是否同时删除账号本身（封号账号清理）
   const [deleteAlsoAccount, setDeleteAlsoAccount] = useState(false)
 
+  // 获取链接 tab 的账号勾选（空 = 全部可升级账号）
+  const [linkPickIds, setLinkPickIds] = useState<Set<string>>(new Set())
+
   // 批量并发获取订阅链接
   const handleBatchFetch = async () => {
-    const upgradeableAccounts = getUpgradeableAccounts()
+    const allUpgradeable = getUpgradeableAccounts()
+    const upgradeableAccounts = linkPickIds.size > 0
+      ? allUpgradeable.filter(a => a && linkPickIds.has(a.id))
+      : allUpgradeable
     if (upgradeableAccounts.length === 0 || !selectedPlanType) return
 
     setIsFetching(true)
@@ -1310,13 +1316,86 @@ export function SubscriptionPage() {
             </CardContent>
           </Card>
 
+          {/* 账号勾选：勾选后只对勾选账号获取链接，不勾 = 全部可升级 */}
+          <Card>
+            <CardContent className="py-3 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-medium">{isEn ? 'Accounts' : '选择账号'}</span>
+                <span className="text-xs text-muted-foreground">
+                  {linkPickIds.size > 0
+                    ? (isEn ? `${linkPickIds.size} selected` : `已选 ${linkPickIds.size} 个`)
+                    : (isEn
+                        ? `none selected = all ${upgradeableCount} upgradeable`
+                        : `不选 = 全部 ${upgradeableCount} 个可升级`)
+                  }
+                </span>
+                <div className="ml-auto flex gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setLinkPickIds(new Set(getUpgradeableAccounts().map(a => a!.id)))}
+                    disabled={isFetching || upgradeableCount === 0}
+                  >
+                    {isEn ? 'Select All' : '全选'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => setLinkPickIds(new Set())}
+                    disabled={isFetching || linkPickIds.size === 0}
+                  >
+                    {isEn ? 'Clear' : '清空'}
+                  </Button>
+                </div>
+              </div>
+              {upgradeableCount > 0 && (
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-border/60 p-2 space-y-0.5">
+                  {getUpgradeableAccounts().map(acc => {
+                    if (!acc) return null
+                    const picked = linkPickIds.has(acc.id)
+                    return (
+                      <label
+                        key={acc.id}
+                        className={cn(
+                          'flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-xs transition-colors',
+                          picked ? 'bg-primary/10' : 'hover:bg-muted/60'
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={picked}
+                          disabled={isFetching}
+                          onChange={() => {
+                            setLinkPickIds(prev => {
+                              const next = new Set(prev)
+                              if (next.has(acc.id)) next.delete(acc.id)
+                              else next.add(acc.id)
+                              return next
+                            })
+                          }}
+                          className="h-3.5 w-3.5 rounded"
+                        />
+                        <span className="truncate">{acc.email || acc.userId || acc.id}</span>
+                        <span className="ml-auto text-muted-foreground/70 flex-shrink-0">
+                          {acc.subscription?.title || acc.subscription?.type || 'Free'}
+                        </span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* 操作栏 */}
           <Card>
             <CardContent className="py-3 flex items-center gap-2 flex-wrap">
               <Button
                 size="sm"
                 onClick={handleBatchFetch}
-                disabled={isFetching || upgradeableCount === 0 || !selectedPlanType}
+                disabled={isFetching || (linkPickIds.size > 0 ? linkPickIds.size : upgradeableCount) === 0 || !selectedPlanType}
               >
                 {isFetching ? (
                   <Loader2 className="h-4 w-4 mr-1 animate-spin" />
@@ -1324,8 +1403,8 @@ export function SubscriptionPage() {
                   <CreditCard className="h-4 w-4 mr-1" />
                 )}
                 {isEn
-                  ? `Fetch Links (${upgradeableCount})`
-                  : `获取链接 (${upgradeableCount})`
+                  ? `Fetch Links (${linkPickIds.size > 0 ? linkPickIds.size : upgradeableCount})`
+                  : `获取链接 (${linkPickIds.size > 0 ? linkPickIds.size : upgradeableCount})`
                 }
               </Button>
 
@@ -2321,9 +2400,11 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
 
   const selectedCount = selectedIds.size
   const overageEnabledCount = subscribed.filter((a) => a?.usage?.resourceDetail?.overageEnabled === true).length
-  // 非 Free（可切）账号数：type/title 均为空也按 Free 处理，与升级页判定保持一致
+  // 非 Free（可切）账号数：type/title 均为空也按 Free 处理，与升级页判定保持一致；
+  // 已安排周期末切 Free（scheduledToFree，当前周期订阅名不变）的不再计入——切 Free 会跳过、续费检查已知不扣款
   const paidCount = subscribed.filter((a) => {
     if (!a) return false
+    if (a.subscription?.scheduledToFree) return false
     const type = (a.subscription?.type || '').toUpperCase()
     const title = (a.subscription?.title || '').toUpperCase()
     return !(type.includes('FREE') || title.includes('FREE') || (!type && !title)) && !!a.credentials?.accessToken
