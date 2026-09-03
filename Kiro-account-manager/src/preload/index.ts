@@ -353,6 +353,11 @@ const api = {
     return ipcRenderer.invoke('cancel-iam-sso-login')
   },
 
+  // 用无痕模式打开 https 页面（注册等快捷入口）
+  openUrlPrivate: (url: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('open-url-private', url)
+  },
+
   // 启动 Social Auth 登录 (Google/GitHub)
   startSocialLogin: (provider: 'Google' | 'Github', usePrivateMode?: boolean): Promise<{
     success: boolean

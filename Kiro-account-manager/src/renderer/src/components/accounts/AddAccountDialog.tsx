@@ -9,6 +9,8 @@ import { splitCredentialLine } from '@/lib/utils'
 interface AddAccountDialogProps {
   isOpen: boolean
   onClose: () => void
+  /** 快捷入口：打开后自动切到在线登录并直接发起 GitHub 无痕登录 */
+  autoGithubLogin?: boolean
 }
 
 interface BonusData {
@@ -60,7 +62,7 @@ interface VerifiedData {
 type ImportMode = 'oidc' | 'sso' | 'login'
 type LoginType = 'builderid' | 'google' | 'github' | 'iamsso'
 
-export function AddAccountDialog({ isOpen, onClose }: AddAccountDialogProps): React.ReactNode {
+export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccountDialogProps): React.ReactNode {
   const { addAccount, accounts, batchImportConcurrency, loginPrivateMode, groups, activeGroupTab } = useAccountsStore()
 
   // 检查账户是否已存在（同userId 或 同邮箱+同provider 才算重复）
@@ -466,13 +468,14 @@ export function AddAccountDialog({ isOpen, onClose }: AddAccountDialogProps): Re
   }
 
   // 启动 Social Auth 登录 (Google/GitHub)
-  const handleStartSocialLogin = async (socialProvider: 'Google' | 'Github') => {
+  const handleStartSocialLogin = async (socialProvider: 'Google' | 'Github', forcePrivate?: boolean) => {
     setIsLoggingIn(true)
     setError(null)
 
     try {
-      const result = await window.api.startSocialLogin(socialProvider, usePrivateMode)
-      
+      // forcePrivate：快捷入口强制无痕（不依赖全局隐私模式开关）
+      const result = await window.api.startSocialLogin(socialProvider, forcePrivate ?? usePrivateMode)
+
       if (!result.success) {
         setError(result.error || '启动登录失败')
         setIsLoggingIn(false)
@@ -483,6 +486,23 @@ export function AddAccountDialog({ isOpen, onClose }: AddAccountDialogProps): Re
       setIsLoggingIn(false)
     }
   }
+
+  // 快捷入口：打开即自动切到在线登录并发起 GitHub 无痕登录（每次打开只触发一次）
+  const autoGithubDoneRef = useRef(false)
+  useEffect(() => {
+    if (!isOpen) {
+      autoGithubDoneRef.current = false
+      return
+    }
+    if (!autoGithubLogin || autoGithubDoneRef.current) return
+    autoGithubDoneRef.current = true
+    setAuthMethod('social')
+    setLoginType('github')
+    // 快捷入口固定无痕（不依赖全局开关），同时同步 UI 开关状态
+    setUsePrivateMode(true)
+    handleStartSocialLogin('Github', true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, autoGithubLogin])
 
   // 复制 user_code
   const handleCopyUserCode = async () => {

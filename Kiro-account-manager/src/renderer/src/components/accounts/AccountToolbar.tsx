@@ -31,13 +31,16 @@ import {
   ArrowRightLeft,
   Zap,
   Activity,
-  KeyRound
+  KeyRound,
+  UserPlus
 } from 'lucide-react'
 
 export type AccountViewMode = 'grid' | 'list'
 
 interface AccountToolbarProps {
   onAddAccount: () => void
+  /** 快捷入口：打开添加对话框并自动发起 GitHub 无痕在线登录 */
+  onQuickGithubLogin: () => void
   onImport: () => void
   onExport: () => void
   viewMode: AccountViewMode
@@ -50,6 +53,7 @@ interface AccountToolbarProps {
 
 export function AccountToolbar({
   onAddAccount,
+  onQuickGithubLogin,
   onImport,
   onExport,
   viewMode,
@@ -351,6 +355,28 @@ export function AccountToolbar({
           <Button onClick={onAddAccount}>
             <Plus className="h-4 w-4 mr-1" />
             {isEn ? 'Add' : '添加账号'}
+          </Button>
+          {/* 快捷：无痕模式打开 Kiro 注册页 */}
+          <Button
+            variant="outline"
+            onClick={() => {
+              window.api.openUrlPrivate('https://app.kiro.dev/signin')
+            }}
+            title={isEn ? 'Open app.kiro.dev/signin in private/incognito mode' : '无痕模式打开 Kiro 注册页（app.kiro.dev/signin）'}
+          >
+            <UserPlus className="h-4 w-4 mr-1" />
+            {isEn ? 'Register' : '注册'}
+          </Button>
+          {/* 快捷：一键发起 GitHub 无痕在线登录 */}
+          <Button
+            variant="outline"
+            onClick={onQuickGithubLogin}
+            title={isEn ? 'Quick GitHub login (private/incognito mode)' : '一键 GitHub 无痕登录（在线添加账号）'}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 mr-1">
+              <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+            </svg>
+            GitHub
           </Button>
           <Button variant="outline" onClick={onImport}>
             <Upload className="h-4 w-4 mr-1" />

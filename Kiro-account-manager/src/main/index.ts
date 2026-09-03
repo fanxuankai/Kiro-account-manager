@@ -5546,10 +5546,19 @@ app.whenReady().then(async () => {
     return { success: true }
   })
 
+  // IPC: 用无痕模式打开任意 https 页面（快捷入口用）
+  ipcMain.handle('open-url-private', (_event, url: string) => {
+    if (typeof url !== 'string' || !/^https:\/\//.test(url)) {
+      return { success: false, error: 'Only https URLs are allowed' }
+    }
+    openBrowserInPrivateMode(url)
+    return { success: true }
+  })
+
   // IPC: 启动 Social Auth 登录 (Google/GitHub)
   ipcMain.handle('start-social-login', async (_event, provider: 'Google' | 'Github', usePrivateMode?: boolean) => {
     console.log(`[Login] Starting ${provider} Social Auth login... (privateMode: ${usePrivateMode})`)
-    
+
     const crypto = await import('crypto')
 
     // 生成 PKCE

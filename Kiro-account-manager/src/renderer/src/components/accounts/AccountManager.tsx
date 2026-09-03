@@ -25,11 +25,14 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     importFromExportData,
     importAccounts,
     selectedIds,
+    deselectAll,
     activeGroupTab,
     groups
   } = useAccountsStore()
 
   const [showAddDialog, setShowAddDialog] = useState(false)
+  // 快捷 GitHub 无痕登录：打开添加对话框后自动发起（关闭时复位）
+  const [addDialogAutoGithub, setAddDialogAutoGithub] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
@@ -43,6 +46,28 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   useEffect(() => {
     localStorage.setItem('accounts_viewMode', viewMode)
   }, [viewMode])
+
+  // Esc 取消选中账号；有对话框打开时不抢按键，让对话框自行处理关闭
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog) return
+      if (selectedIds.size > 0) {
+        e.preventDefault()
+        deselectAll()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [
+    showAddDialog,
+    editingAccount,
+    showGroupDialog,
+    showTagDialog,
+    showExportDialog,
+    selectedIds,
+    deselectAll
+  ])
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 
@@ -253,6 +278,10 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
         {/* 工具栏 */}
         <AccountToolbar
           onAddAccount={() => setShowAddDialog(true)}
+          onQuickGithubLogin={() => {
+            setAddDialogAutoGithub(true)
+            setShowAddDialog(true)
+          }}
           onImport={handleImport}
           onExport={handleExport}
           viewMode={viewMode}
@@ -285,7 +314,11 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       {/* 添加账号对话框 */}
       <AddAccountDialog
         isOpen={showAddDialog}
-        onClose={() => setShowAddDialog(false)}
+        autoGithubLogin={addDialogAutoGithub}
+        onClose={() => {
+          setShowAddDialog(false)
+          setAddDialogAutoGithub(false)
+        }}
       />
 
       {/* 编辑账号对话框 */}

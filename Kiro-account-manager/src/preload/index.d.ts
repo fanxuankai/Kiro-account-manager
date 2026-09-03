@@ -433,6 +433,9 @@ interface KiroApi {
   // 取消 IAM SSO 登录
   cancelIamSsoLogin: () => Promise<{ success: boolean }>
 
+  // 用无痕模式打开 https 页面（注册等快捷入口）
+  openUrlPrivate: (url: string) => Promise<{ success: boolean; error?: string }>
+
   // 启动 Social Auth 登录 (Google/GitHub)
   startSocialLogin: (provider: 'Google' | 'Github', usePrivateMode?: boolean) => Promise<{
     success: boolean
