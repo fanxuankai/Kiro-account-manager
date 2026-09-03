@@ -272,6 +272,18 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.18 (2026-9-4) — QR Code Payment for Fetched Links
+
+- **New**: "QR code" button on each fetched link — opens a dialog showing the payment link as a scannable QR code, so a phone can open the Stripe checkout page directly (no need to copy the link over); expired links show a regenerate hint in the dialog
+
+---
+
+### v1.7.17 (2026-9-4) — Switch-to-Free Execution Scope Fix
+
+- **Fix**: "Switch All to Free / Check All Renewal" only fixed the button count in v1.7.16 — the actual execution still submitted every paid account including scheduled ones. Count and execution now share one predicate (`isPaidSwitchable`), so the number shown equals the accounts actually processed
+
+---
+
 ### v1.7.16 (2026-9-3) — Switch-to-Free Count Fix + Per-Account Link Fetching
 
 - **Fix**: "Switch All to Free / Check All Renewal" counts included accounts already scheduled to switch to Free at period end (their plan name stays Pro until then) — scheduled accounts are now excluded

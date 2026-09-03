@@ -1,18 +1,19 @@
 import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import QRCode from 'qrcode'
 import { useAccountsStore } from '@/store/accounts'
 import { Button, Card, CardContent } from '../ui'
-import { 
-  CreditCard, 
-  ExternalLink, 
-  Copy, 
-  Download, 
-  Loader2, 
-  CheckCircle, 
-  XCircle, 
-  CheckSquare, 
-  Square, 
+import {
+  CreditCard,
+  ExternalLink,
+  Copy,
+  Download,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  CheckSquare,
+  Square,
   Minus,
   RefreshCw,
   Trash2,
@@ -23,7 +24,8 @@ import {
   Upload,
   ListChecks,
   X,
-  ArrowDownCircle
+  ArrowDownCircle,
+  QrCode as QrCodeIcon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -150,6 +152,8 @@ export function SubscriptionPage() {
   const [selectedLinkIds, setSelectedLinkIdsState] = useState<Set<string>>(_selectedLinkIds)
   // 批量导入链接对话框
   const [showImportDialog, setShowImportDialog] = useState(false)
+  // 扫码支付：当前展示二维码的链接
+  const [qrLink, setQrLink] = useState<SubscriptionLink | null>(null)
   // 快选：从顶部按设定数量分批选择可用链接（默认 10，跨页面记忆）
   const [quickPickCount, setQuickPickCountState] = useState(_quickPickCount)
   const [quickPickCursor, setQuickPickCursor] = useState(0)
@@ -1689,7 +1693,7 @@ export function SubscriptionPage() {
                   <span className="w-8 text-center">#</span>
                   <span className="flex-1">{isEn ? 'Email' : '邮箱'}</span>
                   <span className="w-20 text-center">{isEn ? 'Status' : '状态'}</span>
-                  <span className="w-24 text-center">{isEn ? 'Actions' : '操作'}</span>
+                  <span className="w-32 text-center">{isEn ? 'Actions' : '操作'}</span>
                 </div>
 
                 {/* 列表 */}
@@ -1754,7 +1758,7 @@ export function SubscriptionPage() {
                       </span>
 
                       {/* 操作 */}
-                      <span className="w-24 flex justify-center gap-1">
+                      <span className="w-32 flex justify-center gap-1">
                         {(link.status === 'success' || link.status === 'expired') && link.url && (
                           <>
                             <button
@@ -1763,6 +1767,13 @@ export function SubscriptionPage() {
                               title={isEn ? 'Open in incognito' : '无痕打开'}
                             >
                               <ExternalLink className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setQrLink(link)}
+                              className="p-1 rounded hover:bg-muted"
+                              title={isEn ? 'Show QR code' : '显示二维码'}
+                            >
+                              <QrCodeIcon className="h-3.5 w-3.5" />
                             </button>
                             <button
                               onClick={() => handleCopyLink(link.url!)}
@@ -1821,6 +1832,9 @@ export function SubscriptionPage() {
             onImport={handleImportLinks}
             isEn={isEn}
           />
+
+          {/* 扫码支付二维码对话框 */}
+          <QrPayDialog link={qrLink} onClose={() => setQrLink(null)} isEn={isEn} />
         </>
       )}
     </div>
@@ -1898,6 +1912,84 @@ function ImportLinksDialog({ open, onClose, onImport, isEn }: ImportLinksDialogP
   )
 }
 
+// ============ 扫码支付二维码对话框 ============
+
+interface QrPayDialogProps {
+  /** 要展示二维码的链接（null = 关闭） */
+  link: SubscriptionLink | null
+  onClose: () => void
+  isEn: boolean
+}
+
+function QrPayDialog({ link, onClose, isEn }: QrPayDialogProps): React.ReactNode {
+  const [dataUrl, setDataUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const url = link?.url
+
+  useEffect(() => {
+    if (!url) return
+    let cancelled = false
+    setDataUrl(null)
+    setFailed(false)
+    // Stripe 支付链接较长，用中等纠错 + 白底保证扫码成功率
+    QRCode.toDataURL(url, { width: 260, margin: 2, errorCorrectionLevel: 'M' })
+      .then((d) => { if (!cancelled) setDataUrl(d) })
+      .catch(() => { if (!cancelled) setFailed(true) })
+    return () => { cancelled = true }
+  }, [url])
+
+  // Esc 关闭
+  useEffect(() => {
+    if (!link) return
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [link, onClose])
+
+  if (!link) return null
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-background rounded-xl shadow-2xl w-full max-w-sm animate-in fade-in zoom-in-95 duration-200">
+        {/* 标题栏 */}
+        <div className="flex items-center justify-between px-5 py-3 border-b">
+          <div className="flex items-center gap-2 min-w-0">
+            <QrCodeIcon className="h-5 w-5 text-primary flex-shrink-0" />
+            <h2 className="text-base font-semibold truncate" title={link.email}>{link.email}</h2>
+          </div>
+          <Button variant="ghost" size="sm" className="h-8 w-8 p-0 rounded-lg hover:bg-red-500 hover:text-white transition-colors" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+
+        {/* 二维码 */}
+        <div className="px-5 py-4 flex flex-col items-center gap-3">
+          {failed
+            ? <p className="text-sm text-red-500 py-10">{isEn ? 'Failed to generate QR code' : '二维码生成失败'}</p>
+            : dataUrl
+              ? <img
+                  src={dataUrl}
+                  alt="payment QR code"
+                  className="w-[260px] h-[260px] rounded-lg border border-border/60 bg-white p-1"
+                />
+              : <Loader2 className="h-8 w-8 animate-spin text-muted-foreground my-24" />}
+
+          <p className="text-xs text-muted-foreground text-center">
+            {isEn ? 'Scan with your phone to open the payment page' : '用手机扫码打开支付页面'}
+          </p>
+          {link.status === 'expired' && (
+            <p className="text-xs text-amber-600 text-center">
+              {isEn ? '⚠ This link may have expired — regenerate if payment fails' : '⚠ 该链接可能已过期，无法支付时请重新生成'}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 // ============ 订阅管理 Tab：批量取消 + 批量关超额 ============
 
 type AccountType = ReturnType<typeof useAccountsStore.getState>['accounts'] extends Map<string, infer T> ? T : never
@@ -1929,6 +2021,18 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
   const toggleSelectAll = (): void => {
     if (selectedIds.size === subscribed.length) setSelectedIds(new Set())
     else setSelectedIds(new Set(subscribed.map((a) => a!.id)))
+  }
+
+  // 可切/可查的付费账号判定：type/title 均为空也按 Free 处理，与升级页判定保持一致；
+  // 已安排周期末切 Free（scheduledToFree）的排除。按钮计数（paidCount）与批量执行
+  // （检查续费 / 切 Free）必须共用本判定，避免「数字排除、执行仍全量」的不一致
+  const isPaidSwitchable = (a: AccountType | null | undefined): boolean => {
+    if (!a) return false
+    if (a.subscription?.scheduledToFree) return false
+    const type = (a.subscription?.type || '').toUpperCase()
+    const title = (a.subscription?.title || '').toUpperCase()
+    const isFreeTier = type.includes('FREE') || title.includes('FREE') || (!type && !title)
+    return !isFreeTier && !!a.credentials?.accessToken
   }
 
   /** 批量打开订阅门户（用于取消订阅） */
@@ -2110,13 +2214,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
     const targets = (mode === 'selected'
       ? subscribed.filter((a) => a && selectedIds.has(a.id))
       : subscribed
-    ).filter((a) => {
-      if (!a) return false
-      const type = (a.subscription?.type || '').toUpperCase()
-      const title = (a.subscription?.title || '').toUpperCase()
-      const isFreeTier = type.includes('FREE') || title.includes('FREE') || (!type && !title)
-      return !isFreeTier && !!a.credentials?.accessToken
-    })
+    ).filter(isPaidSwitchable)
     if (targets.length === 0) {
       alert(isEn ? 'No paid accounts to check' : '没有可检查的付费账号')
       return
@@ -2286,13 +2384,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
     const targets = (mode === 'selected'
       ? subscribed.filter((a) => a && selectedIds.has(a.id))
       : subscribed
-    ).filter((a) => {
-      if (!a) return false
-      const type = (a.subscription?.type || '').toUpperCase()
-      const title = (a.subscription?.title || '').toUpperCase()
-      const isFreeTier = type.includes('FREE') || title.includes('FREE') || (!type && !title)
-      return !isFreeTier && !!a.credentials?.accessToken
-    })
+    ).filter(isPaidSwitchable)
     if (targets.length === 0) {
       alert(isEn ? 'No paid accounts to switch' : '没有可切换的付费账号')
       return
@@ -2400,15 +2492,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
 
   const selectedCount = selectedIds.size
   const overageEnabledCount = subscribed.filter((a) => a?.usage?.resourceDetail?.overageEnabled === true).length
-  // 非 Free（可切）账号数：type/title 均为空也按 Free 处理，与升级页判定保持一致；
-  // 已安排周期末切 Free（scheduledToFree，当前周期订阅名不变）的不再计入——切 Free 会跳过、续费检查已知不扣款
-  const paidCount = subscribed.filter((a) => {
-    if (!a) return false
-    if (a.subscription?.scheduledToFree) return false
-    const type = (a.subscription?.type || '').toUpperCase()
-    const title = (a.subscription?.title || '').toUpperCase()
-    return !(type.includes('FREE') || title.includes('FREE') || (!type && !title)) && !!a.credentials?.accessToken
-  }).length
+  // 非 Free（可切）账号数，与批量执行共用 isPaidSwitchable，保证按钮数字 = 实际处理数
+  const paidCount = subscribed.filter(isPaidSwitchable).length
 
   return (
     <>
