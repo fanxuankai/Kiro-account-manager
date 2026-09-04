@@ -200,3 +200,14 @@ export function formatDateSafe(d: unknown): string {
     return ''
   }
 }
+
+// ============ Token 到期显示 ============
+
+/** token 剩余时间分级：normal（>30 分钟）/ soon（≤30 分钟）/ expired（已过期） */
+export function tokenExpiryLevel(expiresAt: number | undefined): 'normal' | 'soon' | 'expired' | 'none' {
+  if (!expiresAt) return 'none'
+  const left = expiresAt - Date.now()
+  if (left <= 0) return 'expired'
+  if (left <= 30 * 60 * 1000) return 'soon'
+  return 'normal'
+}

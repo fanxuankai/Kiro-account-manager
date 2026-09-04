@@ -272,6 +272,44 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.24 (2026-9-4) — Auto-Refresh Indicator Wording Rework
+
+- **Improved**: indicator now uses meaningful icons + plain-language text — "✓ Token keep-alive OK · Ns/min ago" when healthy; "Renewed N tokens · N min ago" when it just did work; explicit "⚠ keep-alive stalled" with restart advice when the heartbeat is late; the off state explains the consequence (accounts go offline) and where to re-enable; tooltip leads with a one-line explanation of what the feature does, and times are shown as natural "s / min ago"
+
+---
+
+### v1.7.23 (2026-9-4) — Fix Tag Menu Colors Not Showing
+
+- **Fix**: checkbox / partial-check colors in the toolbar tag batch menu were invisible or too faint — tag colors are stored as ARGB (#AARRGGBB), which CSS misreads as #RRGGBBAA with a high transparency (e.g. 3% for "subscribed", 27% for "downgraded"); now converted via `toRgba` and displayed correctly
+
+---
+
+### v1.7.22 (2026-9-4) — Auto-Refresh Live Status on Accounts Page
+
+- **New**: "Auto refresh" live indicator on the accounts toolbar — green dot + last check time (main-process keep-alive pool reports a heartbeat every 60s); shows renewed/total when tokens were refreshed, turns amber if no heartbeat for 3+ minutes, and grey "off" when disabled; tooltip details both schedulers (token keep-alive & info sync)
+- **New**: token time-remaining badge on each account list row (grey >30m / amber ≤30m / red expired), so you can see at a glance whether keep-alive is holding
+
+---
+
+### v1.7.21 (2026-9-4) — Card-Declined Downgrade Detection (managementTarget)
+
+- **Enhanced**: downgraded-Free detection now also checks `managementTarget=MANAGE` — Free accounts with a Stripe subscription record (including those downgraded after a card decline during Pro signup) are excluded from upgradeable; brand-new accounts report `PURCHASE` and stay eligible. The old heuristics (willRenew/renewalCheckedAt) remain as fallback
+
+---
+
+### v1.7.20 (2026-9-4) — Filter Extended: Free Accounts with Used Credits
+
+- **Enhanced**: the "Exclude unsuitable Free" switch (formerly "Exclude downgraded Free") now also excludes Free accounts with credits already used (usage > 0) — not brand-new, not suitable for subscription; pre-flight badges show "Downgraded Free: N" and "Credits used: N" separately
+
+---
+
+### v1.7.19 (2026-9-4) — Filter Downgraded Free Accounts from Upgrade List
+
+- **New**: "Exclude downgraded Free" switch (on by default, remembered) in the Links tab pre-flight panel — Free accounts downgraded from a paid plan (switched to Free / stopped renewing / already Free on the portal) no longer count toward the upgradeable number or the account picker; a separate badge shows "Downgraded Free: N"
+- **Tracking**: every "paid → Free" transition now writes a permanent `wasPaid` flag that survives account refreshes (even when the plan type changes); existing accounts are recognized heuristically (Free with `willRenew:false` / `renewalCheckedAt` is the signature of an immediate switch-to-Free)
+
+---
+
 ### v1.7.18 (2026-9-4) — QR Code Payment for Fetched Links
 
 - **New**: "QR code" button on each fetched link — opens a dialog showing the payment link as a scannable QR code, so a phone can open the Stripe checkout page directly (no need to copy the link over); expired links show a regenerate hint in the dialog

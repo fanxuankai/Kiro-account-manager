@@ -30,6 +30,7 @@ import {
   StatusLabelsZh,
   StatusLabelsEn,
   formatTokenExpiry,
+  tokenExpiryLevel,
   isBannedError
 } from './_helpers'
 
@@ -442,6 +443,27 @@ function AccountListRowComponent({
         >
           {account.idp}
         </Badge>
+
+        {/* Token 剩余时间（自动续期保活的状态一眼可见：正常灰 / 半小时内橙 / 过期红） */}
+        {account.credentials.expiresAt ? (() => {
+          const level = tokenExpiryLevel(account.credentials.expiresAt)
+          const leftText = formatTokenExpiry(account.credentials.expiresAt, isEn)
+          return (
+            <Badge
+              variant="outline"
+              className={cn(
+                'text-[10px] h-5 px-1.5 font-normal min-w-[64px] flex items-center justify-center',
+                level === 'expired' && 'border-red-500/40 text-red-600 dark:text-red-400 bg-red-500/10',
+                level === 'soon' && 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10'
+              )}
+              title={isEn
+                ? `Access token expires: ${new Date(account.credentials.expiresAt).toLocaleString()} (${leftText})`
+                : `访问令牌到期：${new Date(account.credentials.expiresAt).toLocaleString()}（${leftText}）`}
+            >
+              {leftText}
+            </Badge>
+          )
+        })() : null}
 
         {/* 代理绑定徽章：可点击解绑（仅有绑定时显示） */}
         {boundProxy && (

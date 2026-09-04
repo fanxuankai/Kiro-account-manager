@@ -5,7 +5,7 @@ import { useTranslation } from '@/hooks/useTranslation'
 import { AccountFilterPanel } from './AccountFilter'
 import { toRgba } from './_helpers'
 import { cn } from '@/lib/utils'
-import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon } from 'lucide-react'
+import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon, CheckCircle, AlertTriangle, Power } from 'lucide-react'
 import {
   Search,
   Plus,
@@ -634,22 +634,24 @@ export function AccountToolbar({
                     const count = tagCounts.get(tag.id) || 0
                     const isAll = count === total
                     const isPartial = count > 0 && count < total
-                    
+                    // tag.color 为 ARGB（#AARRGGBB），直接进 CSS 会被当作 #RRGGBBAA 解析成高透明度；必须经 toRgba 转换
+                    const tagColor = toRgba(tag.color || '#888888')
+
                     return (
                       <button
                         key={tag.id}
                         className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted text-left"
                         onClick={() => handleToggleTag(tag.id)}
                       >
-                        <div 
+                        <div
                           className="w-4 h-4 rounded border flex items-center justify-center shrink-0"
-                          style={{ 
-                            backgroundColor: isAll ? (tag.color || '#888') : 'transparent',
-                            borderColor: tag.color || '#888'
+                          style={{
+                            backgroundColor: isAll ? tagColor : 'transparent',
+                            borderColor: tagColor
                           }}
                         >
                           {isAll && <Check className="h-3 w-3 text-white" />}
-                          {isPartial && <Minus className="h-3 w-3" style={{ color: tag.color || '#888' }} />}
+                          {isPartial && <Minus className="h-3 w-3" style={{ color: tagColor }} />}
                         </div>
                         <span className="truncate flex-1">{tag.name}</span>
                         {isPartial && (
@@ -923,8 +925,106 @@ export function AccountToolbar({
               <X className="h-4 w-4" />
             </Button>
           )}
+
+          {/* 自动刷新实时指示器：主进程刷新池心跳（60s 一轮） */}
+          <AutoRefreshIndicator />
         </div>
       </div>
     </div>
+  )
+}
+
+/** 自动刷新实时指示器：主进程 token 刷新池每 60s 检查一轮并心跳上报，让用户确认保活在跑 */
+function AutoRefreshIndicator(): React.ReactNode {
+  const { t } = useTranslation()
+  const isEn = t('common.unknown') === 'Unknown'
+  const { autoRefreshEnabled, autoRefreshInterval, mainPoolHeartbeat } = useAccountsStore()
+  // 10s 更新一次"XX 秒/分钟前"文本（轻量 tick，不随账号数据重渲染）
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 10_000)
+    return () => { clearInterval(timer) }
+  }, [])
+
+  // 人话时间：<60s → "N 秒前"，更长 → "N 分钟前"
+  const agoText = (secs: number): string => {
+    if (secs < 60) return isEn ? `${secs}s ago` : `${secs} 秒前`
+    const m = Math.round(secs / 60)
+    return isEn ? `${m} min ago` : `${m} 分钟前`
+  }
+
+  // 已关闭：说明后果 + 去哪开
+  if (!autoRefreshEnabled) {
+    return (
+      <span
+        className="ml-auto text-[11px] text-muted-foreground/70 flex items-center gap-1.5 flex-shrink-0 cursor-help"
+        title={isEn
+          ? 'Tokens are NOT renewed automatically — accounts go offline once they expire.\nRe-enable in Settings.'
+          : 'Token 不会自动续期，到期后账号会掉线。\n可在「设置」中重新开启。'}
+      >
+        <Power className="h-3.5 w-3.5" />
+        {isEn ? 'Auto refresh off' : '自动刷新已关'}
+      </span>
+    )
+  }
+
+  const hb = mainPoolHeartbeat
+  const secsAgo = hb ? Math.max(0, Math.round((now - hb.at) / 1000)) : null
+  // 启动后首轮检查在 ~15s，之后每 60s 一次；超过 3 分钟无心跳视为异常
+  const healthy = hb != null && secsAgo != null && secsAgo <= 180
+
+  // 启动中（还没收到首轮心跳）
+  if (!hb) {
+    return (
+      <span
+        className="ml-auto text-[11px] text-muted-foreground flex items-center gap-1.5 flex-shrink-0"
+        title={isEn ? 'First check starts ~15s after launch' : '应用启动约 15 秒后开始第一轮检查'}
+      >
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        {isEn ? 'Keep-alive starting…' : '保活启动中…'}
+      </span>
+    )
+  }
+
+  // 三行说明：是什么 / 两套调度 / 最近一轮结果
+  const title = [
+    isEn
+      ? `Keeps accounts online: auto-renews tokens before they expire`
+      : `让账号保持在线：Token 到期前自动续期`,
+    isEn
+      ? `· Token keep-alive: scans every 60s (main process)`
+      : `· Token 保活：每 60 秒巡检一轮（主进程）`,
+    isEn
+      ? `· Info sync: every ${autoRefreshInterval} min (usage / subscription / ban status)`
+      : `· 信息同步：每 ${autoRefreshInterval} 分钟一轮（用量 / 订阅 / 封禁状态）`,
+    healthy
+      ? (isEn
+          ? `Last scan ${agoText(secsAgo!)} — ${hb.refreshed === 0 ? 'nothing to renew, all tokens fresh' : `renewed ${hb.refreshed} token(s): ${hb.success} ok${hb.failed > 0 ? `, ${hb.failed} failed` : ''}`}`
+          : `最近巡检 ${agoText(secsAgo!)} — ${hb.refreshed === 0 ? '所有 Token 都新鲜，无需续期' : `已续期 ${hb.refreshed} 个：成功 ${hb.success}${hb.failed > 0 ? ` / 失败 ${hb.failed}` : ''}`}`)
+      : (isEn
+          ? `No heartbeat for ${Math.floor(secsAgo! / 60)} min — the scheduler may be stuck. Try restarting the app.`
+          : `已有 ${Math.floor(secsAgo! / 60)} 分钟没有巡检心跳，调度可能卡住了，建议重启应用。`)
+  ].join('\n')
+
+  return (
+    <span
+      className={cn(
+        'ml-auto text-[11px] flex items-center gap-1.5 flex-shrink-0 cursor-help',
+        healthy ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
+      )}
+      title={title}
+    >
+      {healthy
+        ? <CheckCircle className="h-3.5 w-3.5" />
+        : <AlertTriangle className="h-3.5 w-3.5 animate-pulse" />}
+      {/* 本轮有续期 → 显示具体动作；无续期 → 显示"正常"状态词 */}
+      {healthy && hb.refreshed > 0
+        ? (isEn
+            ? `Renewed ${hb.refreshed} token${hb.failed > 0 ? ` (${hb.success} ok)` : ''} · ${agoText(secsAgo!)}`
+            : `刚续期 ${hb.refreshed} 个 Token${hb.failed > 0 ? `（成功 ${hb.success}）` : ''} · ${agoText(secsAgo!)}`)
+        : (isEn
+            ? (healthy ? `Keep-alive OK · ${agoText(secsAgo!)}` : `Keep-alive stalled · ${agoText(secsAgo!)}`)
+            : (healthy ? `Token 保活正常 · ${agoText(secsAgo!)}` : `保活没动静了 · ${agoText(secsAgo!)}`))}
+    </span>
   )
 }

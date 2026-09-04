@@ -70,6 +70,7 @@ export interface AccountSubscription {
   willRenew?: boolean // 是否将于下周期自动续费（Stripe cancel_at_period_end 取反；点"检查续费"时刷新）
   renewalCheckedAt?: number // 上次检查续费状态的时间戳
   scheduledToFree?: boolean // 已安排周期末切 Free（网页"周期末生效"降级）：本周期仍付费、下周期起 $0
+  wasPaid?: boolean // 曾是付费订阅（切 Free / 到期不续费 / 门户侧已降级而来）——此类 Free 不适合再次升级订阅，刷新时永久保留
 }
 
 /**

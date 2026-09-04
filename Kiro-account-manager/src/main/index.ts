@@ -2037,10 +2037,20 @@ async function runMainPoolTokenRefreshTick(): Promise<void> {
       })
     }
 
-    if (toRefresh.length === 0) return
+    if (toRefresh.length === 0) {
+      // 心跳上报：让渲染层知道调度器活着（无需刷新也是一次正常检查）
+      mainWindow?.webContents.send('main-pool-refresh-heartbeat', { at: Date.now(), refreshed: 0, success: 0, failed: 0 })
+      return
+    }
     console.log(`[MainPoolRefresh] ${toRefresh.length} token(s) expiring within ${Math.round(leadMs / 60000)}min, refreshing...`)
     // syncInfo=false：仅刷 token；用量/订阅等信息同步由渲染进程定时器负责，避免主进程跑重活
-    await backgroundBatchRefreshImpl(toRefresh, concurrency, false)
+    const r = await backgroundBatchRefreshImpl(toRefresh, concurrency, false)
+    mainWindow?.webContents.send('main-pool-refresh-heartbeat', {
+      at: Date.now(),
+      refreshed: toRefresh.length,
+      success: r.successCount,
+      failed: r.failedCount
+    })
   } catch (err) {
     console.warn('[MainPoolRefresh] tick failed:', err instanceof Error ? err.message : err)
   }

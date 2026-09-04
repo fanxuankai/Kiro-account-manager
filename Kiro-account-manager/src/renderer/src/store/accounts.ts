@@ -273,6 +273,9 @@ interface AccountsState {
   autoRefreshConcurrency: number // 自动刷新并发数
   autoRefreshSyncInfo: boolean // 刷新时是否同步检测账户信息（用量、订阅、封禁状态）
   statusCheckInterval: number // 分钟
+  /** 主进程 token 刷新池最近一次心跳（每 60s 检查一轮后上报；refreshed=0 表示本轮无需刷新）。仅内存态，不持久化 */
+  mainPoolHeartbeat: { at: number; refreshed: number; success: number; failed: number } | null
+  setMainPoolHeartbeat: (info: { at: number; refreshed: number; success: number; failed: number } | null) => void
 
   // 主动续期开关（持久化在 main 进程的 electron-store；这里只是镜像，不写 saveToStorage）
   proactiveRenewalEnabled: boolean
@@ -570,6 +573,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   autoRefreshConcurrency: 100,
   autoRefreshSyncInfo: true,
   statusCheckInterval: 60,
+  mainPoolHeartbeat: null,
+  setMainPoolHeartbeat: (info) => { set({ mainPoolHeartbeat: info }) },
   proactiveRenewalEnabled: false,
   proactiveRenewalLeadMinutes: 15,
   privacyMode: false,
@@ -655,6 +660,12 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
               }
             }
           }
+        }
+        // wasPaid（曾是付费订阅）是历史事实，主进程刷新返回的 subscription 不含该字段，
+        // 无论订阅类型是否变化都保留，否则"降级 Free"账号刷新一次就丢失过滤依据
+        if (incoming && incoming.wasPaid === undefined && account.subscription?.wasPaid === true) {
+          const base = merged.subscription ?? incoming
+          merged = { ...merged, subscription: { ...base, wasPaid: true } }
         }
         accounts.set(id, { ...account, ...merged })
       }

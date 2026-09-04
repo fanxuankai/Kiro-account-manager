@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import QRCode from 'qrcode'
 import { useAccountsStore } from '@/store/accounts'
-import { Button, Card, CardContent } from '../ui'
+import { Button, Card, CardContent, Switch } from '../ui'
 import {
   CreditCard,
   ExternalLink,
@@ -37,7 +37,31 @@ const jitterDelay = (): Promise<void> => new Promise((resolve) => setTimeout(res
  * 订阅升级前预检：从一个账号视角判断它是否可参与批量升级
  * 返回 { eligible: bool, reason?: string }
  */
-type EligibilityReason = 'ok' | 'no-token' | 'already-pro' | 'banned' | 'cant-upgrade' | 'unknown-status'
+type EligibilityReason = 'ok' | 'no-token' | 'already-pro' | 'banned' | 'cant-upgrade' | 'unknown-status' | 'downgraded-free' | 'used-free'
+
+/**
+ * 是否为"付费降级而来"的 Free 账号（曾订阅 Pro 后切 Free / 到期不续费变 Free）——不适合再次升级订阅
+ * 显式标记 wasPaid 为主依据；存量账号用启发式兜底：
+ * - managementTarget=MANAGE：Stripe 订阅系统有记录（订阅中/已排期/拒卡降级），全新号为 PURCHASE
+ * - 立即切 Free 会写入 willRenew:false / renewalCheckedAt，天然 Free 账号不会带这些标记
+ */
+function wasPaidBeforeFree(account: ReturnType<typeof useAccountsStore.getState>['accounts'] extends Map<string, infer T> ? T : never): boolean {
+  const s = account?.subscription
+  if (!s) return false
+  if (s.wasPaid === true || s.scheduledToFree === true) return true
+  const type = (s.type || '').toUpperCase()
+  const title = (s.title || '').toUpperCase()
+  const isFreeTier = type.includes('FREE') || title.includes('FREE')
+  if (!isFreeTier) return false
+  if ((s.managementTarget || '').toUpperCase() === 'MANAGE') return true
+  return s.willRenew === false || s.renewalCheckedAt != null
+}
+
+/** Free 账号已使用过积分（usage.current > 0）——非全新账号，不适合用来订阅 */
+function hasUsedCredits(account: ReturnType<typeof useAccountsStore.getState>['accounts'] extends Map<string, infer T> ? T : never): boolean {
+  return (account?.usage?.current ?? 0) > 0
+}
+
 function checkUpgradeEligibility(account: ReturnType<typeof useAccountsStore.getState>['accounts'] extends Map<string, infer T> ? T : never): { eligible: boolean; reason: EligibilityReason; detail?: string } {
   if (!account.credentials?.accessToken) return { eligible: false, reason: 'no-token' }
 
@@ -52,6 +76,14 @@ function checkUpgradeEligibility(account: ReturnType<typeof useAccountsStore.get
   }
   if (!isFreeTier) {
     return { eligible: false, reason: 'unknown-status', detail: account.subscription?.title || account.subscription?.type || '未检测' }
+  }
+  // 付费降级而来的 Free：Stripe 侧有订阅/取消历史，不适合再次升级（是否过滤由开关控制）
+  if (wasPaidBeforeFree(account)) {
+    return { eligible: false, reason: 'downgraded-free' }
+  }
+  // 已使用积分的 Free：非全新账号，不适合用来订阅（是否过滤由开关控制）
+  if (hasUsedCredits(account)) {
+    return { eligible: false, reason: 'used-free', detail: `${account.usage?.current ?? 0}` }
   }
 
   // 封禁检测
@@ -119,6 +151,10 @@ let _selectedLinkIds: Set<string> = new Set()
 let _activeTab: SubTab = 'overage'
 let _overageItems: OverageItem[] = []
 let _quickPickCount = 10
+// 过滤"降级 Free"（曾订阅后切 Free 的账号，不适合再次升级）开关，跨会话记忆，默认开
+let _filterDowngradedFree = (() => {
+  try { return localStorage.getItem('subscription_filterDowngradedFree') !== 'off' } catch { return true }
+})()
 
 /**
  * 解析批量导入的链接文本：每行一条，支持纯 URL 或「邮箱<分隔符>URL」
@@ -156,6 +192,13 @@ export function SubscriptionPage() {
   const [qrLink, setQrLink] = useState<SubscriptionLink | null>(null)
   // 快选：从顶部按设定数量分批选择可用链接（默认 10，跨页面记忆）
   const [quickPickCount, setQuickPickCountState] = useState(_quickPickCount)
+  // 过滤降级 Free：开启后"可升级"不含曾订阅后降为 Free 的账号
+  const [filterDowngradedFree, setFilterDowngradedFreeState] = useState(_filterDowngradedFree)
+  const setFilterDowngradedFree = (on: boolean): void => {
+    _filterDowngradedFree = on
+    try { localStorage.setItem('subscription_filterDowngradedFree', on ? 'on' : 'off') } catch { /* no-op */ }
+    setFilterDowngradedFreeState(on)
+  }
   const [quickPickCursor, setQuickPickCursor] = useState(0)
   const setQuickPickCount = (n: number) => { _quickPickCount = n; setQuickPickCountState(n) }
   
@@ -214,19 +257,20 @@ export function SubscriptionPage() {
 
   // 获取可升级的 FREE 账户（从选中或全部）
   const getUpgradeableAccounts = useCallback(() => {
-    const source = selectedIds.size > 0 
+    const source = selectedIds.size > 0
       ? Array.from(selectedIds).map(id => accounts.get(id)).filter(Boolean)
       : Array.from(accounts.values())
-    
+
     return source.filter(acc => {
       if (!acc) return false
       const type = (acc.subscription?.type || '').toUpperCase()
       const title = (acc.subscription?.title || '').toUpperCase()
       const isFreeTier = type.includes('FREE') || title.includes('FREE') || (!type && !title)
       const hasToken = !!acc.credentials?.accessToken
-      return isFreeTier && hasToken
+      // 开关开启时排除"不适合升级的 Free"：降级而来（曾订阅后切 Free）或已使用积分
+      return isFreeTier && hasToken && !(filterDowngradedFree && (wasPaidBeforeFree(acc) || hasUsedCredits(acc)))
     })
-  }, [accounts, selectedIds])
+  }, [accounts, selectedIds, filterDowngradedFree])
 
   // 订阅升级前预检：基于"选中账号或全部账号"做完整检查，列出可升级 / 不可升级原因
   const preflightReport = useMemo(() => {
@@ -238,17 +282,18 @@ export function SubscriptionPage() {
     for (const acc of source) {
       if (!acc) continue
       const r = checkUpgradeEligibility(acc)
-      if (r.eligible) eligible.push(acc)
+      // 开关关闭时"降级 Free / 已用积分"不算阻塞，计入可升级（与获取链接数字保持一致）
+      if (r.eligible || (!filterDowngradedFree && (r.reason === 'downgraded-free' || r.reason === 'used-free'))) eligible.push(acc)
       else blocked.push({ account: acc, reason: r.reason, detail: r.detail })
     }
     // 按 reason 分桶
     const reasonBuckets: Record<EligibilityReason, number> = {
       'ok': eligible.length,
-      'no-token': 0, 'already-pro': 0, 'banned': 0, 'cant-upgrade': 0, 'unknown-status': 0
+      'no-token': 0, 'already-pro': 0, 'banned': 0, 'cant-upgrade': 0, 'unknown-status': 0, 'downgraded-free': 0, 'used-free': 0
     }
     for (const b of blocked) reasonBuckets[b.reason]++
     return { eligible, blocked, reasonBuckets, totalScanned: source.length }
-  }, [accounts, selectedIds])
+  }, [accounts, selectedIds, filterDowngradedFree])
 
   // 加载可用订阅计划（用任一可用账户调用）
   const handleLoadPlans = async () => {
@@ -1221,6 +1266,18 @@ export function SubscriptionPage() {
                       : `扫描 ${preflightReport.totalScanned} 个账号：${preflightReport.eligible.length} 可升级，${preflightReport.blocked.length} 不可升级`
                     }
                   </span>
+                    {/* 过滤不适合升级的 Free 开关：降级而来（曾订阅后切 Free）或已使用积分的账号不再计入可升级 */}
+                  <label className="ml-auto flex items-center gap-2 cursor-pointer select-none">
+                    <span className="text-xs text-muted-foreground" title={isEn
+                      ? 'Free accounts downgraded from a paid plan, or with credits already used, are not eligible for subscription'
+                      : '从付费降为 Free 的账号（切 Free / 到期不续费）及已使用积分的 Free 账号不适合用来订阅，开启后不计入可升级'}>
+                      {isEn ? 'Exclude unsuitable Free' : '过滤不适用 Free'}
+                    </span>
+                    <Switch
+                      checked={filterDowngradedFree}
+                      onCheckedChange={setFilterDowngradedFree}
+                    />
+                  </label>
                 </div>
 
                 {/* 阻塞分类徽章 */}
@@ -1254,6 +1311,22 @@ export function SubscriptionPage() {
                       <span className="px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 inline-flex items-center gap-1">
                         <AlertTriangle className="h-2.5 w-2.5" />
                         {isEn ? `Unknown status: ${preflightReport.reasonBuckets['unknown-status']}` : `状态未知 ${preflightReport.reasonBuckets['unknown-status']}`}
+                      </span>
+                    )}
+                    {preflightReport.reasonBuckets['downgraded-free'] > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 inline-flex items-center gap-1" title={isEn
+                        ? 'Free accounts downgraded from a paid plan (switched to Free / stopped renewing) — not suitable for re-subscription'
+                        : '从付费降为 Free 的账号（切 Free / 到期不续费），不适合再次订阅'}>
+                        <ArrowDownCircle className="h-2.5 w-2.5" />
+                        {isEn ? `Downgraded Free: ${preflightReport.reasonBuckets['downgraded-free']}` : `降级 Free ${preflightReport.reasonBuckets['downgraded-free']}`}
+                      </span>
+                    )}
+                    {preflightReport.reasonBuckets['used-free'] > 0 && (
+                      <span className="px-2 py-0.5 rounded bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 inline-flex items-center gap-1" title={isEn
+                        ? 'Free accounts with credits already used — not brand-new, not suitable for subscription'
+                        : '已使用过积分的 Free 账号，非全新账号，不适合用来订阅'}>
+                        <Zap className="h-2.5 w-2.5" />
+                        {isEn ? `Credits used: ${preflightReport.reasonBuckets['used-free']}` : `已用积分 ${preflightReport.reasonBuckets['used-free']}`}
                       </span>
                     )}
                   </div>
@@ -2170,6 +2243,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             title: 'Kiro Free',
             willRenew: undefined,
             renewalCheckedAt: undefined,
+            wasPaid: true,
             ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
           } as AccountType['subscription']
         })
@@ -2182,6 +2256,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             ...acc.subscription,
             willRenew: false,
             scheduledToFree: true,
+            wasPaid: true,
             renewalCheckedAt: Date.now(),
             ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
           } as AccountType['subscription']
@@ -2259,6 +2334,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   title: 'Kiro Free',
                   willRenew: undefined,
                   renewalCheckedAt: undefined,
+                  wasPaid: true,
                   ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
                 } as AccountType['subscription']
               })
@@ -2271,6 +2347,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   ...acc.subscription,
                   willRenew: false,
                   scheduledToFree: true,
+                  wasPaid: true,
                   renewalCheckedAt: Date.now(),
                   ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
                 } as AccountType['subscription']
@@ -2328,6 +2405,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             ...acc.subscription,
             willRenew: false,
             scheduledToFree: true,
+            wasPaid: true,
             renewalCheckedAt: Date.now(),
             ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
           } as AccountType['subscription']
@@ -2338,7 +2416,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
         )
       } else {
         updateAccount(acc.id, {
-          subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, renewalCheckedAt: Date.now() } as AccountType['subscription']
+          subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
         })
       }
       return 'switched'
@@ -2351,6 +2429,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
           ...acc.subscription,
           willRenew: false,
           scheduledToFree: true,
+          wasPaid: true,
           renewalCheckedAt: Date.now(),
           ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
         } as AccountType['subscription']
@@ -2363,7 +2442,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
     }
     if (r.success && r.wontRenew) {
       updateAccount(acc.id, {
-        subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, renewalCheckedAt: Date.now() } as AccountType['subscription']
+        subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
       })
       alert(isEn
         ? `${acc.email}: subscription is set to not renew (no charge next cycle); no need to switch to Free.`
@@ -2421,13 +2500,14 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   ...acc.subscription,
                   willRenew: false,
                   scheduledToFree: true,
+                  wasPaid: true,
                   renewalCheckedAt: Date.now(),
                   ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
                 } as AccountType['subscription']
               })
             } else {
               updateAccount(acc.id, {
-                subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, renewalCheckedAt: Date.now() } as AccountType['subscription']
+                subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
               })
             }
             results.push({ email: acc.email || acc.id, outcome: 'switched', scheduled: r.scheduledToFree === true })
@@ -2440,6 +2520,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                 ...acc.subscription,
                 willRenew: false,
                 scheduledToFree: true,
+                wasPaid: true,
                 renewalCheckedAt: Date.now(),
                 ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
               } as AccountType['subscription']
@@ -2447,7 +2528,7 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             results.push({ email: acc.email || acc.id, outcome: 'already-scheduled' })
           } else if (r.success && r.wontRenew) {
             updateAccount(acc.id, {
-              subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, renewalCheckedAt: Date.now() } as AccountType['subscription']
+              subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
             })
             results.push({ email: acc.email || acc.id, outcome: 'wont-renew' })
           } else {

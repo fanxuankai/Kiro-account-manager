@@ -33,8 +33,19 @@ function App(): React.JSX.Element {
     setActiveAccount,
     checkAndRefreshExpiringTokens,
     updateAccountStatus,
-    updateAccount
+    updateAccount,
+    setMainPoolHeartbeat
   } = useAccountsStore()
+
+  // 订阅主进程 token 刷新池心跳（60s 一轮），供账号管理页显示自动刷新实时状态
+  useEffect(() => {
+    const unsubscribe = window.api.onMainPoolRefreshHeartbeat((info) => {
+      setMainPoolHeartbeat(info)
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [setMainPoolHeartbeat])
 
   // 切换到下一个可用账户
   const switchToNextAccount = useCallback(() => {
