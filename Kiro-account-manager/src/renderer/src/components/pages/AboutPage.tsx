@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Card, CardContent, CardHeader, CardTitle, Button } from '../ui'
-import { Github, Heart, Code, ExternalLink, User, Coffee, MessageCircle, X, RefreshCw, Download, CheckCircle, AlertCircle, Info, Zap } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle, Button, Progress } from '../ui'
+import { Github, Heart, Code, ExternalLink, User, Coffee, MessageCircle, X, RefreshCw, Download, CheckCircle, AlertCircle, Info, Zap, Loader2, Rocket } from 'lucide-react'
 import kiroLogo from '@/assets/kiro-high-resolution-logo-transparent.png'
 import alipayQR from '@/assets/支付宝支付.png'
 import wechatQR from '@/assets/微信支付.png'
@@ -32,6 +32,11 @@ export function AboutPage() {
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false)
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [showUpdateModal, setShowUpdateModal] = useState(false)
+  // 在线更新（应用内下载并替换，mac 走自研更新器绕开签名校验）
+  const [onlineStatus, setOnlineStatus] = useState<'idle' | 'downloading' | 'downloaded' | 'error'>('idle')
+  const [dlPercent, setDlPercent] = useState(0)
+  const [dlText, setDlText] = useState('')
+  const [onlineError, setOnlineError] = useState<string | null>(null)
   const { darkMode } = useAccountsStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
@@ -42,11 +47,55 @@ export function AboutPage() {
     // 用户可以手动点击"检查更新"按钮
   }, [])
 
+  // 订阅在线更新进度/完成/错误事件（下载期间弹窗保持打开）
+  useEffect(() => {
+    const unsubProgress = window.api.onUpdateDownloadProgress((p) => {
+      setDlPercent(p.percent)
+      setDlText(`${formatFileSize(p.transferred)} / ${formatFileSize(p.total)}`)
+      setOnlineStatus('downloading')
+    })
+    const unsubDownloaded = window.api.onUpdateDownloaded(() => {
+      setOnlineStatus('downloaded')
+    })
+    const unsubError = window.api.onUpdateError((err) => {
+      setOnlineError(err)
+      setOnlineStatus('error')
+    })
+    return () => {
+      unsubProgress()
+      unsubDownloaded()
+      unsubError()
+    }
+  }, [])
+
+  // 开始在线更新：先经主进程建立待更新目标，再下载（进度走事件）
+  const startOnlineUpdate = async (): Promise<void> => {
+    setOnlineError(null)
+    setOnlineStatus('downloading')
+    setDlPercent(0)
+    setDlText('')
+    const check = await window.api.checkForUpdates()
+    if (!check.hasUpdate) {
+      setOnlineError(check.error || (isEn ? 'No update pending' : '没有待安装的更新'))
+      setOnlineStatus('error')
+      return
+    }
+    const r = await window.api.downloadUpdate()
+    if (!r.success) {
+      setOnlineError(r.error || 'download failed')
+      setOnlineStatus('error')
+    }
+  }
+
   const checkForUpdates = async (showModal = true) => {
     setIsCheckingUpdate(true)
     try {
       const result = await window.api.checkForUpdatesManual()
       setUpdateInfo(result)
+      // 重置在线更新流程状态（新一轮检查从 idle 开始）
+      setOnlineStatus('idle')
+      setOnlineError(null)
+      setDlPercent(0)
       if (showModal || result.hasUpdate) {
         setShowUpdateModal(true)
       }
@@ -123,10 +172,11 @@ export function AboutPage() {
       {/* 更新弹窗 */}
       {showUpdateModal && updateInfo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/50" onClick={() => setShowUpdateModal(false)} />
+          <div className="absolute inset-0 bg-black/50" onClick={() => { if (onlineStatus !== 'downloading') setShowUpdateModal(false) }} />
           <div className="relative bg-card rounded-xl p-6 shadow-xl z-10 max-w-md w-full mx-4 max-h-[80vh] overflow-y-auto">
             <button
-              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground"
+              className="absolute top-3 right-3 text-muted-foreground hover:text-foreground disabled:opacity-40"
+              disabled={onlineStatus === 'downloading'}
               onClick={() => setShowUpdateModal(false)}
             >
               <X className="h-5 w-5" />
@@ -184,9 +234,40 @@ export function AboutPage() {
                     </div>
                   )}
                   
-                  <Button className="w-full gap-2" onClick={openReleasePage}>
+                  {/* 在线更新（推荐）：应用内下载 → 校验 → 替换 → 重启 */}
+                  {onlineStatus === 'idle' && (
+                    <Button className="w-full gap-2" onClick={startOnlineUpdate}>
+                      <Rocket className="h-4 w-4" />
+                      {isEn ? 'Update in App (Recommended)' : '在线更新（推荐）'}
+                    </Button>
+                  )}
+                  {onlineStatus === 'downloading' && (
+                    <div className="space-y-2">
+                      <Progress value={dlPercent} className="h-2" />
+                      <p className="text-xs text-muted-foreground text-center tabular-nums">
+                        {dlPercent.toFixed(0)}% · {dlText}
+                      </p>
+                    </div>
+                  )}
+                  {onlineStatus === 'downloaded' && (
+                    <Button className="w-full gap-2" onClick={() => window.api.installUpdate()}>
+                      <Rocket className="h-4 w-4" />
+                      {isEn ? 'Restart to Finish' : '重启完成安装'}
+                    </Button>
+                  )}
+                  {onlineStatus === 'error' && (
+                    <div className="space-y-2">
+                      <p className="text-xs text-red-500 break-all">{onlineError}</p>
+                      <Button variant="outline" className="w-full gap-2" onClick={startOnlineUpdate}>
+                        <Loader2 className="h-4 w-4" />
+                        {isEn ? 'Retry' : '重试'}
+                      </Button>
+                    </div>
+                  )}
+
+                  <Button variant="outline" className="w-full gap-2" onClick={openReleasePage} disabled={onlineStatus === 'downloading'}>
                     <ExternalLink className="h-4 w-4" />
-                    {isEn ? 'Go to Download Page' : '前往下载页面'}
+                    {isEn ? 'Manual Download (dmg)' : '手动下载（dmg）'}
                   </Button>
                 </>
               ) : updateInfo.error ? (

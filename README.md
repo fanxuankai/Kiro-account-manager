@@ -272,6 +272,15 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.25 (2026-9-4) — macOS In-App Auto-Update (bypassing signature check)
+
+- **New**: self-built macOS updater — without an Apple developer certificate, electron-updater (Squirrel.Mac) always fails its pre-install code-signature check; the app now self-updates on macOS: check (GitHub Releases latest-mac.yml, arch-aware zip) → download with progress → sha512 verify → ditto extract → atomic .app swap (backup + rollback, leftovers cleaned on launch) → relaunch; files downloaded by the app carry no quarantine attribute, so no second Gatekeeper prompt after replacement
+- **New**: "Update in App (Recommended)" button in the About-page update dialog (progress bar + restart-to-finish), manual dmg download kept as fallback; dialog locked while downloading
+- **Fix**: the About-page manual check pointed at the upstream repo (chaogei) and would send users to upstream downloads — now points at this fork
+- Windows update flow unchanged (electron-updater NSIS, no signing required)
+
+---
+
 ### v1.7.24 (2026-9-4) — Auto-Refresh Indicator Wording Rework
 
 - **Improved**: indicator now uses meaningful icons + plain-language text — "✓ Token keep-alive OK · Ns/min ago" when healthy; "Renewed N tokens · N min ago" when it just did work; explicit "⚠ keep-alive stalled" with restart advice when the heartbeat is late; the off state explains the consequence (accounts go offline) and where to re-enable; tooltip leads with a one-line explanation of what the feature does, and times are shown as natural "s / min ago"

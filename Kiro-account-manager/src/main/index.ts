@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, globalShortcut } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { checkMacUpdate, downloadMacUpdate, installMacUpdate, cleanupMacUpdateBackups } from './macSelfUpdater'
 import * as machineIdModule from './machineId'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -2517,11 +2518,16 @@ app.whenReady().then(async () => {
 
   // 初始化自动更新（仅生产环境）
   if (!is.dev) {
+    // mac：清理自研更新器遗留的替换备份
+    if (process.platform === 'darwin') cleanupMacUpdateBackups()
     setupAutoUpdater()
-    // 启动后延迟检查更新
-    setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(console.error)
-    }, 3000)
+    // 启动后延迟检查更新（mac 不走 electron-updater 自动检查——
+    // 无签名时 Squirrel.Mac 安装必败；检查/下载/安装全部改走 macSelfUpdater）
+    if (process.platform !== 'darwin') {
+      setTimeout(() => {
+        autoUpdater.checkForUpdates().catch(console.error)
+      }, 3000)
+    }
   }
 
   // Set app user model id for windows
@@ -2670,6 +2676,13 @@ app.whenReady().then(async () => {
     if (is.dev) {
       return { hasUpdate: false, message: '开发环境不支持更新检查' }
     }
+    // mac：无签名证书，electron-updater(Squirrel.Mac) 安装必败，走自研更新器
+    if (process.platform === 'darwin') {
+      const r = await checkMacUpdate()
+      return r.hasUpdate
+        ? { hasUpdate: true, version: r.version }
+        : { hasUpdate: false, version: r.version, error: r.error }
+    }
     try {
       const result = await autoUpdater.checkForUpdates()
       return {
@@ -2688,6 +2701,24 @@ app.whenReady().then(async () => {
     if (is.dev) {
       return { success: false, message: '开发环境不支持更新' }
     }
+    // mac：自研下载（进度通过既有 update-download-progress 事件上报）
+    if (process.platform === 'darwin') {
+      const r = await downloadMacUpdate((percent, transferred, total) => {
+        mainWindow?.webContents.send('update-download-progress', {
+          percent,
+          bytesPerSecond: 0,
+          transferred,
+          total
+        })
+      })
+      if (r.success) {
+        // 通知 UI 进入"已下载，可重启"状态（复用既有事件）
+        mainWindow?.webContents.send('update-downloaded', { version: r.version })
+      } else {
+        mainWindow?.webContents.send('update-error', r.error ?? 'download failed')
+      }
+      return r
+    }
     try {
       await autoUpdater.downloadUpdate()
       return { success: true }
@@ -2698,12 +2729,20 @@ app.whenReady().then(async () => {
   })
 
   // IPC: 安装更新并重启
-  ipcMain.handle('install-update', () => {
+  ipcMain.handle('install-update', (): { success: boolean; error?: string } => {
+    // mac：自研替换 + relaunch
+    if (process.platform === 'darwin') {
+      const r = installMacUpdate()
+      if (!r.success) mainWindow?.webContents.send('update-error', r.error ?? 'install failed')
+      return r
+    }
     autoUpdater.quitAndInstall(false, true)
+    return { success: true }
   })
 
   // IPC: 手动检查更新（使用 GitHub API，用于 AboutPage）
-  const GITHUB_REPO = 'chaogei/Kiro-account-manager'
+  // 注意指向本 fork 仓库——否则会把用户引导到上游版本
+  const GITHUB_REPO = 'fanxuankai/Kiro-account-manager'
   const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
   
   ipcMain.handle('check-for-updates-manual', async () => {
