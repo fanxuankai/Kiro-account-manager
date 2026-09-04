@@ -272,6 +272,12 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.26 (2026-9-4) — Online-Update Pipeline Verification
+
+- No functional changes; exists to verify the self-built macOS in-app updater introduced in v1.7.25 (1.7.25 → 1.7.26 via About → Check Updates → Update in App)
+
+---
+
 ### v1.7.25 (2026-9-4) — macOS In-App Auto-Update (bypassing signature check)
 
 - **New**: self-built macOS updater — without an Apple developer certificate, electron-updater (Squirrel.Mac) always fails its pre-install code-signature check; the app now self-updates on macOS: check (GitHub Releases latest-mac.yml, arch-aware zip) → download with progress → sha512 verify → ditto extract → atomic .app swap (backup + rollback, leftovers cleaned on launch) → relaunch; files downloaded by the app carry no quarantine attribute, so no second Gatekeeper prompt after replacement
