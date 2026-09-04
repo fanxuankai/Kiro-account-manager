@@ -5,13 +5,25 @@ import { useTranslation } from '@/hooks/useTranslation'
 import type { AccountGroup } from '@/types/account'
 import { X, Plus, Edit2, Trash2, Users, Check, FolderOpen } from 'lucide-react'
 
+/** 分组管理所需的 store 切片（主库与闲置库均满足此结构） */
+interface GroupManageStoreSlice {
+  groups: Map<string, AccountGroup>
+  accounts: Map<string, { id: string; email: string; groupId?: string }>
+  addGroup: (group: Omit<AccountGroup, 'id' | 'createdAt' | 'order'>) => string
+  updateGroup: (id: string, updates: Partial<AccountGroup>) => void
+  removeGroup: (id: string) => void
+  moveAccountsToGroup: (accountIds: string[], groupId: string | undefined) => void
+}
+
 interface GroupManageDialogProps {
   isOpen: boolean
   onClose: () => void
+  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  useStore?: () => GroupManageStoreSlice
 }
 
-export function GroupManageDialog({ isOpen, onClose }: GroupManageDialogProps): React.ReactNode {
-  const { groups, accounts, addGroup, updateGroup, removeGroup, moveAccountsToGroup } = useAccountsStore()
+export function GroupManageDialog({ isOpen, onClose, useStore = useAccountsStore }: GroupManageDialogProps): React.ReactNode {
+  const { groups, accounts, addGroup, updateGroup, removeGroup, moveAccountsToGroup } = useStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 

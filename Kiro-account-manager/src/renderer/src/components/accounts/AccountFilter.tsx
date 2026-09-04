@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Button } from '../ui'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import type { AccountFilter as FilterType, SubscriptionType, AccountStatus, IdpType } from '@/types/account'
+import type { AccountFilter as FilterType, SubscriptionType, AccountStatus, IdpType, AccountTag, AccountStats } from '@/types/account'
 import { cn } from '@/lib/utils'
 
 const SubscriptionOptions: { value: SubscriptionType; label: string; color: string; activeColor: string }[] = [
@@ -61,8 +61,23 @@ const toDateInputValue = (ts: number): string => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-export function AccountFilterPanel(): React.ReactNode {
-  const { filter, setFilter, clearFilter, tags, accounts, getStats } = useAccountsStore()
+/** 筛选面板所需的 store 切片（主库与闲置库均满足此结构） */
+interface FilterPanelStoreSlice {
+  filter: FilterType
+  setFilter: (filter: FilterType) => void
+  clearFilter: () => void
+  tags: Map<string, AccountTag>
+  accounts: Map<string, { email: string }>
+  getStats: () => AccountStats
+}
+
+interface AccountFilterPanelProps {
+  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  useStore?: () => FilterPanelStoreSlice
+}
+
+export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilterPanelProps = {}): React.ReactNode {
+  const { filter, setFilter, clearFilter, tags, accounts, getStats } = useStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
   const StatusOptions = isEn ? StatusOptionsEn : StatusOptionsZh

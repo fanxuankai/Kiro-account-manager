@@ -9,7 +9,7 @@ import { encode, decode } from 'cbor-x'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit, type Dispatcher } from 'undici'
 import icon from '../../resources/icon.png?asset'
 import { ProxyServer, configureProxyClients, type ProxyAccount, type ProxyConfig, type ProxyClientTarget, type ProxyClientModel } from './proxy'
-import { getAccountData, saveAccountData } from './accountDb'
+import { getAccountData, saveAccountData, initIdleAccountDb, getIdleAccountData, saveIdleAccountData, closeIdleAccountDb } from './accountDb'
 import { 
   initKProxyService, 
   getKProxyService, 
@@ -1902,6 +1902,84 @@ async function flushBackupNow(): Promise<void> {
   }
 }
 
+// ============ 闲置账号库：容灾备份（与主库备份物理分开的独立文件） ============
+// 机制与主库 createBackup 完全一致（5 分钟节流 + 延迟 flush），仅状态互相独立，
+// 备份文件为 kiro-idle-accounts.backup.enc（safeStorage 加密）。
+
+const IDLE_BACKUP_FILE_BASE = 'kiro-idle-accounts'
+let lastIdleBackupTime = 0
+let pendingIdleBackupData: unknown = null
+let pendingIdleBackupTimer: ReturnType<typeof setTimeout> | null = null
+/** 最近一次保存的闲置库数据（退出前兜底保存/备份用） */
+let lastSavedIdleData: unknown = null
+
+async function createIdleBackup(data: unknown): Promise<void> {
+  pendingIdleBackupData = data
+  const now = Date.now()
+  const elapsed = now - lastIdleBackupTime
+
+  if (elapsed >= BACKUP_THROTTLE_MS) {
+    await writeIdleBackupNow()
+    return
+  }
+
+  if (!pendingIdleBackupTimer) {
+    const delay = BACKUP_THROTTLE_MS - elapsed
+    pendingIdleBackupTimer = setTimeout(() => {
+      pendingIdleBackupTimer = null
+      void writeIdleBackupNow()
+    }, delay)
+  }
+}
+
+async function writeIdleBackupNow(): Promise<void> {
+  if (pendingIdleBackupData == null) return
+  const data = pendingIdleBackupData
+  pendingIdleBackupData = null
+  lastIdleBackupTime = Date.now()
+  try {
+    const { app } = await import('electron')
+    const { writeSecureBackup, isSecureBackupAvailable } = await import('./secureBackup')
+    await writeSecureBackup(app.getPath('userData'), data, IDLE_BACKUP_FILE_BASE)
+    console.log(`[IdleBackup] Data backup created (${isSecureBackupAvailable() ? 'encrypted' : 'plaintext-fallback'})`)
+  } catch (error) {
+    console.error('[IdleBackup] Failed to create backup:', error)
+  }
+}
+
+async function flushIdleBackupNow(): Promise<void> {
+  if (pendingIdleBackupTimer) {
+    clearTimeout(pendingIdleBackupTimer)
+    pendingIdleBackupTimer = null
+  }
+  if (pendingIdleBackupData != null) {
+    await writeIdleBackupNow()
+  }
+}
+
+/**
+ * 初始化闲置账号库（懒加载，首次读写前调用）。
+ * 容灾恢复：库为空但存在独立备份时，从备份恢复（镜像主库 initStore 的恢复机制）。
+ */
+async function initIdleStore(): Promise<void> {
+  const { app } = await import('electron')
+  const idleDb = initIdleAccountDb(app.getPath('userData'))
+  if (!idleDb.hasAccounts()) {
+    try {
+      const { readSecureBackup } = await import('./secureBackup')
+      const backupData = await readSecureBackup(app.getPath('userData'), IDLE_BACKUP_FILE_BASE) as { accounts?: unknown } | null
+      if (backupData && backupData.accounts) {
+        console.log('[IdleStore] Restoring idle accounts from backup...')
+        idleDb.migrateFrom(backupData)
+        console.log('[IdleStore] Idle accounts restored from backup successfully')
+      }
+    } catch {
+      // 备份不存在或损坏，空库起步
+    }
+  }
+}
+
+
 let mainWindow: BrowserWindow | null = null
 
 // ============ Kiro IDE Auth 同步状态 ============
@@ -3064,14 +3142,42 @@ app.whenReady().then(async () => {
     try {
       await initStore()
       saveAccountData(data as Record<string, unknown>)
-      
+
       // 保存最后的数据（用于崩溃恢复）
       lastSavedData = data
-      
+
       // 每次保存时也创建备份
       await createBackup(data)
     } catch (error) {
       console.error('Failed to save accounts:', error)
+      throw error
+    }
+  })
+
+  // IPC: 加载闲置账号数据（独立 SQLite 文件，与主库物理隔离）
+  ipcMain.handle('load-idle-accounts', async () => {
+    try {
+      await initStore()
+      await initIdleStore()
+      return getIdleAccountData()
+    } catch (error) {
+      console.error('Failed to load idle accounts:', error)
+      return null
+    }
+  })
+
+  // IPC: 保存闲置账号数据（独立库 + 独立容灾备份）
+  ipcMain.handle('save-idle-accounts', async (_event, data) => {
+    try {
+      await initStore()
+      await initIdleStore()
+      saveIdleAccountData(data as Record<string, unknown>)
+
+      lastSavedIdleData = data
+
+      await createIdleBackup(data)
+    } catch (error) {
+      console.error('Failed to save idle accounts:', error)
       throw error
     }
   })
@@ -7505,15 +7611,35 @@ app.on('will-quit', async (event) => {
       } catch (err) {
         console.error('[Exit] Failed to close account db:', err)
       }
+      // 闲置账号库：退出前强制落盘备份并关闭（同主库机制）
+      try {
+        if (lastSavedIdleData) {
+          await createIdleBackup(lastSavedIdleData)
+          await flushIdleBackupNow()
+        }
+      } catch (err) {
+        console.error('[Exit] Failed to flush idle backup:', err)
+      }
+      try {
+        closeIdleAccountDb()
+      } catch (err) {
+        console.error('[Exit] Failed to close idle account db:', err)
+      }
       console.log('[Exit] Data saved successfully')
     } catch (error) {
       console.error('[Exit] Failed to save data:', error)
     }
-    
+
     clearTimeout(forceQuitTimer)
     unregisterProtocol()
     app.exit(0)
   } else {
+    // 无待保存数据时也要释放闲置库（同步关闭，WAL 可自动恢复）
+    try {
+      closeIdleAccountDb()
+    } catch {
+      /* ignore */
+    }
     unregisterProtocol()
   }
 })

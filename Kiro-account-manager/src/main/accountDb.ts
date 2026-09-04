@@ -353,3 +353,41 @@ export function closeAccountDb(): void {
   accountDb?.close()
   accountDb = null
 }
+
+// ============ 闲置账号库单例接口（与主库物理隔离的独立 SQLite 文件） ============
+// 闲置账号不保活、不刷新：只要数据不进主库，主进程刷新调度器
+// （runMainPoolTokenRefreshTick 只读 getAccountData()）就永远不会遍历到它。
+
+let idleAccountDb: AccountDb | null = null
+
+/**
+ * 初始化闲置账号库（首次调用时创建空库文件 kiro-idle-accounts.db）。
+ * 无旧数据迁移：闲置库是 1.7.27 新增概念，从空库起步。
+ */
+export function initIdleAccountDb(userDataDir: string): AccountDb {
+  if (idleAccountDb) return idleAccountDb
+  idleAccountDb = new AccountDb(path.join(userDataDir, 'kiro-idle-accounts.db'))
+  idleAccountDb.loadAll()
+  return idleAccountDb
+}
+
+/** 读取完整闲置 AccountData（内存缓存）。未初始化返回 null */
+export function getIdleAccountData(): Rec | null {
+  if (!idleAccountDb) return null
+  return idleAccountDb.loadAll()
+}
+
+/** 行级 diff 保存闲置库数据。未初始化时抛错 */
+export function saveIdleAccountData(data: Rec): SaveDiffStat {
+  if (!idleAccountDb) throw new Error('闲置账号库未初始化')
+  return idleAccountDb.saveAll(data)
+}
+
+export function isIdleAccountDbReady(): boolean {
+  return idleAccountDb !== null
+}
+
+export function closeIdleAccountDb(): void {
+  idleAccountDb?.close()
+  idleAccountDb = null
+}

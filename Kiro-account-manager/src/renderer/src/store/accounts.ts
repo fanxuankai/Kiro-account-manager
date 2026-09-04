@@ -348,6 +348,8 @@ interface AccountsActions {
   updateAccount: (id: string, updates: Partial<Account>) => void
   removeAccount: (id: string) => void
   removeAccounts: (ids: string[]) => BatchOperationResult
+  /** 接收从闲置账号库移回的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重） */
+  receiveAccounts: (accounts: Account[]) => BatchOperationResult
 
   // 激活账号
   setActiveAccount: (id: string | null) => void
@@ -719,6 +721,49 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     })
 
     get().saveToStorage()
+    return result
+  },
+
+  // 闲置库账号移回主库：整对象入库（不重建 id/创建时间），保活体系下一轮自然接管
+  receiveAccounts: (incoming) => {
+    const result: BatchOperationResult = { success: 0, failed: 0, errors: [] }
+    const existing = get().accounts
+
+    // 去重：id 相同，或 邮箱+provider 相同（与 importFromExportData 口径一致）
+    const isDuplicate = (acc: Account): boolean => {
+      if (existing.has(acc.id)) return true
+      for (const e of existing.values()) {
+        if (acc.userId && e.userId === acc.userId) return true
+        if (acc.email === e.email && acc.credentials?.provider === e.credentials?.provider) return true
+      }
+      return false
+    }
+
+    const toAdd: Account[] = []
+    let skipped = 0
+    for (const acc of incoming) {
+      if (isDuplicate(acc)) {
+        skipped++
+        continue
+      }
+      // 闲置期间无刷新，状态可能是归档前的旧值；归位为 unknown 等待下轮刷新确认
+      const status = acc.status === 'refreshing' ? 'unknown' : acc.status
+      toAdd.push({ ...acc, isActive: false, status })
+      result.success++
+    }
+
+    if (toAdd.length > 0) {
+      set((state) => {
+        const accounts = new Map(state.accounts)
+        for (const acc of toAdd) accounts.set(acc.id, acc)
+        return { accounts }
+      })
+      get().saveToStorage()
+    }
+
+    if (skipped > 0) {
+      result.errors.push({ id: 'skipped', error: `跳过 ${skipped} 个已存在的账号` })
+    }
     return result
   },
 

@@ -1,54 +1,49 @@
 import { useState, useEffect } from 'react'
-import { useAccountsStore } from '@/store/accounts'
 import { useIdleAccountsStore } from '@/store/idleAccounts'
+import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import { AccountToolbar, type AccountViewMode } from './AccountToolbar'
-import { AccountGrid } from './AccountGrid'
-import { AccountList } from './AccountList'
-import { AddAccountDialog } from './AddAccountDialog'
-import { EditAccountDialog } from './EditAccountDialog'
-import { GroupManageDialog } from './GroupManageDialog'
-import { TagManageDialog } from './TagManageDialog'
-import { ExportDialog } from './ExportDialog'
-import { Button } from '../ui'
-import type { Account } from '@/types/account'
+import { IdleToolbar, type IdleViewMode } from './IdleToolbar'
+import { IdleGrid } from './IdleGrid'
+import { IdleList } from './IdleList'
+import { IdleAddDialog } from './IdleAddDialog'
+import { IdleEditDialog } from './IdleEditDialog'
+import { GroupManageDialog, TagManageDialog, ExportDialog } from '../accounts'
 import { parseImportContent } from '@/lib/importParse'
-import { ArrowLeft, Loader2, Users } from 'lucide-react'
+import type { Account } from '@/types/account'
+import { Loader2, Warehouse } from 'lucide-react'
 
-interface AccountManagerProps {
-  onBack?: () => void
-}
-
-export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode {
+// 闲置账号库页面：存放不需要保活的账号（独立 SQLite 库，物理隔离）。
+// 与账号管理界面视觉一致；移除一切联网操作，提供导入/导出与双向移动。
+export function IdleManager(): React.ReactNode {
   const {
     isLoading,
     accounts,
-    importFromExportData,
-    importAccounts,
     selectedIds,
     deselectAll,
+    getSelectedAccounts,
     activeGroupTab,
-    groups
-  } = useAccountsStore()
+    groups,
+    importFromExportData,
+    importAccounts,
+    removeAccounts
+  } = useIdleAccountsStore()
 
   const [showAddDialog, setShowAddDialog] = useState(false)
-  // 快捷 GitHub 无痕登录：打开添加对话框后自动发起（关闭时复位）
-  const [addDialogAutoGithub, setAddDialogAutoGithub] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [isFilterExpanded, setIsFilterExpanded] = useState(false)
-  // 视图模式：grid（卡片，默认）/ list（紧凑列表），持久化到 localStorage
-  const [viewMode, setViewMode] = useState<AccountViewMode>(() => {
-    const saved = localStorage.getItem('accounts_viewMode')
+  // 视图模式：grid（卡片，默认）/ list（紧凑列表），持久化到 localStorage（idle_ 前缀，与主界面互不干扰）
+  const [viewMode, setViewMode] = useState<IdleViewMode>(() => {
+    const saved = localStorage.getItem('idle_viewMode')
     return saved === 'list' ? 'list' : 'grid'
   })
   useEffect(() => {
-    localStorage.setItem('accounts_viewMode', viewMode)
+    localStorage.setItem('idle_viewMode', viewMode)
   }, [viewMode])
 
-  // Esc 取消选中账号；有对话框打开时不抢按键，让对话框自行处理关闭
+  // Esc 取消选中账号；有对话框打开时不抢按键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
@@ -69,11 +64,12 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     selectedIds,
     deselectAll
   ])
+
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 
-  // 获取要导出的账号列表
-  const getExportAccounts = () => {
+  // 获取要导出的账号列表（选中优先，否则全部）
+  const getExportAccounts = (): Account[] => {
     const accountList = Array.from(accounts.values())
     if (selectedIds.size > 0) {
       return accountList.filter(acc => selectedIds.has(acc.id))
@@ -81,16 +77,14 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     return accountList
   }
 
-  // 导出
   const handleExport = (): void => {
     setShowExportDialog(true)
   }
 
-  // 导入
+  // 文件导入（与账号管理共用解析逻辑；数据进闲置库）
   const handleImport = async (): Promise<void> => {
-    // 文件导入归入"当前打开的分组"（activeGroupTab 为真实分组时），否则未分组
     const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
-    const groupName = currentGroupId ? (groups.get(currentGroupId)?.name ?? '未分组') : '未分组'
+    const groupName = currentGroupId ? (groups.get(currentGroupId)?.name ?? (isEn ? 'Ungrouped' : '未分组')) : (isEn ? 'Ungrouped' : '未分组')
     const fileData = await window.api.importFromFile()
 
     if (!fileData) return
@@ -114,66 +108,57 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       const label = parsed.format === 'kami' ? '卡密导入完成' : '导入完成'
       alert(`${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）`)
     } catch (e) {
-      console.error('Import error:', e)
+      console.error('Idle import error:', e)
       alert('解析导入文件失败')
     }
   }
 
-  // 管理分组
-  const handleManageGroups = (): void => {
-    setShowGroupDialog(true)
-  }
-
-  // 管理标签
-  const handleManageTags = (): void => {
-    setShowTagDialog(true)
-  }
-
-  // 批量移入闲置账号库：整账号搬运到独立 SQLite 库（物理隔离，不保活不刷新），
-  // 主库移除（removeAccounts 会顺带清理账号的代理绑定）
-  const handleArchive = (): void => {
-    const main = useAccountsStore.getState()
-    if (main.selectedIds.size === 0) return
-
-    const selected = Array.from(main.selectedIds)
-      .map(id => main.accounts.get(id))
-      .filter((a): a is Account => a !== undefined)
-
-    // 当前激活账号不允许归档：IDE 正在用它，归档会导致保活断开
-    if (selected.some(a => a.id === main.activeAccountId)) {
-      alert(isEn ? 'The active account cannot be archived. Switch to another account first.' : '当前激活账号不能移入闲置库，请先切换到其他账号')
-      return
+  // 单个账号移回账号管理
+  const handleRestoreAccount = (account: Account): void => {
+    const mainResult = useAccountsStore.getState().receiveAccounts([account])
+    if (mainResult.success > 0) {
+      removeAccounts([account.id])
+    } else {
+      const reason = mainResult.errors.find(e => e.id === 'skipped')?.error
+      alert(isEn ? `Restore failed: ${reason ?? 'already exists'}` : `移回失败：${reason ?? '账号已存在'}`)
     }
+  }
 
-    // 按闲置库去重口径预筛（id / 邮箱+provider）
-    const idleStore = useIdleAccountsStore.getState()
-    const idleAccounts = idleStore.accounts
-    const isDuplicateInIdle = (acc: Account): boolean => {
-      if (idleAccounts.has(acc.id)) return true
-      for (const e of idleAccounts.values()) {
+  // 批量移回账号管理：先按主库去重口径筛出可移回的账号，再搬运 + 从闲置库移除
+  const handleBatchRestore = (): void => {
+    if (selectedIds.size === 0) return
+    const selected = getSelectedAccounts()
+    if (selected.length === 0) return
+
+    const mainStore = useAccountsStore.getState()
+    const mainAccounts = mainStore.accounts
+    const isDuplicateInMain = (acc: Account): boolean => {
+      if (mainAccounts.has(acc.id)) return true
+      for (const e of mainAccounts.values()) {
         if (acc.userId && e.userId === acc.userId) return true
         if (acc.email === e.email && acc.credentials?.provider === e.credentials?.provider) return true
       }
       return false
     }
-    const archivable = selected.filter(acc => !isDuplicateInIdle(acc))
-    const skippedCount = selected.length - archivable.length
+    const restorable = selected.filter(acc => !isDuplicateInMain(acc))
+    const skippedCount = selected.length - restorable.length
 
-    if (archivable.length === 0) {
-      alert(isEn ? 'All selected accounts already exist in Idle Accounts' : '选中的账号在闲置库中均已存在')
+    if (restorable.length === 0) {
+      alert(isEn ? 'All selected accounts already exist in Account Manager' : '选中的账号在账号管理中均已存在')
       return
     }
-    if (!confirm(isEn ? `Move ${archivable.length} accounts to Idle Accounts? (offline, no keep-alive)` : `确定把 ${archivable.length} 个账号移入闲置库吗？（闲置库不保活、不刷新 Token）`)) {
+    if (!confirm(isEn ? `Restore ${restorable.length} accounts to Account Manager?` : `确定把 ${restorable.length} 个账号移回账号管理吗？（移回后恢复保活）`)) {
       return
     }
 
-    const result = idleStore.receiveAccounts(archivable)
-    if (result.success > 0) {
-      main.removeAccounts(archivable.map(acc => acc.id))
+    const mainResult = mainStore.receiveAccounts(restorable)
+    if (mainResult.success > 0) {
+      // 只移除成功入库主库的账号；去重跳过的保留在闲置库
+      removeAccounts(restorable.map(acc => acc.id))
       const skipNote = skippedCount > 0 ? (isEn ? `, ${skippedCount} skipped (already exist)` : `，跳过 ${skippedCount} 个已存在`) : ''
-      alert(`${isEn ? 'Archived' : '已移入闲置库'} ${result.success} ${isEn ? 'account(s)' : '个账号'}${skipNote}`)
+      alert(`${isEn ? 'Restored' : '已移回'} ${mainResult.success} ${isEn ? 'account(s)' : '个账号'}${skipNote}`)
     } else {
-      alert(isEn ? 'Archive failed' : '移入闲置库失败')
+      alert(isEn ? 'Restore failed' : '移回失败')
     }
   }
 
@@ -187,7 +172,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       <div className="flex items-center justify-center h-full">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">加载账号数据...</p>
+          <p className="text-muted-foreground">加载闲置账号数据...</p>
         </div>
       </div>
     )
@@ -198,33 +183,29 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       {/* 顶部工具栏 - 玻璃态（relative z-20 抬升 stacking context，确保下拉菜单浮在卡片之上） */}
       <header className="relative z-20 flex items-center justify-between gap-4 px-3 py-3 glass-toolbar">
         <div className="flex items-center gap-4">
-          {onBack && (
-            <Button variant="ghost" size="icon" onClick={onBack}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-          )}
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
-              <Users className="h-5 w-5 text-primary" />
+              <Warehouse className="h-5 w-5 text-primary" />
             </div>
-            <h1 className="text-lg font-semibold text-primary">{isEn ? 'Accounts' : '账户管理'}</h1>
+            <div className="flex flex-col">
+              <h1 className="text-lg font-semibold text-primary">{isEn ? 'Idle Accounts' : '闲置账号库'}</h1>
+              <span className="text-[10px] text-muted-foreground">
+                {isEn ? 'Offline vault — no keep-alive, never refreshed' : '离线凭据仓库 · 不保活 · 不刷新'}
+              </span>
+            </div>
           </div>
         </div>
-        
+
         {/* 工具栏 */}
-        <AccountToolbar
+        <IdleToolbar
           onAddAccount={() => setShowAddDialog(true)}
-          onQuickGithubLogin={() => {
-            setAddDialogAutoGithub(true)
-            setShowAddDialog(true)
-          }}
           onImport={handleImport}
           onExport={handleExport}
-          onArchive={handleArchive}
+          onRestore={handleBatchRestore}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          onManageGroups={handleManageGroups}
-          onManageTags={handleManageTags}
+          onManageGroups={() => setShowGroupDialog(true)}
+          onManageTags={() => setShowTagDialog(true)}
           isFilterExpanded={isFilterExpanded}
           onToggleFilter={() => setIsFilterExpanded(!isFilterExpanded)}
         />
@@ -235,46 +216,46 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
         {/* 账号列表（卡片 或 紧凑列表） */}
         <div className="flex-1 overflow-hidden">
           {viewMode === 'grid' ? (
-            <AccountGrid
+            <IdleGrid
               onAddAccount={() => setShowAddDialog(true)}
               onEditAccount={handleEditAccount}
+              onRestoreAccount={handleRestoreAccount}
             />
           ) : (
-            <AccountList
+            <IdleList
               onAddAccount={() => setShowAddDialog(true)}
               onEditAccount={handleEditAccount}
+              onRestoreAccount={handleRestoreAccount}
             />
           )}
         </div>
       </div>
 
-      {/* 添加账号对话框 */}
-      <AddAccountDialog
+      {/* 添加账号对话框（离线粘贴导入） */}
+      <IdleAddDialog
         isOpen={showAddDialog}
-        autoGithubLogin={addDialogAutoGithub}
-        onClose={() => {
-          setShowAddDialog(false)
-          setAddDialogAutoGithub(false)
-        }}
+        onClose={() => setShowAddDialog(false)}
       />
 
       {/* 编辑账号对话框 */}
-      <EditAccountDialog
+      <IdleEditDialog
         open={!!editingAccount}
         onOpenChange={(open) => !open && setEditingAccount(null)}
         account={editingAccount}
       />
 
-      {/* 分组管理对话框 */}
+      {/* 分组管理对话框（闲置库独立分组） */}
       <GroupManageDialog
         isOpen={showGroupDialog}
         onClose={() => setShowGroupDialog(false)}
+        useStore={useIdleAccountsStore}
       />
 
-      {/* 标签管理对话框 */}
+      {/* 标签管理对话框（闲置库独立标签） */}
       <TagManageDialog
         isOpen={showTagDialog}
         onClose={() => setShowTagDialog(false)}
+        useStore={useIdleAccountsStore}
       />
 
       {/* 导出对话框 */}
@@ -283,6 +264,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
         onClose={() => setShowExportDialog(false)}
         accounts={getExportAccounts()}
         selectedCount={selectedIds.size}
+        useStore={useIdleAccountsStore}
       />
     </div>
   )

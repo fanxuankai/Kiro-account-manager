@@ -34,6 +34,16 @@ const api = {
     return ipcRenderer.invoke('save-accounts', data)
   },
 
+  // 闲置账号库 - 加载闲置账号数据（独立库，物理隔离）
+  loadIdleAccounts: (): Promise<unknown> => {
+    return ipcRenderer.invoke('load-idle-accounts')
+  },
+
+  // 闲置账号库 - 保存闲置账号数据
+  saveIdleAccounts: (data: unknown): Promise<void> => {
+    return ipcRenderer.invoke('save-idle-accounts', data)
+  },
+
   // 账号管理 - 刷新 Token
   refreshAccountToken: (account: unknown): Promise<unknown> => {
     return ipcRenderer.invoke('refresh-account-token', account)

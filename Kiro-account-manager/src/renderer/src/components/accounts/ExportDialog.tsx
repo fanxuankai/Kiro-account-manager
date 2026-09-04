@@ -5,7 +5,7 @@ import { X, FileJson, FileText, Table, Clipboard, Check, Download, Key, Braces }
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import type { Account } from '@/types/account'
+import type { Account, AccountExportData } from '@/types/account'
 
 const EXPORT_FORMATS = ['json', 'oidc', 'txt', 'csv', 'kami', 'clipboard'] as const
 type ExportFormat = (typeof EXPORT_FORMATS)[number]
@@ -18,14 +18,21 @@ function loadExportFormat(): ExportFormat {
     : 'json'
 }
 
+/** 导出所需的 store 切片（主库与闲置库均满足此结构） */
+interface ExportStoreSlice {
+  exportAccounts: (ids?: string[]) => AccountExportData
+}
+
 interface ExportDialogProps {
   open: boolean
   onClose: () => void
   accounts: Account[]
   selectedCount: number
+  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  useStore?: () => ExportStoreSlice
 }
 
-export function ExportDialog({ open, onClose, accounts, selectedCount }: ExportDialogProps) {
+export function ExportDialog({ open, onClose, accounts, selectedCount, useStore = useAccountsStore }: ExportDialogProps) {
   // 导出格式持久化到 localStorage，账号页/设置页两个入口共用
   const [selectedFormat, setSelectedFormat] = useState<ExportFormat>(loadExportFormat)
   useEffect(() => {
@@ -33,7 +40,7 @@ export function ExportDialog({ open, onClose, accounts, selectedCount }: ExportD
   }, [selectedFormat])
   const [includeCredentials, setIncludeCredentials] = useState(true)
   const [copied, setCopied] = useState(false)
-  const { exportAccounts } = useAccountsStore()
+  const { exportAccounts } = useStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 

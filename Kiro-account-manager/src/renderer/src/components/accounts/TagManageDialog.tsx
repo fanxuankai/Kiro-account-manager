@@ -5,9 +5,22 @@ import { useTranslation } from '@/hooks/useTranslation'
 import type { AccountTag } from '@/types/account'
 import { X, Plus, Edit2, Trash2, Tag, Check, Palette } from 'lucide-react'
 
+/** 标签管理所需的 store 切片（主库与闲置库均满足此结构） */
+interface TagManageStoreSlice {
+  tags: Map<string, AccountTag>
+  accounts: Map<string, { id: string; email: string; tags: string[] }>
+  addTag: (tag: Omit<AccountTag, 'id'>) => string
+  updateTag: (id: string, updates: Partial<AccountTag>) => void
+  removeTag: (id: string) => void
+  addTagToAccounts: (accountIds: string[], tagId: string) => void
+  removeTagFromAccounts: (accountIds: string[], tagId: string) => void
+}
+
 interface TagManageDialogProps {
   isOpen: boolean
   onClose: () => void
+  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  useStore?: () => TagManageStoreSlice
 }
 
 // 预设颜色（带透明度）
@@ -56,8 +69,8 @@ function toRgba(argbColor: string): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha / 255})`
 }
 
-export function TagManageDialog({ isOpen, onClose }: TagManageDialogProps): React.ReactNode {
-  const { tags, accounts, addTag, updateTag, removeTag, addTagToAccounts, removeTagFromAccounts } = useAccountsStore()
+export function TagManageDialog({ isOpen, onClose, useStore = useAccountsStore }: TagManageDialogProps): React.ReactNode {
+  const { tags, accounts, addTag, updateTag, removeTag, addTagToAccounts, removeTagFromAccounts } = useStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 

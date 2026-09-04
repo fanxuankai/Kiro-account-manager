@@ -1,4 +1,4 @@
-import { Home, Users, Settings, Info, ChevronRight, Fingerprint, Sparkles, Server, Shield, UserPlus, CreditCard, ScrollText, Network, Bell, Stethoscope, Archive } from 'lucide-react'
+import { Home, Users, Settings, Info, ChevronRight, Fingerprint, Sparkles, Server, Shield, UserPlus, CreditCard, ScrollText, Network, Bell, Stethoscope, Archive, Warehouse } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import kiroLogo from '@/assets/kiro-high-resolution-logo-transparent.png'
@@ -6,7 +6,7 @@ import kiroLogoSmall from '@/assets/Kiro Logo.svg'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 
-export type PageType = 'home' | 'accounts' | 'machineId' | 'kiroSettings' | 'proxy' | 'kproxy' | 'proxyPool' | 'register' | 'subscription' | 'webhooks' | 'diagnose' | 'configSync' | 'logs' | 'settings' | 'about'
+export type PageType = 'home' | 'accounts' | 'idleAccounts' | 'machineId' | 'kiroSettings' | 'proxy' | 'kproxy' | 'proxyPool' | 'register' | 'subscription' | 'webhooks' | 'diagnose' | 'configSync' | 'logs' | 'settings' | 'about'
 
 interface SidebarProps {
   currentPage: PageType
@@ -18,6 +18,7 @@ interface SidebarProps {
 const menuItemsConfig: { id: PageType; labelKey: string; icon: React.ElementType }[] = [
   { id: 'home', labelKey: 'nav.home', icon: Home },
   { id: 'accounts', labelKey: 'nav.accounts', icon: Users },
+  { id: 'idleAccounts', labelKey: 'nav.idleAccounts', icon: Warehouse },
   { id: 'machineId', labelKey: 'nav.machineId', icon: Fingerprint },
   { id: 'kiroSettings', labelKey: 'nav.kiroSettings', icon: Sparkles },
   { id: 'proxy', labelKey: 'nav.proxy', icon: Server },

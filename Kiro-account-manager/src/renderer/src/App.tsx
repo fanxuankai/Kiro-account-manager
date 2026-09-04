@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AccountManager } from './components/accounts'
+import { IdleManager } from './components/idle'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
 import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, LogsPage } from './components/pages'
 import { useWebhookStore } from './store/webhooks'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { useAccountsStore, isBannedAccountError } from './store/accounts'
+import { useIdleAccountsStore } from './store/idleAccounts'
 
 // 托盘信息防抖延迟：后台刷新风暴时合并多次跨进程 IPC 为单次
 const TRAY_UPDATE_DEBOUNCE_MS = 400
@@ -106,6 +108,8 @@ function App(): React.JSX.Element {
     loadFromStorage().then(() => {
       startAutoTokenRefresh()
     })
+    // 闲置账号库（独立 SQLite，物理隔离）：只加载数据，无任何定时器/网络调度
+    void useIdleAccountsStore.getState().loadFromStorage()
     // 同步主动续期开关（持久化在 main 进程的 electron-store）
     useAccountsStore.getState().loadProactiveRenewalEnabled()
     // 加载 Webhook 配置
@@ -214,7 +218,10 @@ function App(): React.JSX.Element {
 
   // 关闭/刷新前强制 flush 防抖中的待保存数据，防止数据丢失
   useEffect(() => {
-    const handleBeforeUnload = (): void => { void flushSaveImmediately() }
+    const handleBeforeUnload = (): void => {
+      void flushSaveImmediately()
+      void useIdleAccountsStore.getState().flushSaveImmediately()
+    }
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
@@ -338,6 +345,8 @@ function App(): React.JSX.Element {
         return <HomePage />
       case 'accounts':
         return <AccountManager />
+      case 'idleAccounts':
+        return <IdleManager />
       case 'machineId':
         return <MachineIdPage />
       case 'kiroSettings':
