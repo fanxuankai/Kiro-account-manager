@@ -9,6 +9,8 @@ interface AccountData {
   autoRefreshInterval: number
   autoRefreshConcurrency?: number
   autoRefreshSyncInfo?: boolean
+  autoUsageRefreshEnabled?: boolean
+  autoUsageRefreshInterval?: number
   statusCheckInterval: number
   privacyMode?: boolean
   usagePrecision?: boolean
@@ -691,6 +693,9 @@ interface KiroApi {
   // 在新窗口打开订阅链接
   openSubscriptionWindow: (url: string) => Promise<{ success: boolean; error?: string }>
 
+  // 以账号身份在应用内私密浏览器打开 Kiro 官网后台（免登录）
+  accountOpenPortal: (accountId: string) => Promise<{ success: boolean; error?: string }>
+
   // 自动切订阅到 Free（dryRun=true 只读校验链路，不提交变更）
   accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean) => Promise<{ success: boolean; error?: string; alreadyFree?: boolean; alreadyScheduled?: boolean; wontRenew?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }>
 
@@ -879,9 +884,6 @@ interface KiroApi {
 
   // 监听托盘刷新账户事件
   onTrayRefreshAccount: (callback: () => void) => () => void
-
-  // 监听主进程 token 刷新池心跳（每次检查后上报，60s 一次；refreshed=0 表示本轮无需刷新）
-  onMainPoolRefreshHeartbeat: (callback: (info: { at: number; refreshed: number; success: number; failed: number }) => void) => () => void
 
   // 监听托盘切换账户事件
   onTraySwitchAccount: (callback: () => void) => () => void

@@ -77,13 +77,16 @@ export const IdleCard = memo(function IdleCard({
   const [emailCopied, setEmailCopied] = useState(false)
 
   const handleCopyCredentials = (): void => {
-    const credentials = {
-      accessToken: account.credentials.accessToken,
-      refreshToken: account.credentials.refreshToken,
-      clientId: account.credentials.clientId,
-      clientSecret: account.credentials.clientSecret
+    // 与导出「OIDC JSON」同格式（精简数组）：可直接粘贴到「OIDC 批量添加」导入或分享
+    const item: Record<string, string> = {
+      email: account.email,
+      refreshToken: account.credentials.refreshToken || '',
+      provider: account.idp || 'BuilderId'
     }
-    navigator.clipboard.writeText(JSON.stringify(credentials, null, 2))
+    if (account.password) item.password = account.password
+    if (account.credentials.clientId) item.clientId = account.credentials.clientId
+    if (account.credentials.clientSecret) item.clientSecret = account.credentials.clientSecret
+    navigator.clipboard.writeText(JSON.stringify([item], null, 2))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }

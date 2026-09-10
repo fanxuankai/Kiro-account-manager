@@ -21,6 +21,7 @@ import {
   KeyRound,
   X,
   ExternalLink,
+  Globe,
   CreditCard,
   Sparkles,
   LogOut,
@@ -348,6 +349,24 @@ export const AccountCard = memo(function AccountCard({
     }
   }
 
+  // 以该账号身份打开 Kiro 官网后台（应用内私密浏览器，注入凭证免登录）
+  const [isOpeningPortalSite, setIsOpeningPortalSite] = useState(false)
+  const handleOpenPortalSite = async (e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation()
+    if (isOpeningPortalSite) return
+    setIsOpeningPortalSite(true)
+    try {
+      const result = await window.api.accountOpenPortal(account.id)
+      if (!result.success) {
+        alert(result.error || (isEn ? 'Failed to open portal' : '打开官网失败'))
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : (isEn ? 'Failed to open portal' : '打开官网失败'))
+    } finally {
+      setIsOpeningPortalSite(false)
+    }
+  }
+
   const handleDelete = (): void => {
     if (confirm(isEn ? `Delete account ${getDisplayName(account)}?` : `确定要删除账号 ${getDisplayName(account)} 吗？`)) {
       removeAccount(account.id)
@@ -358,13 +377,17 @@ export const AccountCard = memo(function AccountCard({
   const [emailCopied, setEmailCopied] = useState(false)
 
   const handleCopyCredentials = (): void => {
-    const credentials = {
-      accessToken: account.credentials.accessToken,
-      refreshToken: account.credentials.refreshToken,
-      clientId: account.credentials.clientId,
-      clientSecret: account.credentials.clientSecret
+    // 与导出「OIDC JSON」同格式（精简数组）：可直接粘贴到「OIDC 批量添加」导入或分享，
+    // 不含短时效的 accessToken——接收方导入后刷新即得新 token
+    const item: Record<string, string> = {
+      email: account.email,
+      refreshToken: account.credentials.refreshToken || '',
+      provider: account.idp || 'BuilderId'
     }
-    navigator.clipboard.writeText(JSON.stringify(credentials, null, 2))
+    if (account.password) item.password = account.password
+    if (account.credentials.clientId) item.clientId = account.credentials.clientId
+    if (account.credentials.clientSecret) item.clientSecret = account.credentials.clientSecret
+    navigator.clipboard.writeText(JSON.stringify([item], null, 2))
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -920,6 +943,17 @@ export const AccountCard = memo(function AccountCard({
                  title={isEn ? 'Open subscription portal (incognito)' : '打开订阅门户（无痕）'}
                >
                   {isOpeningPortal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+               </Button>
+
+               <Button
+                 size="icon"
+                 variant="ghost"
+                 className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                 onClick={handleOpenPortalSite}
+                 disabled={isOpeningPortalSite}
+                 title={isEn ? 'Open Kiro portal as this account (in-app private browser)' : '以该账号身份打开 Kiro 官网后台（应用内私密浏览器）'}
+               >
+                  {isOpeningPortalSite ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
                </Button>
 
                <Button size="icon" variant="ghost" className={cn("h-7 w-7 text-muted-foreground hover:text-foreground", copied && "text-success")} onClick={(e) => { e.stopPropagation(); handleCopyCredentials() }} title={isEn ? 'Copy credentials' : '复制凭证'}>

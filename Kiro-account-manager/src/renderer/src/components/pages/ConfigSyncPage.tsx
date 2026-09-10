@@ -41,6 +41,8 @@ interface PortableConfig {
     autoRefreshEnabled?: boolean
     autoRefreshInterval?: number
     autoRefreshConcurrency?: number
+    autoUsageRefreshEnabled?: boolean
+    autoUsageRefreshInterval?: number
     statusCheckInterval?: number
     privacyMode?: boolean
     usagePrecision?: boolean
@@ -144,6 +146,8 @@ export function ConfigSyncPage(): React.ReactNode {
         autoRefreshEnabled: store.autoRefreshEnabled,
         autoRefreshInterval: store.autoRefreshInterval,
         autoRefreshConcurrency: store.autoRefreshConcurrency,
+        autoUsageRefreshEnabled: store.autoUsageRefreshEnabled,
+        autoUsageRefreshInterval: store.autoUsageRefreshInterval,
         statusCheckInterval: store.statusCheckInterval,
         privacyMode: store.privacyMode,
         usagePrecision: store.usagePrecision,
@@ -284,6 +288,7 @@ export function ConfigSyncPage(): React.ReactNode {
         if (s.language != null) store.setLanguage(s.language as 'auto' | 'en' | 'zh')
         if (s.autoRefreshEnabled != null) store.setAutoRefresh(s.autoRefreshEnabled, s.autoRefreshInterval)
         if (s.autoRefreshConcurrency != null) store.setAutoRefreshConcurrency(s.autoRefreshConcurrency)
+        if (s.autoUsageRefreshEnabled != null) store.setAutoUsageRefresh(s.autoUsageRefreshEnabled, s.autoUsageRefreshInterval)
         if (s.statusCheckInterval != null) store.setStatusCheckInterval(s.statusCheckInterval)
         if (s.privacyMode != null) store.setPrivacyMode(s.privacyMode)
         if (s.usagePrecision != null) store.setUsagePrecision(s.usagePrecision)

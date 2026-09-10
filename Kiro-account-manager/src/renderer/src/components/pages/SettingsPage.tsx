@@ -5,6 +5,38 @@ import { useState, useEffect } from 'react'
 import { ExportDialog } from '../accounts/ExportDialog'
 import { useTranslation } from '@/hooks/useTranslation'
 
+/** 下次刷新倒计时文案：每秒重算；实现参考 lite 的 nextRefreshText */
+function NextRefreshText({ at, isEn }: { at: number | null; isEn: boolean }): React.ReactNode {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  if (at == null) {
+    return <span>{isEn ? 'Disabled, will not run' : '未开启，不会自动执行'}</span>
+  }
+  const remain = at - now
+  // 到期后时间戳会被立刻往后推；还没推说明本轮正在执行或在等前一批结束
+  if (remain <= 0) {
+    return <span>{isEn ? 'Running now…' : '本轮正在执行…'}</span>
+  }
+  const minutes = Math.floor(remain / 60000)
+  const seconds = Math.floor((remain % 60000) / 1000)
+  const countdown = minutes
+    ? (isEn ? `${minutes}m ${seconds}s` : `${minutes} 分 ${seconds} 秒后`)
+    : (isEn ? `${seconds}s` : `${seconds} 秒后`)
+  const t = new Date(at)
+  const hhmmss = [t.getHours(), t.getMinutes(), t.getSeconds()]
+    .map((n) => String(n).padStart(2, '0'))
+    .join(':')
+  return (
+    <span>
+      {isEn ? `Next refresh ${hhmmss} (in ${countdown})` : `下次刷新 ${hhmmss}（${countdown}）`}
+    </span>
+  )
+}
+
 // 主题配置 - 按色系分组
 const themeGroupsZh = [
   {
@@ -165,13 +197,16 @@ export function SettingsPage() {
     autoRefreshEnabled,
     autoRefreshInterval,
     autoRefreshConcurrency,
-    autoRefreshSyncInfo,
+    autoUsageRefreshEnabled,
+    autoUsageRefreshInterval,
+    setAutoUsageRefresh,
+    nextTokenRefreshAt,
+    nextUsageRefreshAt,
     proactiveRenewalEnabled,
     proactiveRenewalLeadMinutes,
     setProactiveRenewalEnabled,
     setAutoRefresh,
     setAutoRefreshConcurrency,
-    setAutoRefreshSyncInfo,
     checkAndRefreshExpiringTokens,
     proxyEnabled,
     proxyUrl,
@@ -614,8 +649,8 @@ export function SettingsPage() {
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="font-medium">{isEn ? 'Auto Refresh' : '自动刷新'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Auto refresh tokens before expiration' : 'Token 过期前自动刷新，并同步更新账户信息'}</p>
+              <p className="font-medium">{isEn ? 'Auto Token Refresh' : 'Token 自动刷新'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'Renew tokens only when about to expire (rarely, precisely)' : 'Token 临期时才轮换令牌（少而准），保持登录状态'}</p>
             </div>
             <Button
               variant={autoRefreshEnabled ? "default" : "outline"}
@@ -701,14 +736,15 @@ export function SettingsPage() {
           {autoRefreshEnabled && (
             <>
               <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
-                <p>• {isEn ? 'Auto refresh tokens to keep login' : 'Token 即将过期时自动刷新，保持登录状态'}</p>
-                <p>• {isEn ? 'Update usage and subscription info after refresh' : 'Token 刷新后自动更新账户用量、订阅等信息'}</p>
-                <p>• {isEn ? 'Check all balances when auto-switch is on' : '开启自动换号时，会定期检查所有账户余额'}</p>
+                <p>• {isEn ? 'refreshToken rotates on every renewal — the more often you refresh, the higher the risk of invalid_grant / rate-limit' : 'refreshToken 是轮换式的：刷一次旧值立即作废，刷得越勤、失败和限流的面越大，因此只在临期窗口内刷'}</p>
+                <p>• {isEn ? 'Usage/subscription checks run on their own schedule (see Auto Usage Refresh below)' : '用量/订阅检查走独立节奏，见下方「自动刷新用量」'}</p>
+                <p>• {isEn ? 'Auto-switch keeps its own timer and checks the active account itself' : '自动换号有独立定时器，会自行检查当前账号余额'}</p>
               </div>
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
-                  <p className="font-medium">{isEn ? 'Check Interval' : '检查间隔'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'How often to check account status' : '每隔多久检查一次账户状态'}</p>
+                  <p className="font-medium">{isEn ? 'Token Refresh Interval' : 'Token 刷新间隔'}</p>
+                  <p className="text-sm text-muted-foreground">{isEn ? 'How often to check for expiring tokens' : '每隔多久检查一次临期 Token'}
+                  <span className="block text-xs text-primary/80"><NextRefreshText at={nextTokenRefreshAt} isEn={isEn} /></span></p>
                 </div>
                 <select
                   className="w-[120px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
@@ -742,19 +778,6 @@ export function SettingsPage() {
               </div>
               <div className="flex items-center justify-between pt-2 border-t">
                 <div>
-                  <p className="font-medium">{isEn ? 'Sync Account Info' : '同步检测账户信息'}</p>
-                  <p className="text-sm text-muted-foreground">{isEn ? 'Detect usage, subscription, and ban status' : '刷新 Token 时同步检测用量、订阅、封禁状态'}</p>
-                </div>
-                <Button
-                  variant={autoRefreshSyncInfo ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setAutoRefreshSyncInfo(!autoRefreshSyncInfo)}
-                >
-                  {autoRefreshSyncInfo ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
-                </Button>
-              </div>
-              <div className="flex items-center justify-between pt-2 border-t">
-                <div>
                   <p className="font-medium">{isEn ? 'Manual Trigger' : '手动触发'}</p>
                   <p className="text-sm text-muted-foreground">{isEn ? 'Manually trigger auto-refresh for debugging' : '手动触发一次自动刷新流程（用于调试）'}</p>
                 </div>
@@ -768,6 +791,45 @@ export function SettingsPage() {
                 </Button>
               </div>
             </>
+          )}
+
+          {/* 用量刷新是独立链路：不受 Token 刷新开关门控 */}
+          <div className="flex items-center justify-between pt-3 border-t">
+            <div>
+              <p className="font-medium">{isEn ? 'Auto Usage Refresh' : '自动刷新用量'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'Periodically refresh usage, subscription and ban status for all accounts (banned accounts skipped)' : '定期全量检查所有账号的用量、订阅、封禁状态（自动跳过封禁账号；临期账号顺带换 Token）'}</p>
+            </div>
+            <Button
+              variant={autoUsageRefreshEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={() => setAutoUsageRefresh(!autoUsageRefreshEnabled)}
+            >
+              {autoUsageRefreshEnabled ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+            </Button>
+          </div>
+          {autoUsageRefreshEnabled && (
+            <div className="flex items-center justify-between pt-2 border-t">
+              <div>
+                <p className="font-medium">{isEn ? 'Usage Refresh Interval' : '用量刷新间隔'}</p>
+                <p className="text-sm text-muted-foreground">{isEn ? 'How often to refresh usage info' : '每隔多久全量拉取一次用量信息'}
+                <span className="block text-xs text-primary/80"><NextRefreshText at={nextUsageRefreshAt} isEn={isEn} /></span></p>
+              </div>
+              <select
+                className="w-[120px] h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                value={autoUsageRefreshInterval}
+                onChange={(e) => setAutoUsageRefresh(true, parseInt(e.target.value))}
+              >
+                <option value="1">{isEn ? '1 min' : '1 分钟'}</option>
+                <option value="3">{isEn ? '3 min' : '3 分钟'}</option>
+                <option value="5">{isEn ? '5 min' : '5 分钟'}</option>
+                <option value="10">{isEn ? '10 min' : '10 分钟'}</option>
+                <option value="15">{isEn ? '15 min' : '15 分钟'}</option>
+                <option value="20">{isEn ? '20 min' : '20 分钟'}</option>
+                <option value="30">{isEn ? '30 min' : '30 分钟'}</option>
+                <option value="45">{isEn ? '45 min' : '45 分钟'}</option>
+                <option value="60">{isEn ? '60 min' : '60 分钟'}</option>
+              </select>
+            </div>
           )}
         </CardContent>
       </Card>

@@ -122,6 +122,31 @@ export function getSystemProxy(): string | null {
 }
 
 /**
+ * Agent 缓存：ProxyAgent/Agent 内部维护连接池，每个请求都新建一个等于放弃 keep-alive
+ * （每个请求都重新 TCP+TLS 握手，走 HTTP 代理还要先建 CONNECT 隧道，批量刷新时开销成倍放大）。
+ * 按代理 URL 缓存复用，同一代理的后续请求直接复用池内连接。
+ * 桌面应用代理地址有限；超上限时按插入序淘汰最旧的并关闭其连接池。
+ */
+const AGENT_CACHE_MAX = 256
+const _agentCache = new Map<string, Dispatcher>()
+
+function cachedAgent(proxyUrl: string, create: () => Dispatcher): Dispatcher {
+  const hit = _agentCache.get(proxyUrl)
+  if (hit) return hit
+  const agent = create()
+  if (_agentCache.size >= AGENT_CACHE_MAX) {
+    const oldest = _agentCache.keys().next().value
+    if (oldest !== undefined) {
+      const evicted = _agentCache.get(oldest)
+      _agentCache.delete(oldest)
+      void evicted?.close().catch(() => {})
+    }
+  }
+  _agentCache.set(proxyUrl, agent)
+  return agent
+}
+
+/**
  * 安全地创建 undici Dispatcher
  *
  * 支持协议：
@@ -150,7 +175,9 @@ export function safeCreateProxyAgent(
   // http / https 走原生 ProxyAgent
   if (protocol === 'http:' || protocol === 'https:') {
     try {
-      return new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: false } })
+      return cachedAgent(proxyUrl, () =>
+        new ProxyAgent({ uri: proxyUrl, requestTls: { rejectUnauthorized: false } })
+      )
     } catch (err) {
       console.warn(`[Proxy] 创建 HTTP ProxyAgent 失败，回退直连: ${proxyUrl}`, err)
       return undefined
@@ -160,7 +187,7 @@ export function safeCreateProxyAgent(
   // SOCKS 走自定义 connect
   if (protocol === 'socks5:' || protocol === 'socks5h:' || protocol === 'socks4:' || protocol === 'socks4a:') {
     try {
-      return createSocksDispatcher(u)
+      return cachedAgent(proxyUrl, () => createSocksDispatcher(u))
     } catch (err) {
       console.warn(`[Proxy] 创建 SOCKS Agent 失败，回退直连: ${proxyUrl}`, err)
       return undefined

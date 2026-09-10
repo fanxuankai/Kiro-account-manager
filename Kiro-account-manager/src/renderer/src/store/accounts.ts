@@ -39,6 +39,8 @@ function generateRandomMachineId(): string {
 
 // 自动 Token 刷新定时器
 let tokenRefreshTimer: ReturnType<typeof setInterval> | null = null
+// 自动用量刷新定时器（与 token 刷新独立：token 少而准，用量全而稳）
+let usageRefreshTimer: ReturnType<typeof setInterval> | null = null
 // 刷新提前量必须 ≥ 2× 检查间隔，否则账号会在两次 tick 之间过期：
 // 某次 tick 时剩余刚好略超阈值会被跳过，下一次 tick（间隔分钟后）时早已过期。
 // 再叠加 IPC + OIDC 网络刷新本身的耗时，余量不足就会出现"过期才刷"。
@@ -271,11 +273,19 @@ interface AccountsState {
   autoRefreshEnabled: boolean
   autoRefreshInterval: number // 分钟
   autoRefreshConcurrency: number // 自动刷新并发数
-  autoRefreshSyncInfo: boolean // 刷新时是否同步检测账户信息（用量、订阅、封禁状态）
+  autoRefreshSyncInfo: boolean // （已废弃，由 autoUsageRefreshEnabled 取代；保留仅为旧配置迁移兼容）刷新时是否同步检测账户信息
+  autoUsageRefreshEnabled: boolean // 自动刷新用量开关（独立于 token 刷新）
+  autoUsageRefreshInterval: number // 用量刷新间隔（分钟）
   statusCheckInterval: number // 分钟
-  /** 主进程 token 刷新池最近一次心跳（每 60s 检查一轮后上报；refreshed=0 表示本轮无需刷新）。仅内存态，不持久化 */
-  mainPoolHeartbeat: { at: number; refreshed: number; success: number; failed: number } | null
-  setMainPoolHeartbeat: (info: { at: number; refreshed: number; success: number; failed: number } | null) => void
+  /** 两条自动刷新链路各自的下次执行时间（时间戳）；null 表示未开启。仅内存态，不持久化 */
+  nextTokenRefreshAt: number | null
+  nextUsageRefreshAt: number | null
+  /**
+   * 正在进行的批量刷新进度；null 表示空闲。
+   * silent=true 表示定时器自动触发的刷新：不在 UI 弹悬浮进度卡（避免常驻遮挡内容），
+   * 只用于阻止并发冲突；手动批量（silent=false）才显示右下角进度卡。
+   */
+  refreshProgress: { kind: 'token' | 'usage'; done: number; total: number; silent?: boolean } | null
 
   // 主动续期开关（持久化在 main 进程的 electron-store；这里只是镜像，不写 saveToStorage）
   proactiveRenewalEnabled: boolean
@@ -453,6 +463,14 @@ interface AccountsActions {
   // 自动 Token 刷新
   startAutoTokenRefresh: () => void
   stopAutoTokenRefresh: () => void
+  // 自动用量刷新（独立链路：全量检查用量/订阅/封禁，临期账号顺带换 token）
+  startAutoUsageRefresh: () => void
+  stopAutoUsageRefresh: () => void
+  triggerUsageRefresh: () => void
+  setAutoUsageRefresh: (enabled: boolean, interval?: number) => void
+  /** 主进程进度事件回流时推进批量刷新进度；completed>=total 自动收尾 */
+  updateRefreshProgress: (progress: { done: number; total: number }) => void
+  clearRefreshProgress: () => void
   checkAndRefreshExpiringTokens: () => Promise<void>
   refreshExpiredTokensOnly: () => Promise<void>
   triggerBackgroundRefresh: () => Promise<void>
@@ -574,9 +592,12 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   autoRefreshInterval: 5,
   autoRefreshConcurrency: 100,
   autoRefreshSyncInfo: true,
+  autoUsageRefreshEnabled: true,
+  autoUsageRefreshInterval: 5,
   statusCheckInterval: 60,
-  mainPoolHeartbeat: null,
-  setMainPoolHeartbeat: (info) => { set({ mainPoolHeartbeat: info }) },
+  nextTokenRefreshAt: null,
+  nextUsageRefreshAt: null,
+  refreshProgress: null,
   proactiveRenewalEnabled: false,
   proactiveRenewalLeadMinutes: 15,
   privacyMode: false,
@@ -1534,14 +1555,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     console.log(`[BatchRefresh] Triggering background refresh for ${accountsToRefresh.length} accounts...`)
-    
-    // 使用后台刷新 API（不阻塞 UI）
-    const result = await window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency)
-    
-    return { 
-      success: result.successCount, 
-      failed: result.failedCount, 
-      errors: [] 
+    set({ refreshProgress: { kind: 'token', done: 0, total: accountsToRefresh.length } })
+
+    // 使用后台刷新 API（不阻塞 UI）；结束后收掉进度条（事件侧完成时也会自动收）
+    try {
+      const result = await window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency)
+      return {
+        success: result.successCount,
+        failed: result.failedCount,
+        errors: []
+      }
+    } finally {
+      if (get().refreshProgress?.kind === 'token') set({ refreshProgress: null })
     }
   },
 
@@ -1690,14 +1715,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     console.log(`[BatchCheck] Triggering background check for ${accountsToCheck.length} accounts...`)
-    
+    set({ refreshProgress: { kind: 'usage', done: 0, total: accountsToCheck.length } })
+
     // 使用后台检查 API（只检查状态，不刷新 Token）
-    const result = await window.api.backgroundBatchCheck(accountsToCheck, autoRefreshConcurrency)
-    
-    return { 
-      success: result.successCount, 
-      failed: result.failedCount, 
-      errors: [] 
+    try {
+      const result = await window.api.backgroundBatchCheck(accountsToCheck, autoRefreshConcurrency)
+      return {
+        success: result.successCount,
+        failed: result.failedCount,
+        errors: []
+      }
+    } finally {
+      if (get().refreshProgress?.kind === 'usage') set({ refreshProgress: null })
     }
   },
 
@@ -1808,6 +1837,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           autoRefreshInterval: data.autoRefreshInterval ?? 5,
           autoRefreshConcurrency: data.autoRefreshConcurrency ?? 100,
           autoRefreshSyncInfo: data.autoRefreshSyncInfo ?? true,
+          // 旧配置迁移：原"同步检测账户信息"开关升级为独立的用量刷新开关，状态无缝继承
+          autoUsageRefreshEnabled: data.autoUsageRefreshEnabled ?? data.autoRefreshSyncInfo ?? true,
+          autoUsageRefreshInterval: data.autoUsageRefreshInterval ?? 5,
           statusCheckInterval: data.statusCheckInterval ?? 60,
           privacyMode: data.privacyMode ?? false,
           usagePrecision: data.usagePrecision ?? false,
@@ -1921,6 +1953,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       autoRefreshEnabled,
       autoRefreshInterval,
       autoRefreshConcurrency,
+      autoUsageRefreshEnabled,
+      autoUsageRefreshInterval,
       statusCheckInterval,
       privacyMode,
       usagePrecision,
@@ -1954,6 +1988,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           autoRefreshEnabled,
           autoRefreshInterval,
           autoRefreshConcurrency,
+          autoUsageRefreshEnabled,
+          autoUsageRefreshInterval,
           statusCheckInterval,
           privacyMode,
           usagePrecision,
@@ -2008,9 +2044,24 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     get().saveToStorage()
   },
 
+  // （已废弃：由 setAutoUsageRefresh 取代，保留兼容旧调用）
   setAutoRefreshSyncInfo: (enabled) => {
     set({ autoRefreshSyncInfo: enabled })
     get().saveToStorage()
+  },
+
+  setAutoUsageRefresh: (enabled, interval) => {
+    set({
+      autoUsageRefreshEnabled: enabled,
+      autoUsageRefreshInterval: interval ?? get().autoUsageRefreshInterval
+    })
+    get().saveToStorage()
+
+    if (enabled) {
+      get().startAutoUsageRefresh()
+    } else {
+      get().stopAutoUsageRefresh()
+    }
   },
 
   setProactiveRenewalEnabled: async (enabled) => {
@@ -2438,15 +2489,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   startAutoTokenRefresh: () => {
     const { autoRefreshEnabled, autoRefreshInterval } = get()
-    
+
     // 如果已有定时器，先停止
     if (tokenRefreshTimer) {
       clearInterval(tokenRefreshTimer)
       tokenRefreshTimer = null
     }
-    
+
     // 如果未启用，不启动定时器
     if (!autoRefreshEnabled) {
+      set({ nextTokenRefreshAt: null })
       console.log('[AutoRefresh] Auto-refresh is disabled')
       return
     }
@@ -2456,7 +2508,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     // 使用用户设置的间隔（分钟转毫秒）
     const intervalMs = autoRefreshInterval * 60 * 1000
+    set({ nextTokenRefreshAt: Date.now() + intervalMs })
     tokenRefreshTimer = setInterval(() => {
+      set({ nextTokenRefreshAt: Date.now() + get().autoRefreshInterval * 60 * 1000 })
       get().triggerBackgroundRefresh()
     }, intervalMs)
 
@@ -2469,15 +2523,51 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       tokenRefreshTimer = null
       console.log('[AutoRefresh] Token auto-refresh stopped')
     }
+    set({ nextTokenRefreshAt: null })
   },
 
-  // 触发后台刷新（在主进程执行，不阻塞 UI）
+  startAutoUsageRefresh: () => {
+    const { autoUsageRefreshEnabled, autoUsageRefreshInterval } = get()
+
+    if (usageRefreshTimer) {
+      clearInterval(usageRefreshTimer)
+      usageRefreshTimer = null
+    }
+
+    if (!autoUsageRefreshEnabled) {
+      set({ nextUsageRefreshAt: null })
+      console.log('[UsageRefresh] Auto usage refresh is disabled')
+      return
+    }
+
+    // 启动时不立即跑一轮：启动瞬间的全量信息检查容易和 token tick / SSO 同步撞车，
+    // 数据从磁盘加载本就新鲜，第一轮等一个间隔再跑
+    const intervalMs = autoUsageRefreshInterval * 60 * 1000
+    set({ nextUsageRefreshAt: Date.now() + intervalMs })
+    usageRefreshTimer = setInterval(() => {
+      set({ nextUsageRefreshAt: Date.now() + get().autoUsageRefreshInterval * 60 * 1000 })
+      get().triggerUsageRefresh()
+    }, intervalMs)
+
+    console.log(`[UsageRefresh] Auto usage refresh started with interval: ${autoUsageRefreshInterval} minutes`)
+  },
+
+  stopAutoUsageRefresh: () => {
+    if (usageRefreshTimer) {
+      clearInterval(usageRefreshTimer)
+      usageRefreshTimer = null
+      console.log('[UsageRefresh] Auto usage refresh stopped')
+    }
+    set({ nextUsageRefreshAt: null })
+  },
+
+  // 触发后台刷新（token tick：只处理临期账号，仅轮换令牌不做信息同步）
+  // 用量/订阅/封禁的全量检查由独立的 triggerUsageRefresh 负责，两条链路各自节奏
   triggerBackgroundRefresh: async () => {
-    const { accounts, autoRefreshConcurrency, autoRefreshSyncInfo, autoSwitchEnabled, autoRefreshInterval } = get()
+    const { accounts, autoRefreshConcurrency, autoRefreshInterval } = get()
     const now = Date.now()
     const refreshLeadMs = tokenRefreshLeadMs(autoRefreshInterval)
 
-    // 筛选需要处理的账号
     const accountsToRefresh: Array<{
       id: string
       email: string
@@ -2496,38 +2586,35 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         profileArn?: string
       }
     }> = []
-    
+
     for (const [id, account] of accounts) {
       // 跳过已封禁或错误状态的账号
       if (isBannedAccountError(account.lastError)) {
         continue
       }
-
+      // 只装"临期需要换 token"的账号；没有 expiresAt 的无从判断，留给用量 tick 顺带处理
       const expiresAt = account.credentials.expiresAt
-      const timeUntilExpiry = expiresAt ? expiresAt - now : Infinity
-      const needsTokenRefresh = expiresAt && timeUntilExpiry <= refreshLeadMs
-      
-      // Token 即将过期需要刷新，或开启了同步检测/自动换号需要检查账户信息
-      if (needsTokenRefresh || autoRefreshSyncInfo || autoSwitchEnabled) {
-        accountsToRefresh.push({
-          id,
-          email: account.email,
-          idp: account.idp,
-          profileArn: account.profileArn,
-          needsTokenRefresh: !!needsTokenRefresh,
-          machineId: account.machineId,  // 传递账户绑定的设备 ID
-          credentials: {
-            refreshToken: account.credentials.refreshToken || '',
-            clientId: account.credentials.clientId,
-            clientSecret: account.credentials.clientSecret,
-            region: account.credentials.region,
-            authMethod: account.credentials.authMethod,
-            accessToken: account.credentials.accessToken,
-            provider: account.credentials.provider,
-            profileArn: account.credentials.profileArn
-          }
-        })
-      }
+      if (!expiresAt || expiresAt - now > refreshLeadMs) continue
+      if (!account.credentials.refreshToken) continue
+
+      accountsToRefresh.push({
+        id,
+        email: account.email,
+        idp: account.idp,
+        profileArn: account.profileArn,
+        needsTokenRefresh: true,
+        machineId: account.machineId,  // 传递账户绑定的设备 ID
+        credentials: {
+          refreshToken: account.credentials.refreshToken,
+          clientId: account.credentials.clientId,
+          clientSecret: account.credentials.clientSecret,
+          region: account.credentials.region,
+          authMethod: account.credentials.authMethod,
+          accessToken: account.credentials.accessToken,
+          provider: account.credentials.provider,
+          profileArn: account.credentials.profileArn
+        }
+      })
     }
 
     if (accountsToRefresh.length === 0) {
@@ -2535,10 +2622,99 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       return
     }
 
-    console.log(`[BackgroundRefresh] Triggering refresh for ${accountsToRefresh.length} accounts (syncInfo: ${autoRefreshSyncInfo})...`)
-    
-    // 调用主进程后台刷新，不等待结果（通过 IPC 事件接收）
-    window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, autoRefreshSyncInfo)
+    console.log(`[BackgroundRefresh] Token tick: ${accountsToRefresh.length} accounts expiring, refreshing (token only)...`)
+    set({ refreshProgress: { kind: 'token', done: 0, total: accountsToRefresh.length, silent: true } })
+
+    // fire-and-forget：结果通过 IPC 事件回流；invoke 结束即整批完成，兜底收掉进度条
+    // （主进程在途去重可能让 completed 到不了 total，靠这里的 finally 收尾）
+    void window.api
+      .backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, false)
+      .finally(() => {
+        if (get().refreshProgress?.kind === 'token') set({ refreshProgress: null })
+      })
+  },
+
+  // 触发用量刷新（usage tick：全量检查用量/订阅/封禁，临期账号顺带换 token）
+  // 跳过封禁账号：必然 401/403 的号每轮带着刷只会白耗时间并堆积无效告警
+  triggerUsageRefresh: () => {
+    const { accounts, autoRefreshConcurrency, autoRefreshInterval } = get()
+    const now = Date.now()
+    const refreshLeadMs = tokenRefreshLeadMs(autoRefreshInterval)
+
+    const accountsToRefresh: Array<{
+      id: string
+      email: string
+      idp?: string
+      profileArn?: string
+      needsTokenRefresh: boolean
+      machineId?: string
+      credentials: {
+        refreshToken: string
+        clientId?: string
+        clientSecret?: string
+        region?: string
+        authMethod?: string
+        accessToken?: string
+        provider?: string
+        profileArn?: string
+      }
+    }> = []
+
+    for (const [id, account] of accounts) {
+      if (isBannedAccountError(account.lastError)) continue
+      if (!account.credentials.refreshToken) continue
+
+      const expiresAt = account.credentials.expiresAt
+      accountsToRefresh.push({
+        id,
+        email: account.email,
+        idp: account.idp,
+        profileArn: account.profileArn,
+        // 临期账号顺带换 token，避免拿着过期 accessToken 查信息白白失败
+        needsTokenRefresh: !!expiresAt && expiresAt - now <= refreshLeadMs,
+        machineId: account.machineId,
+        credentials: {
+          refreshToken: account.credentials.refreshToken,
+          clientId: account.credentials.clientId,
+          clientSecret: account.credentials.clientSecret,
+          region: account.credentials.region,
+          authMethod: account.credentials.authMethod,
+          accessToken: account.credentials.accessToken,
+          provider: account.credentials.provider,
+          profileArn: account.credentials.profileArn
+        }
+      })
+    }
+
+    if (accountsToRefresh.length === 0) {
+      console.log('[UsageRefresh] No runnable accounts')
+      return
+    }
+
+    const tokenCount = accountsToRefresh.filter((a) => a.needsTokenRefresh).length
+    console.log(`[UsageRefresh] Refreshing usage for ${accountsToRefresh.length} accounts (${tokenCount} with token renewal)...`)
+    set({ refreshProgress: { kind: 'usage', done: 0, total: accountsToRefresh.length, silent: true } })
+
+    void window.api
+      .backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, true)
+      .finally(() => {
+        if (get().refreshProgress?.kind === 'usage') set({ refreshProgress: null })
+      })
+  },
+
+  // 主进程进度事件回流：推进当前批量进度；完成即自动收尾
+  updateRefreshProgress: ({ done, total }) => {
+    const cur = get().refreshProgress
+    if (!cur) return
+    if (done >= total) {
+      set({ refreshProgress: null })
+      return
+    }
+    set({ refreshProgress: { ...cur, done, total } })
+  },
+
+  clearRefreshProgress: () => {
+    set({ refreshProgress: null })
   },
 
   // 处理后台刷新结果（兼容入口；高频场景请走 applyBackgroundRefreshResults 批量）

@@ -28,6 +28,7 @@ import {
   resolveProfileArnForWrite,
   KIRO_AUTH_TOKEN_PATH
 } from './kiroAuthSync'
+import { openAccountPortal } from './kiroPortal'
 import { openaiToKiro } from './proxy/translator'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
@@ -661,6 +662,37 @@ function openBrowserInPrivateMode(url: string): void {
   }
 }
 
+// ============ 瞬态网络错误自动重试 ============
+/**
+ * 网络层瞬态失败识别：连接超时 / DNS / TCP / TLS 握手失败（undici 统一报 "fetch failed"）。
+ * 这类失败请求未到达服务端——对 token 轮换也无风险（connect 阶段失败时服务端不可能已轮换
+ * 旧 refreshToken），重试安全。业务错误（HTTP 4xx/5xx、invalid_grant 等）不在此列，立即上抛。
+ */
+const TRANSIENT_NETWORK_ERROR =
+  /fetch failed|etimedout|econnreset|econnrefused|ehostunreach|enetunreach|enotfound|socket hang up|aborted|tls handshake/i
+
+function isTransientNetworkError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return TRANSIENT_NETWORK_ERROR.test(msg)
+}
+
+/** 网络类错误自动重试（默认重试 2 次，1s/2s 退避）；非网络错误不重试直接抛出 */
+async function withNetworkRetry<T>(fn: () => Promise<T>, retries = 2, baseDelayMs = 1000): Promise<T> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      lastErr = err
+      if (!isTransientNetworkError(err) || attempt === retries) break
+      const delay = baseDelayMs * (attempt + 1)
+      console.warn(`[NetworkRetry] 瞬态网络错误，${delay}ms 后重试 (${attempt + 1}/${retries}): ${err instanceof Error ? err.message : err}`)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+  throw lastErr
+}
+
 // IdC (BuilderId) 的 OIDC Token 刷新
 async function refreshOidcToken(
   refreshToken: string,
@@ -681,13 +713,13 @@ async function refreshOidcToken(
   }
 
   try {
-    const response = await fetchWithAppProxy(url, {
+    const response = await withNetworkRetry(() => fetchWithAppProxy(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(payload)
-    }, proxyUrl)
+    }, proxyUrl))
     
     if (!response.ok) {
       const errorText = await response.text()
@@ -763,14 +795,14 @@ async function refreshSocialToken(
   const machineId = getCurrentMachineId()
 
   try {
-    const response = await fetchWithAppProxy(url, {
+    const response = await withNetworkRetry(() => fetchWithAppProxy(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': getKiroUserAgent(machineId)
       },
       body: JSON.stringify({ refreshToken })
-    }, proxyUrl)
+    }, proxyUrl))
     
     if (!response.ok) {
       const errorText = await response.text()
@@ -1050,18 +1082,18 @@ async function kiroApiRequest<T>(
   
   let response: Response
   if (agent) {
-    response = await undiciFetch(`${KIRO_API_BASE}/${operation}`, {
+    response = await withNetworkRetry(() => undiciFetch(`${KIRO_API_BASE}/${operation}`, {
       method: 'POST',
       headers,
       body: Buffer.from(encode(body)),
       dispatcher: agent
-    } as UndiciRequestInit) as unknown as Response
+    } as UndiciRequestInit)) as unknown as Response
   } else {
-    response = await fetchWithAppProxy(`${KIRO_API_BASE}/${operation}`, {
+    response = await withNetworkRetry(() => fetchWithAppProxy(`${KIRO_API_BASE}/${operation}`, {
       method: 'POST',
       headers,
       body: Buffer.from(encode(body))
-    })
+    }))
   }
 
   if (!response.ok) {
@@ -1089,10 +1121,10 @@ async function kiroApiRequest<T>(
 
   const arrayBuffer = await response.arrayBuffer()
   const result = decode(Buffer.from(arrayBuffer)) as T
-  // 精简响应日志：一行摘要 + 完整数据放 data（ⓘ 展开）
+  // 精简响应日志：只打一行摘要。批量刷新时逐账号全量打印响应对象会显著放大日志开销
   const r = result as Record<string, unknown>
   const resSummary = r.email ? `${r.email} [${r.status || 'ok'}]` : `${response.status}`
-  console.log(`[Kiro API] ${operation} [${logTag}] → ${resSummary}`, result)
+  console.log(`[Kiro API] ${operation} [${logTag}] → ${resSummary}`)
   return result
 }
 
@@ -1192,13 +1224,13 @@ async function fetchRestApi(
   }
   const url = `${baseUrl}${path}`
   if (agent) {
-    return await undiciFetch(url, {
+    return await withNetworkRetry(() => undiciFetch(url, {
       method: 'GET',
       headers,
       dispatcher: agent
-    } as UndiciRequestInit) as unknown as Response
+    } as UndiciRequestInit)) as unknown as Response
   }
-  return await fetchWithAppProxy(url, { method: 'GET', headers })
+  return await withNetworkRetry(() => fetchWithAppProxy(url, { method: 'GET', headers }))
 }
 
 async function getUsageLimitsRest(
@@ -2117,19 +2149,11 @@ async function runMainPoolTokenRefreshTick(): Promise<void> {
     }
 
     if (toRefresh.length === 0) {
-      // 心跳上报：让渲染层知道调度器活着（无需刷新也是一次正常检查）
-      mainWindow?.webContents.send('main-pool-refresh-heartbeat', { at: Date.now(), refreshed: 0, success: 0, failed: 0 })
       return
     }
     console.log(`[MainPoolRefresh] ${toRefresh.length} token(s) expiring within ${Math.round(leadMs / 60000)}min, refreshing...`)
     // syncInfo=false：仅刷 token；用量/订阅等信息同步由渲染进程定时器负责，避免主进程跑重活
-    const r = await backgroundBatchRefreshImpl(toRefresh, concurrency, false)
-    mainWindow?.webContents.send('main-pool-refresh-heartbeat', {
-      at: Date.now(),
-      refreshed: toRefresh.length,
-      success: r.successCount,
-      failed: r.failedCount
-    })
+    await backgroundBatchRefreshImpl(toRefresh, concurrency, false)
   } catch (err) {
     console.warn('[MainPoolRefresh] tick failed:', err instanceof Error ? err.message : err)
   }
@@ -3836,10 +3860,20 @@ app.whenReady().then(async () => {
   // IPC: 后台批量刷新账号（在主进程执行，不阻塞 UI）
   const backgroundBatchRefresh = async (accounts: BackgroundRefreshAccount[], concurrency: number = 10, syncInfo: boolean = true): Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }> => {
     console.log(`[BackgroundRefresh] Starting batch refresh for ${accounts.length} accounts, concurrency: ${concurrency}, syncInfo: ${syncInfo}`)
-    
+
     let completed = 0
     let success = 0
     let failed = 0
+
+    // 每账号完成即上报进度：渲染层进度条逐号推进（批末的批次级汇总事件仍保留）
+    const sendProgress = (): void => {
+      mainWindow?.webContents.send('background-refresh-progress', {
+        completed,
+        total: accounts.length,
+        success,
+        failed
+      })
+    }
 
     // 串行处理每批，避免并发过高
     for (let i = 0; i < accounts.length; i += concurrency) {
@@ -3880,6 +3914,7 @@ app.whenReady().then(async () => {
               if (!refreshToken) {
                 failed++
                 completed++
+                sendProgress()
                 return
               }
 
@@ -3902,6 +3937,7 @@ app.whenReady().then(async () => {
                   success: false,
                   error: refreshResult.error
                 })
+                sendProgress()
                 return
               }
 
@@ -4007,6 +4043,8 @@ app.whenReady().then(async () => {
             let errorMessage: string | undefined
 
             if (syncInfo) {
+              // 用量与用户状态并行请求：两者互不依赖，串行会让每账号多付一整个往返
+              const usageTask = (async (): Promise<void> => {
               // 调用 getUsageAndLimits API（根据配置选择 REST 或 CBOR 格式）
               try {
                 interface UsageBreakdownItem {
@@ -4148,8 +4186,10 @@ app.whenReady().then(async () => {
                   errorMessage = errMsg
                 }
               }
+              })()
 
               // 调用 GetUserInfo API 获取用户状态
+              const userInfoTask = (async (): Promise<void> => {
               try {
                 userInfoData = await getUserInfo(newAccessToken, idp, account.machineId)
               } catch (apiError) {
@@ -4159,6 +4199,9 @@ app.whenReady().then(async () => {
                   errorMessage = errMsg
                 }
               }
+              })()
+
+              await Promise.all([usageTask, userInfoTask])
             }
 
             success++
@@ -4180,6 +4223,7 @@ app.whenReady().then(async () => {
                 errorMessage
               }
             })
+            sendProgress()
           } catch (e) {
             failed++
             completed++
@@ -4188,6 +4232,7 @@ app.whenReady().then(async () => {
               success: false,
               error: e instanceof Error ? e.message : 'Unknown error'
             })
+            sendProgress()
           } finally {
             if (account.id) poolRefreshInFlightIds.delete(account.id)
           }
@@ -6816,6 +6861,59 @@ app.whenReady().then(async () => {
       return { success: true }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to open URL' }
+    }
+  })
+
+  // IPC: 以指定账号身份在应用内私密浏览器打开 Kiro 官网后台（注入凭证 cookie，免登录）
+  ipcMain.handle('account-open-portal', async (_event, accountId: string) => {
+    // 账号库里取出的最小字段视图（凭据只在主进程读取，不下发渲染层）
+    type PortalAccountRecord = {
+      email?: string
+      idp?: string
+      profileArn?: string
+      machineId?: string
+      credentials?: {
+        accessToken?: string
+        refreshToken?: string
+        profileArn?: string
+        region?: string
+        provider?: string
+        authMethod?: string
+        expiresAt?: number
+      }
+    }
+    try {
+      const data = getAccountData() as { accounts?: Record<string, PortalAccountRecord> } | null
+      const acc = data?.accounts?.[accountId]
+      if (!acc) return { success: false, error: '账号不存在' }
+      const cred = acc.credentials || {}
+      if (!cred.accessToken && !cred.refreshToken) {
+        return { success: false, error: '账号缺少凭证，无法登录官网' }
+      }
+      // accessToken 临期/过期时先刷新一次，过期 token 进门户会被按未登录处理
+      let accessToken: string | undefined = cred.accessToken
+      if (accessToken && typeof cred.expiresAt === 'number' && cred.expiresAt - 60_000 < Date.now()) {
+        const refreshed = await refreshAccountAccessToken(accountId)
+        if (refreshed?.accessToken) accessToken = refreshed.accessToken
+      }
+      await openAccountPortal({
+        id: accountId,
+        email: acc.email || '',
+        idp: acc.idp,
+        profileArn: acc.profileArn,
+        machineId: acc.machineId,
+        credentials: {
+          accessToken,
+          refreshToken: cred.refreshToken,
+          profileArn: cred.profileArn,
+          region: cred.region,
+          provider: cred.provider,
+          authMethod: cred.authMethod
+        }
+      })
+      return { success: true }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to open portal' }
     }
   })
 

@@ -782,6 +782,11 @@ const api = {
     return ipcRenderer.invoke('open-subscription-window', url)
   },
 
+  // 以账号身份在应用内私密浏览器打开 Kiro 官网后台（免登录）
+  accountOpenPortal: (accountId: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('account-open-portal', accountId)
+  },
+
   // 自动切订阅到 Free（dryRun=true 只读校验链路，不提交变更）
   accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean): Promise<{ success: boolean; error?: string; alreadyFree?: boolean; alreadyScheduled?: boolean; wontRenew?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
     return ipcRenderer.invoke('account-switch-plan-free', accessToken, region, profileArn, machineId, provider, authMethod, accountId, dryRun)
@@ -1143,17 +1148,6 @@ const api = {
     ipcRenderer.on('tray-refresh-account', handler)
     return () => {
       ipcRenderer.removeListener('tray-refresh-account', handler)
-    }
-  },
-
-  // 监听主进程 token 刷新池心跳（每次检查后上报，60s 一次；refreshed=0 表示本轮无需刷新）
-  onMainPoolRefreshHeartbeat: (callback: (info: { at: number; refreshed: number; success: number; failed: number }) => void): (() => void) => {
-    const handler = (_e: Electron.IpcRendererEvent, info: { at: number; refreshed: number; success: number; failed: number }): void => {
-      callback(info)
-    }
-    ipcRenderer.on('main-pool-refresh-heartbeat', handler)
-    return () => {
-      ipcRenderer.removeListener('main-pool-refresh-heartbeat', handler)
     }
   },
 

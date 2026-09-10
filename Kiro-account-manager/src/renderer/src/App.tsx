@@ -7,6 +7,7 @@ import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, Pro
 import { useWebhookStore } from './store/webhooks'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
+import { TaskProgressWidget } from './components/layout/TaskProgressWidget'
 import { useAccountsStore, isBannedAccountError } from './store/accounts'
 import { useIdleAccountsStore } from './store/idleAccounts'
 
@@ -27,6 +28,9 @@ function App(): React.JSX.Element {
     loadFromStorage,
     startAutoTokenRefresh,
     stopAutoTokenRefresh,
+    startAutoUsageRefresh,
+    stopAutoUsageRefresh,
+    updateRefreshProgress,
     applyBackgroundRefreshResults,
     applyBackgroundCheckResults,
     flushSaveImmediately,
@@ -35,19 +39,8 @@ function App(): React.JSX.Element {
     setActiveAccount,
     checkAndRefreshExpiringTokens,
     updateAccountStatus,
-    updateAccount,
-    setMainPoolHeartbeat
+    updateAccount
   } = useAccountsStore()
-
-  // 订阅主进程 token 刷新池心跳（60s 一轮），供账号管理页显示自动刷新实时状态
-  useEffect(() => {
-    const unsubscribe = window.api.onMainPoolRefreshHeartbeat((info) => {
-      setMainPoolHeartbeat(info)
-    })
-    return () => {
-      unsubscribe()
-    }
-  }, [setMainPoolHeartbeat])
 
   // 切换到下一个可用账户
   const switchToNextAccount = useCallback(() => {
@@ -103,10 +96,11 @@ function App(): React.JSX.Element {
     }, TRAY_UPDATE_DEBOUNCE_MS)
   }, [])
 
-  // 应用启动时加载数据并启动自动刷新
+  // 应用启动时加载数据并启动自动刷新（token 与用量两条独立链路）
   useEffect(() => {
     loadFromStorage().then(() => {
       startAutoTokenRefresh()
+      startAutoUsageRefresh()
     })
     // 闲置账号库（独立 SQLite，物理隔离）：只加载数据，无任何定时器/网络调度
     void useIdleAccountsStore.getState().loadFromStorage()
@@ -117,8 +111,23 @@ function App(): React.JSX.Element {
 
     return () => {
       stopAutoTokenRefresh()
+      stopAutoUsageRefresh()
     }
-  }, [loadFromStorage, startAutoTokenRefresh, stopAutoTokenRefresh])
+  }, [loadFromStorage, startAutoTokenRefresh, stopAutoTokenRefresh, startAutoUsageRefresh, stopAutoUsageRefresh])
+
+  // 订阅主进程批量刷新/检查的逐账号进度，推进 store 里的全局进度条状态
+  useEffect(() => {
+    const unsubscribeRefresh = window.api.onBackgroundRefreshProgress((data) => {
+      updateRefreshProgress({ done: data.completed, total: data.total })
+    })
+    const unsubscribeCheck = window.api.onBackgroundCheckProgress((data) => {
+      updateRefreshProgress({ done: data.completed, total: data.total })
+    })
+    return () => {
+      unsubscribeRefresh()
+      unsubscribeCheck()
+    }
+  }, [updateRefreshProgress])
 
   // 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件
   // 触发时间点：Kiro IDE 在后台 refresh loop 把磁盘 token 写新了，反代 watcher 反向同步到 store
@@ -409,6 +418,7 @@ function App(): React.JSX.Element {
       </div>
       <UpdateDialog />
       <CloseConfirmDialog />
+      <TaskProgressWidget />
     </div>
   )
 }

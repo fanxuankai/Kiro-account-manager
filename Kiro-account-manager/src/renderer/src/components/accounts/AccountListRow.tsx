@@ -14,6 +14,7 @@ import {
   LogOut,
   RotateCcw,
   ExternalLink,
+  Globe,
   Loader2,
   Clock,
   KeyRound,
@@ -81,6 +82,7 @@ function AccountListRowComponent({
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isClearingSuspended, setIsClearingSuspended] = useState(false)
   const [isOpeningPortal, setIsOpeningPortal] = useState(false)
+  const [isOpeningPortalSite, setIsOpeningPortalSite] = useState(false)
   const [emailCopied, setEmailCopied] = useState(false)
 
   // 封禁判定
@@ -296,6 +298,23 @@ function AccountListRowComponent({
       setIsOpeningPortal(false)
     }
   }, [account, isEn, isOpeningPortal])
+
+  // 以该账号身份打开 Kiro 官网后台（应用内私密浏览器，注入凭证免登录）
+  const handleOpenPortalSite = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (isOpeningPortalSite) return
+    setIsOpeningPortalSite(true)
+    try {
+      const result = await window.api.accountOpenPortal(account.id)
+      if (!result.success) {
+        alert(result.error || (isEn ? 'Failed to open portal' : '打开官网失败'))
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : (isEn ? 'Failed to open portal' : '打开官网失败'))
+    } finally {
+      setIsOpeningPortalSite(false)
+    }
+  }, [account.id, isEn, isOpeningPortalSite])
 
   // ============ 渲染 ============
 
@@ -663,6 +682,17 @@ function AccountListRowComponent({
           title={isEn ? 'Open subscription portal (incognito)' : '打开订阅门户（无痕）'}
         >
           {isOpeningPortal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+        </Button>
+
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          onClick={handleOpenPortalSite}
+          disabled={isOpeningPortalSite}
+          title={isEn ? 'Open Kiro portal as this account (in-app private browser)' : '以该账号身份打开 Kiro 官网后台（应用内私密浏览器）'}
+        >
+          {isOpeningPortalSite ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Globe className="h-3.5 w-3.5" />}
         </Button>
 
         <Button
