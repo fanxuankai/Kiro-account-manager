@@ -1222,12 +1222,14 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
                       </div>
                     </button>
 
-                    {/* GitHub */}
-                    <button 
+                    {/* GitHub（固定无痕：注册/登录不留本地痕迹，替代原工具栏独立注册按钮） */}
+                    <button
                       className="group w-full h-14 flex items-center px-4 gap-4 bg-background hover:bg-muted border border-border rounded-xl transition-all duration-200 hover:shadow-md hover:border-primary/30"
                       onClick={() => {
                         setLoginType('github')
-                        handleStartSocialLogin('Github')
+                        // 固定无痕，并同步 UI 开关状态保持一致
+                        setUsePrivateMode(true)
+                        handleStartSocialLogin('Github', true)
                       }}
                     >
                       <div className="w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-800 rounded-full shadow-sm border dark:border-slate-600 p-1.5 group-hover:scale-110 transition-transform">
@@ -1236,8 +1238,8 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
                         </svg>
                       </div>
                       <div className="flex flex-col items-start">
-                        <span className="text-sm font-semibold text-foreground">{isEn ? 'GitHub Account' : 'GitHub 账号'}</span>
-                        <span className="text-xs text-muted-foreground">{isEn ? 'Quick login with GitHub' : '使用 GitHub 账号快捷登录'}</span>
+                        <span className="text-sm font-semibold text-foreground">{isEn ? 'GitHub Account (Private Mode)' : 'GitHub 账号（无痕模式）'}</span>
+                        <span className="text-xs text-muted-foreground">{isEn ? 'Login with GitHub in a private window' : '使用 GitHub 账号无痕登录，不留本地痕迹'}</span>
                       </div>
                     </button>
 

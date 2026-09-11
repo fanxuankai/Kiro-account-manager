@@ -4,6 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import QRCode from 'qrcode'
 import { useAccountsStore } from '@/store/accounts'
 import { Button, Card, CardContent, Switch } from '../ui'
+import { switchAccountToFree } from '../accounts/_helpers'
 import {
   CreditCard,
   ExternalLink,
@@ -2004,8 +2005,8 @@ function QrPayDialog({ link, onClose, isEn }: QrPayDialogProps): React.ReactNode
     let cancelled = false
     setDataUrl(null)
     setFailed(false)
-    // Stripe 支付链接较长，用中等纠错 + 白底保证扫码成功率
-    QRCode.toDataURL(url, { width: 260, margin: 2, errorCorrectionLevel: 'M' })
+    // Stripe 支付链接较长，用中等纠错 + 白底保证扫码成功率；生成 2 倍尺寸保证 Retina 屏清晰
+    QRCode.toDataURL(url, { width: 640, margin: 2, errorCorrectionLevel: 'M' })
       .then((d) => { if (!cancelled) setDataUrl(d) })
       .catch(() => { if (!cancelled) setFailed(true) })
     return () => { cancelled = true }
@@ -2024,7 +2025,7 @@ function QrPayDialog({ link, onClose, isEn }: QrPayDialogProps): React.ReactNode
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-background rounded-xl shadow-2xl w-full max-w-sm animate-in fade-in zoom-in-95 duration-200">
+      <div className="relative bg-background rounded-xl shadow-2xl w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-5 py-3 border-b">
           <div className="flex items-center gap-2 min-w-0">
@@ -2044,7 +2045,7 @@ function QrPayDialog({ link, onClose, isEn }: QrPayDialogProps): React.ReactNode
               ? <img
                   src={dataUrl}
                   alt="payment QR code"
-                  className="w-[260px] h-[260px] rounded-lg border border-border/60 bg-white p-1"
+                  className="w-[320px] h-[320px] rounded-lg border border-border/60 bg-white p-1"
                 />
               : <Loader2 className="h-8 w-8 animate-spin text-muted-foreground my-24" />}
 
@@ -2384,79 +2385,10 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
     }
   }
 
-  /** 单账号切 Free：调主进程走 Stripe 门户链路，成功后本地更新订阅显示 */
+  /** 单账号切 Free：共享实现见 accounts/_helpers（与账号卡片/列表行同一条链路） */
   const switchOneToFree = useCallback(async (acc: AccountType): Promise<'switched' | 'already-free' | 'failed'> => {
-    const r = await window.api.accountSwitchPlanFree(
-      acc.credentials.accessToken,
-      acc.credentials?.region,
-      acc.profileArn,
-      acc.machineId,
-      acc.credentials?.provider || acc.idp,
-      acc.credentials?.authMethod,
-      acc.id
-    )
-    persistRefreshedCredentials(acc, r.credentials)
-    if (r.success && r.switched) {
-      // 切 Free 实为"下周期生效"：当前周期保持原计划与额度，仅标记已安排降级；
-      // 只有 Stripe 复核为立即生效时才把本地计划改为 Free
-      if (r.scheduledToFree) {
-        updateAccount(acc.id, {
-          subscription: {
-            ...acc.subscription,
-            willRenew: false,
-            scheduledToFree: true,
-            wasPaid: true,
-            renewalCheckedAt: Date.now(),
-            ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
-          } as AccountType['subscription']
-        })
-        alert(isEn
-          ? `${acc.email}: Free takes effect next cycle; current plan and quota unchanged until then.`
-          : `${acc.email}：已切 Free，下周期生效；当前周期保持原计划与额度不变。`
-        )
-      } else {
-        updateAccount(acc.id, {
-          subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
-        })
-      }
-      return 'switched'
-    }
-    if (r.success && r.alreadyFree) return 'already-free'
-    if (r.success && r.alreadyScheduled) {
-      // 门户侧已排期周期末降级：同步本地标记，避免重复提交
-      updateAccount(acc.id, {
-        subscription: {
-          ...acc.subscription,
-          willRenew: false,
-          scheduledToFree: true,
-          wasPaid: true,
-          renewalCheckedAt: Date.now(),
-          ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
-        } as AccountType['subscription']
-      })
-      alert(isEn
-        ? `${acc.email}: already scheduled to switch to Free at period end (${r.transitionAt ? new Date(r.transitionAt * 1000).toLocaleString() : 'end of current cycle'}); no action needed.`
-        : `${acc.email}：已排期周期末切 Free（${r.transitionAt ? new Date(r.transitionAt * 1000).toLocaleString() : '本期结束'}），无需重复操作。`
-      )
-      return 'already-free'
-    }
-    if (r.success && r.wontRenew) {
-      updateAccount(acc.id, {
-        subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
-      })
-      alert(isEn
-        ? `${acc.email}: subscription is set to not renew (no charge next cycle); no need to switch to Free.`
-        : `${acc.email}：该账号已设置到期不续费，下周期不会扣款，无需切 Free。`
-      )
-      return 'already-free'
-    }
-    console.warn('[SwitchFree] failed for', acc.email, r.error)
-    alert(isEn
-      ? `Switch failed for ${acc.email}:\n${r.error || 'Unknown error'}`
-      : `${acc.email} 切换失败：\n${r.error || '未知错误'}`
-    )
-    return 'failed'
-  }, [isEn, updateAccount, persistRefreshedCredentials])
+    return switchAccountToFree(acc, isEn, updateAccount)
+  }, [isEn, updateAccount])
 
   /** 批量切 Free（自动走 Stripe 门户，无需打开浏览器） */
   const handleBatchSwitchFree = async (mode: 'selected' | 'all'): Promise<void> => {

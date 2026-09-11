@@ -32,7 +32,6 @@ import {
   Zap,
   Activity,
   KeyRound,
-  UserPlus,
   Archive
 } from 'lucide-react'
 
@@ -360,17 +359,6 @@ export function AccountToolbar({
           <Button onClick={onAddAccount}>
             <Plus className="h-4 w-4 mr-1" />
             {isEn ? 'Add' : '添加账号'}
-          </Button>
-          {/* 快捷：无痕模式打开 Kiro 注册页 */}
-          <Button
-            variant="outline"
-            onClick={() => {
-              window.api.openUrlPrivate('https://app.kiro.dev/signin')
-            }}
-            title={isEn ? 'Open app.kiro.dev/signin in private/incognito mode' : '无痕模式打开 Kiro 注册页（app.kiro.dev/signin）'}
-          >
-            <UserPlus className="h-4 w-4 mr-1" />
-            {isEn ? 'Register' : '注册'}
           </Button>
           {/* 快捷：一键发起 GitHub 无痕在线登录 */}
           <Button

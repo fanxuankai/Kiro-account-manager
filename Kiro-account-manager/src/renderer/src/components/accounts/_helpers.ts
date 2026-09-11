@@ -211,3 +211,106 @@ export function tokenExpiryLevel(expiresAt: number | undefined): 'normal' | 'soo
   if (left <= 30 * 60 * 1000) return 'soon'
   return 'normal'
 }
+
+// ============ 切 Free（订阅管理页 / 账号卡片 / 账号列表行 共用） ============
+
+type UpdateAccountFn = (id: string, updates: Partial<Account>) => void
+
+/** 是否已是 Free 档（含 type/title 均空的兜底判定，与订阅管理页 isPaidSwitchable 一致） */
+export function isFreeTierAccount(a: Account | null | undefined): boolean {
+  if (!a) return true
+  const type = (a.subscription?.type || '').toUpperCase()
+  const title = (a.subscription?.title || '').toUpperCase()
+  return type.includes('FREE') || title.includes('FREE') || (!type && !title)
+}
+
+/**
+ * 单账号切 Free：调主进程走 Stripe 门户链路，成功后同步本地订阅显示并弹窗提示。
+ * 返回 switched / already-free / failed，供批量流程汇总计数。
+ */
+export async function switchAccountToFree(
+  acc: Account,
+  isEn: boolean,
+  updateAccount: UpdateAccountFn
+): Promise<'switched' | 'already-free' | 'failed'> {
+  const r = await window.api.accountSwitchPlanFree(
+    acc.credentials.accessToken,
+    acc.credentials?.region,
+    acc.profileArn,
+    acc.machineId,
+    acc.credentials?.provider || acc.idp,
+    acc.credentials?.authMethod,
+    acc.id
+  )
+  // 主进程可能顺带刷新了凭证：与旧 token 不同则持久化，避免后续请求用废 token
+  if (r.credentials?.accessToken && r.credentials.accessToken !== acc.credentials?.accessToken) {
+    updateAccount(acc.id, {
+      credentials: {
+        ...acc.credentials,
+        accessToken: r.credentials.accessToken,
+        refreshToken: r.credentials.refreshToken ?? acc.credentials?.refreshToken,
+        ...(r.credentials.expiresIn ? { expiresAt: Date.now() + r.credentials.expiresIn * 1000 } : {})
+      } as Account['credentials']
+    })
+  }
+  if (r.success && r.switched) {
+    // 切 Free 实为"下周期生效"：当前周期保持原计划与额度，仅标记已安排降级；
+    // 只有 Stripe 复核为立即生效时才把本地计划改为 Free
+    if (r.scheduledToFree) {
+      updateAccount(acc.id, {
+        subscription: {
+          ...acc.subscription,
+          willRenew: false,
+          scheduledToFree: true,
+          wasPaid: true,
+          renewalCheckedAt: Date.now(),
+          ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+        } as Account['subscription']
+      })
+      alert(isEn
+        ? `${acc.email}: Free takes effect next cycle; current plan and quota unchanged until then.`
+        : `${acc.email}：已切 Free，下周期生效；当前周期保持原计划与额度不变。`
+      )
+    } else {
+      updateAccount(acc.id, {
+        subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as Account['subscription']
+      })
+    }
+    return 'switched'
+  }
+  if (r.success && r.alreadyFree) return 'already-free'
+  if (r.success && r.alreadyScheduled) {
+    // 门户侧已排期周期末降级：同步本地标记，避免重复提交
+    updateAccount(acc.id, {
+      subscription: {
+        ...acc.subscription,
+        willRenew: false,
+        scheduledToFree: true,
+        wasPaid: true,
+        renewalCheckedAt: Date.now(),
+        ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+      } as Account['subscription']
+    })
+    alert(isEn
+      ? `${acc.email}: already scheduled to switch to Free at period end (${r.transitionAt ? new Date(r.transitionAt * 1000).toLocaleString() : 'end of current cycle'}); no action needed.`
+      : `${acc.email}：已排期周期末切 Free（${r.transitionAt ? new Date(r.transitionAt * 1000).toLocaleString() : '本期结束'}），无需重复操作。`
+    )
+    return 'already-free'
+  }
+  if (r.success && r.wontRenew) {
+    updateAccount(acc.id, {
+      subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as Account['subscription']
+    })
+    alert(isEn
+      ? `${acc.email}: subscription is set to not renew (no charge next cycle); no need to switch to Free.`
+      : `${acc.email}：该账号已设置到期不续费，下周期不会扣款，无需切 Free。`
+    )
+    return 'already-free'
+  }
+  console.warn('[SwitchFree] failed for', acc.email, r.error)
+  alert(isEn
+    ? `Switch failed for ${acc.email}:\n${r.error || 'Unknown error'}`
+    : `${acc.email} 切换失败：\n${r.error || '未知错误'}`
+  )
+  return 'failed'
+}

@@ -25,9 +25,11 @@ import {
   CreditCard,
   Sparkles,
   LogOut,
-  RotateCcw
+  RotateCcw,
+  ArrowDownCircle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { switchAccountToFree, isFreeTierAccount } from './_helpers'
 
 // 解析 ARGB 颜色转换为 CSS rgba
 function toRgba(argbColor: string): string {
@@ -164,6 +166,7 @@ export const AccountCard = memo(function AccountCard({
     maskNickname,
     usagePrecision,
     updateAccountStatus,
+    updateAccount,
     accountProxyBindings,
     proxyPool,
     unbindAccountFromProxy
@@ -370,6 +373,23 @@ export const AccountCard = memo(function AccountCard({
   const handleDelete = (): void => {
     if (confirm(isEn ? `Delete account ${getDisplayName(account)}?` : `确定要删除账号 ${getDisplayName(account)} 吗？`)) {
       removeAccount(account.id)
+    }
+  }
+
+  // 切 Free（降级到免费套餐，走 Stripe 门户链路，与订阅管理页同一条链路）
+  const [isSwitchingFree, setIsSwitchingFree] = useState(false)
+  const alreadyFreeTier = isFreeTierAccount(account) || !!account.subscription?.scheduledToFree
+  const handleSwitchFree = async (e: React.MouseEvent): Promise<void> => {
+    e.stopPropagation()
+    if (isSwitchingFree || alreadyFreeTier) return
+    if (!confirm(isEn
+      ? `Switch "${account.email}" to Kiro Free?\n\n- Free is $0/mo, no further charges\n- Current paid plan is downgraded (no refund for the remaining period)\n- Re-subscribe is needed to restore a paid plan`
+      : `确定把 "${account.email}" 切到 Kiro Free？\n\n- Free 为 $0/月，不再产生扣费\n- 当前付费计划降级（剩余周期不退款）\n- 如需恢复付费需重新订阅`)) return
+    setIsSwitchingFree(true)
+    try {
+      await switchAccountToFree(account, isEn, updateAccount)
+    } finally {
+      setIsSwitchingFree(false)
     }
   }
 
@@ -943,6 +963,19 @@ export const AccountCard = memo(function AccountCard({
                  title={isEn ? 'Open subscription portal (incognito)' : '打开订阅门户（无痕）'}
                >
                   {isOpeningPortal ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}
+               </Button>
+
+               <Button
+                 size="icon"
+                 variant="ghost"
+                 className="h-7 w-7 text-green-600 hover:bg-green-500/10 hover:text-green-700"
+                 onClick={handleSwitchFree}
+                 disabled={isSwitchingFree || alreadyFreeTier || !account.credentials?.accessToken}
+                 title={alreadyFreeTier
+                   ? (isEn ? 'Already Free' : '已是 Free 套餐')
+                   : (isEn ? 'Switch to Free plan ($0/mo, no further charges)' : '切 Free（降级到免费套餐，$0/月不再扣费）')}
+               >
+                  {isSwitchingFree ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowDownCircle className="h-3.5 w-3.5" />}
                </Button>
 
                <Button
