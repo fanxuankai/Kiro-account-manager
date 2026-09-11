@@ -272,6 +272,13 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.30 (2026-9-11) — Fix Blank Subscription-Management List + Load-Plans Always Clickable
+
+- **Fix**: the subscription-management tab rendered a completely blank list once row count reached 50+ — the virtual-scroll container's content-driven `max-h` combined with `contain:strict` (size containment ignores children) collapsed its height to 0, so the virtualizer rendered nothing; switched to a fixed `h-[60vh]` height. The direct-render branch used under 50 rows was unaffected
+- **Improved**: the "Load Plans" button no longer greys out when there are no upgradeable accounts — plan listing doesn't depend on upgrade eligibility, it now falls back to any account with credentials
+
+---
+
 ### v1.7.29 (2026-9-11) — Per-Account Switch-to-Free + GitHub Private Login Moved into Add Dialog (includes unreleased 1.7.27/1.7.28 work)
 
 - **New**: "Switch to Free" button on account cards/list rows (green down-arrow) — downgrade a single account to the free plan in one click without visiting the subscription page (Stripe portal flow, no browser window); auto-disabled for accounts already Free or already scheduled

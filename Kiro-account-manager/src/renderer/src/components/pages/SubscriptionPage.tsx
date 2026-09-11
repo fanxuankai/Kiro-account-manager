@@ -298,12 +298,16 @@ export function SubscriptionPage() {
 
   // 加载可用订阅计划（用任一可用账户调用）
   const handleLoadPlans = async () => {
+    // 计划列表与账号是否可升级无关：优先可升级账号，否则退而取任意有凭证的账号
     const upgradeableAccounts = getUpgradeableAccounts()
-    if (upgradeableAccounts.length === 0) return
+    const fallbackAcc = Array.from(accounts.values()).find(a => a?.credentials?.accessToken)
+    const acc = upgradeableAccounts[0] ?? fallbackAcc
+    if (!acc) {
+      alert(isEn ? 'No account with credentials to load plans' : '没有可用凭证的账号，无法加载计划')
+      return
+    }
 
     setIsLoadingPlans(true)
-    const acc = upgradeableAccounts[0]!
-    
     try {
       const result = await window.api.accountGetSubscriptions(
         acc.credentials.accessToken,
@@ -1353,7 +1357,7 @@ export function SubscriptionPage() {
                   variant="outline"
                   size="sm"
                   onClick={handleLoadPlans}
-                  disabled={isLoadingPlans || upgradeableCount === 0}
+                  disabled={isLoadingPlans}
                 >
                   {isLoadingPlans ? (
                     <Loader2 className="h-4 w-4 mr-1 animate-spin" />
@@ -2796,8 +2800,10 @@ function SubscribedAccountsVirtualList({ subscribed, selectedIds, toggleSelect, 
   }
 
   const items = virtualizer.getVirtualItems()
+  // 必须用确定高度：contain:strict 会忽略子元素贡献的高度，max-h 只会被撑成 0，
+  // 虚拟列表测得视口 0 → 一行都不渲染
   return (
-    <div ref={parentRef} className="max-h-[60vh] overflow-y-auto" style={{ contain: 'strict' }}>
+    <div ref={parentRef} className="h-[60vh] overflow-y-auto" style={{ contain: 'strict' }}>
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
         {items.map((virtualRow) => {
           const acc = validItems[virtualRow.index]
