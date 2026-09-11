@@ -272,6 +272,17 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.29 (2026-9-11) — Per-Account Switch-to-Free + GitHub Private Login Moved into Add Dialog (includes unreleased 1.7.27/1.7.28 work)
+
+- **New**: "Switch to Free" button on account cards/list rows (green down-arrow) — downgrade a single account to the free plan in one click without visiting the subscription page (Stripe portal flow, no browser window); auto-disabled for accounts already Free or already scheduled
+- **Improved**: the standalone "Register" toolbar button is removed, replaced by "Add Account → Online Login → GitHub Account (Private Mode)" — always opens a private/incognito window, independent of the privacy toggle
+- **Improved**: batch refresh progress moved from a bottom-right floating card to a global bar right under the title bar, visible on every page; scheduled auto-refresh now shows too, marked "(auto)"
+- **Improved**: payment QR code enlarged (260px → 320px display, bitmap generated at 2x so it stays sharp on Retina), dialog widened to match
+- (v1.7.28, shipping with this release) in-app private portal browser, dual-path auto-refresh with progress feedback, network-layer speedups and retries
+- (v1.7.27, shipping with this release) idle-account vault — physically isolated storage for accounts that don't need keep-alive, with two-way moves to/from account management
+
+---
+
 ### v1.7.26 (2026-9-4) — Online-Update Pipeline Verification
 
 - No functional changes; exists to verify the self-built macOS in-app updater introduced in v1.7.25 (1.7.25 → 1.7.26 via About → Check Updates → Update in App)
