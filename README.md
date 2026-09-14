@@ -272,6 +272,23 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.33 (2026-9-14) — Fix Refresh Ball Pinned Bottom-Left by Global Style
+
+- **Fix**: the v1.7.32 floating ball actually rendered at the bottom-left, clipped by the window edge — the root container's `.ambient-bg > * { position: relative }` rule (unlayered custom CSS) overrides the Tailwind `fixed` class on children, demoting the widget to the last in-flow flex item pushed off-screen by its `right` offset; now rendered via `createPortal` into body (same approach as UpdateDialog/CloseConfirmDialog), restoring the bottom-right placement; the ball is also enlarged to 80px (5px ring, 14px center text) with a small label under it ("Refreshing tokens / usage", auto-refresh appends "· auto")
+
+### v1.7.32 (2026-9-14) — Refresh Progress Becomes a Bottom-Right Floating Ring
+
+- **Improved**: batch-refresh progress moved from the global bar under the title bar to a 44px bottom-right floating progress ring — n/N counter in the center, no text bar blocking content, zero layout space; always on top and visible on every page; `pointer-events-none` makes it fully click-through; auto-hides when idle
+
+---
+
+### v1.7.31 (2026-9-13) — Batch-Subscription Account Picker Hides Already-Fetched Accounts
+
+- **Improved**: the "Fetch Links" tab's account picker no longer lists accounts that already have a link (succeeded or in-flight) — the subtitle count, "Select All" and the "Fetch Links (N)" button all use the pending set; failed/expired entries don't count as fetched, those accounts stay selectable for retry; deleting a link brings its account back to the picker
+- **Improved**: "Fetch Links" now merges into the existing link list instead of replacing it — fetching in batches no longer wipes previously obtained links (each run used to overwrite the whole list with the current batch); per-entry updates are keyed by account, and prior link selections are preserved
+
+---
+
 ### v1.7.30 (2026-9-11) — Fix Blank Subscription-Management List + Load-Plans Always Clickable
 
 - **Fix**: the subscription-management tab rendered a completely blank list once row count reached 50+ — the virtual-scroll container's content-driven `max-h` combined with `contain:strict` (size containment ignores children) collapsed its height to 0, so the virtualizer rendered nothing; switched to a fixed `h-[60vh]` height. The direct-render branch used under 50 rows was unaffected

@@ -273,6 +273,21 @@ export function SubscriptionPage() {
     })
   }, [accounts, selectedIds, filterDowngradedFree])
 
+  // 已在链接列表中的账号（成功拿到链接或正在获取）视为"已获取过链接"，选择账号列表不再显示；
+  // 失败 / 过期的条目不算，对应账号仍可勾选重试
+  const linkedAccountIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const l of links) {
+      if (l.status === 'success' || l.status === 'pending' || l.status === 'loading') ids.add(l.accountId)
+    }
+    return ids
+  }, [links])
+
+  // 待获取链接的账号 = 可升级账号 - 已获取过链接的账号
+  const getPendingFetchAccounts = useCallback(() => (
+    getUpgradeableAccounts().filter(a => a && !linkedAccountIds.has(a.id))
+  ), [getUpgradeableAccounts, linkedAccountIds])
+
   // 订阅升级前预检：基于"选中账号或全部账号"做完整检查，列出可升级 / 不可升级原因
   const preflightReport = useMemo(() => {
     const source = selectedIds.size > 0
@@ -341,30 +356,52 @@ export function SubscriptionPage() {
   // 获取链接 tab 的账号勾选（空 = 全部可升级账号）
   const [linkPickIds, setLinkPickIds] = useState<Set<string>>(new Set())
 
-  // 批量并发获取订阅链接
+  // 已获取过链接的账号从勾选中剔除，避免账号隐藏后"已选 N 个"与列表不符
+  useEffect(() => {
+    setLinkPickIds(prev => {
+      let changed = false
+      const next = new Set(prev)
+      for (const id of prev) {
+        if (linkedAccountIds.has(id)) {
+          next.delete(id)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [linkedAccountIds])
+
+  // 批量并发获取订阅链接（已获取过链接的账号不参与；结果与已有链接合并而非整表替换）
   const handleBatchFetch = async () => {
-    const allUpgradeable = getUpgradeableAccounts()
+    const allUpgradeable = getPendingFetchAccounts()
     const upgradeableAccounts = linkPickIds.size > 0
       ? allUpgradeable.filter(a => a && linkPickIds.has(a.id))
       : allUpgradeable
     if (upgradeableAccounts.length === 0 || !selectedPlanType) return
 
     setIsFetching(true)
-    
-    // 初始化状态
-    const initialLinks: SubscriptionLink[] = upgradeableAccounts.map(acc => ({
-      accountId: acc!.id,
-      email: acc!.email || 'Unknown',
-      status: 'pending'
-    }))
-    setLinks(initialLinks)
-    setSelectedLinkIds(new Set())
+
+    // 初始化状态：只重置本批次账号的条目，保留其他账号已获取的链接；条目更新一律按 accountId 定位
+    const batchIds = new Set(upgradeableAccounts.map(a => a!.id))
+    setLinks(prev => [
+      ...prev.filter(l => !batchIds.has(l.accountId)),
+      ...upgradeableAccounts.map(acc => ({
+        accountId: acc!.id,
+        email: acc!.email || 'Unknown',
+        status: 'pending' as const
+      }))
+    ])
+    setSelectedLinkIds(prev => {
+      const next = new Set(prev)
+      for (const id of batchIds) next.delete(id)
+      return next
+    })
 
     // 单个账号获取任务
     const fetchOne = async (idx: number) => {
       const acc = upgradeableAccounts[idx]!
-      setLinks(prev => prev.map((link, i) => 
-        i === idx ? { ...link, status: 'loading' } : link
+      setLinks(prev => prev.map((link) =>
+        link.accountId === acc.id ? { ...link, status: 'loading' } : link
       ))
 
       try {
@@ -380,17 +417,17 @@ export function SubscriptionPage() {
         )
 
         if (tokenResult.success && tokenResult.url) {
-          setLinks(prev => prev.map((link, i) => 
-            i === idx ? { ...link, status: 'success', url: tokenResult.url, generatedAt: Date.now(), validated: false } : link
+          setLinks(prev => prev.map((link) =>
+            link.accountId === acc.id ? { ...link, status: 'success', url: tokenResult.url, generatedAt: Date.now(), validated: false } : link
           ))
         } else {
-          setLinks(prev => prev.map((link, i) => 
-            i === idx ? { ...link, status: 'error', error: tokenResult.error || 'Failed to get URL' } : link
+          setLinks(prev => prev.map((link) =>
+            link.accountId === acc.id ? { ...link, status: 'error', error: tokenResult.error || 'Failed to get URL' } : link
           ))
         }
       } catch (error) {
-        setLinks(prev => prev.map((link, i) => 
-          i === idx ? { ...link, status: 'error', error: error instanceof Error ? error.message : 'Unknown error' } : link
+        setLinks(prev => prev.map((link) =>
+          link.accountId === acc.id ? { ...link, status: 'error', error: error instanceof Error ? error.message : 'Unknown error' } : link
         ))
       }
     }
@@ -793,7 +830,7 @@ export function SubscriptionPage() {
   const successCount = links.filter(l => l.status === 'success').length
   const errorCount = links.filter(l => l.status === 'error').length
   const selectedCount = selectedLinkIds.size
-  const upgradeableCount = getUpgradeableAccounts().length
+  const pendingFetchCount = getPendingFetchAccounts().length
 
   return (
     <div className="flex-1 p-6 space-y-6 overflow-auto">
@@ -1398,7 +1435,7 @@ export function SubscriptionPage() {
             </CardContent>
           </Card>
 
-          {/* 账号勾选：勾选后只对勾选账号获取链接，不勾 = 全部可升级 */}
+          {/* 账号勾选：勾选后只对勾选账号获取链接，不勾 = 全部待获取（已获取过链接的账号不再显示） */}
           <Card>
             <CardContent className="py-3 space-y-2">
               <div className="flex items-center gap-2 flex-wrap">
@@ -1407,8 +1444,8 @@ export function SubscriptionPage() {
                   {linkPickIds.size > 0
                     ? (isEn ? `${linkPickIds.size} selected` : `已选 ${linkPickIds.size} 个`)
                     : (isEn
-                        ? `none selected = all ${upgradeableCount} upgradeable`
-                        : `不选 = 全部 ${upgradeableCount} 个可升级`)
+                        ? `none selected = all ${pendingFetchCount} pending`
+                        : `不选 = 全部 ${pendingFetchCount} 个待获取`)
                   }
                 </span>
                 <div className="ml-auto flex gap-1">
@@ -1416,8 +1453,8 @@ export function SubscriptionPage() {
                     variant="ghost"
                     size="sm"
                     className="h-7 px-2 text-xs"
-                    onClick={() => setLinkPickIds(new Set(getUpgradeableAccounts().map(a => a!.id)))}
-                    disabled={isFetching || upgradeableCount === 0}
+                    onClick={() => setLinkPickIds(new Set(getPendingFetchAccounts().map(a => a!.id)))}
+                    disabled={isFetching || pendingFetchCount === 0}
                   >
                     {isEn ? 'Select All' : '全选'}
                   </Button>
@@ -1432,9 +1469,9 @@ export function SubscriptionPage() {
                   </Button>
                 </div>
               </div>
-              {upgradeableCount > 0 && (
+              {pendingFetchCount > 0 && (
                 <div className="max-h-40 overflow-y-auto rounded-lg border border-border/60 p-2 space-y-0.5">
-                  {getUpgradeableAccounts().map(acc => {
+                  {getPendingFetchAccounts().map(acc => {
                     if (!acc) return null
                     const picked = linkPickIds.has(acc.id)
                     return (
@@ -1468,6 +1505,13 @@ export function SubscriptionPage() {
                   })}
                 </div>
               )}
+              {pendingFetchCount === 0 && !isFetching && getUpgradeableAccounts().length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  {isEn
+                    ? 'All upgradeable accounts already have links. Remove a link to re-fetch.'
+                    : '可升级账号均已获取过链接，删除对应链接后可重新获取。'}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -1477,7 +1521,7 @@ export function SubscriptionPage() {
               <Button
                 size="sm"
                 onClick={handleBatchFetch}
-                disabled={isFetching || (linkPickIds.size > 0 ? linkPickIds.size : upgradeableCount) === 0 || !selectedPlanType}
+                disabled={isFetching || (linkPickIds.size > 0 ? linkPickIds.size : pendingFetchCount) === 0 || !selectedPlanType}
               >
                 {isFetching ? (
                   <Loader2 className="h-4 w-4 mr-1 animate-spin" />
@@ -1485,8 +1529,8 @@ export function SubscriptionPage() {
                   <CreditCard className="h-4 w-4 mr-1" />
                 )}
                 {isEn
-                  ? `Fetch Links (${linkPickIds.size > 0 ? linkPickIds.size : upgradeableCount})`
-                  : `获取链接 (${linkPickIds.size > 0 ? linkPickIds.size : upgradeableCount})`
+                  ? `Fetch Links (${linkPickIds.size > 0 ? linkPickIds.size : pendingFetchCount})`
+                  : `获取链接 (${linkPickIds.size > 0 ? linkPickIds.size : pendingFetchCount})`
                 }
               </Button>
 
@@ -1890,10 +1934,10 @@ export function SubscriptionPage() {
               <CardContent className="py-12 text-center text-muted-foreground">
                 <CreditCard className="h-12 w-12 mx-auto mb-3 opacity-30" />
                 <p className="text-sm">
-                  {upgradeableCount > 0
+                  {pendingFetchCount > 0
                     ? (isEn
-                        ? `${upgradeableCount} FREE accounts available for upgrade. Click "Fetch Links" to start.`
-                        : `有 ${upgradeableCount} 个 FREE 账户可升级。点击"获取链接"开始。`)
+                        ? `${pendingFetchCount} FREE accounts available for upgrade. Click "Fetch Links" to start.`
+                        : `有 ${pendingFetchCount} 个 FREE 账户可升级。点击"获取链接"开始。`)
                     : (isEn
                         ? 'No FREE tier accounts found. Select accounts in the Accounts page first.'
                         : '未找到 FREE 账户。请先在账户管理页面选择账户。')

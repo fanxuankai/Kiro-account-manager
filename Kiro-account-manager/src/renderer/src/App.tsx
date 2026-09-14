@@ -390,7 +390,6 @@ function App(): React.JSX.Element {
   return (
     <div className="h-screen ambient-bg overflow-hidden flex flex-col">
       <TitleBar />
-      <TaskProgressWidget />
       <div className="flex-1 min-h-0 flex gap-2 p-2">
         <Sidebar
           currentPage={currentPage}
@@ -419,6 +418,8 @@ function App(): React.JSX.Element {
       </div>
       <UpdateDialog />
       <CloseConfirmDialog />
+      {/* 批量刷新进度：fixed 右下角悬浮，不占布局空间 */}
+      <TaskProgressWidget />
     </div>
   )
 }
