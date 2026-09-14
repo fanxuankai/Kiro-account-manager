@@ -272,6 +272,12 @@ The project is configured with GitHub Actions workflow for auto building all pla
 ## 📋 Changelog
 
 
+### v1.7.34 (2026-9-14) — New Billing Page: Billing Snapshot, Summary Cards, Dual-Dimension Filters
+
+- **New (Billing page)**: new "Billing" entry in the sidebar — four summary cards (next-cycle total charges / will renew / scheduled to Free / unchecked) recalculated live with the filters; filter chips match the Accounts page interaction (group / tags plus billing dimensions: plan, next-cycle status) with email/nickname search; a wide table showing plan price, billing cycle, current-cycle amount, next invoice amount@date (red = will be charged, teal = $0 scheduled to Free), the card on file (brand + last4, expiry on hover), and the latest invoice (one click opens the official Stripe receipt page); sorted by next invoice amount descending by default; "Check Selected / Check All Billing" runs the read-only portal chain (concurrency 2) to write snapshots back, with per-row refresh
+- **New (billing snapshot, zero extra requests)**: the GET subscriptions response used by "Check Renewal / Switch to Free" already inlines plan price, billing cycle, current/next invoice amounts, the card on file, and the latest invoice with its receipt URL — previously parsed for a few IDs then discarded; now the same response is written back into `subscription` (amounts in cents, times in ms); GET additionally expands `data.default_payment_method` so card display info (brand/last4/expiry) is inlined — request count unchanged (still 4 per account). Accounts scheduled to Free (including ones switched manually in the web portal) are checkable on the Billing page to backfill their snapshot
+- **Scope**: never-subscribed Free accounts have no billing data and are excluded; full invoice history is not in this release — only the latest invoice per row
+
 ### v1.7.33 (2026-9-14) — Fix Refresh Ball Pinned Bottom-Left by Global Style
 
 - **Fix**: the v1.7.32 floating ball actually rendered at the bottom-left, clipped by the window edge — the root container's `.ambient-bg > * { position: relative }` rule (unlayered custom CSS) overrides the Tailwind `fixed` class on children, demoting the widget to the last in-flow flex item pushed off-screen by its `right` offset; now rendered via `createPortal` into body (same approach as UpdateDialog/CloseConfirmDialog), restoring the bottom-right placement; the ball is also enlarged to 80px (5px ring, 14px center text) with a small label under it ("Refreshing tokens / usage", auto-refresh appends "· auto")

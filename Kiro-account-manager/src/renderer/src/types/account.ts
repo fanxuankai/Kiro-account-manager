@@ -71,6 +71,24 @@ export interface AccountSubscription {
   renewalCheckedAt?: number // 上次检查续费状态的时间戳
   scheduledToFree?: boolean // 已安排周期末切 Free（网页"周期末生效"降级）：本周期仍付费、下周期起 $0
   wasPaid?: boolean // 曾是付费订阅（切 Free / 到期不续费 / 门户侧已降级而来）——此类 Free 不适合再次升级订阅，刷新时永久保留
+
+  // ===== 账单快照（检查续费 / 切 Free 时由 Stripe 订阅门户同一响应回写；金额为分，时间为毫秒） =====
+  planAmount?: number // 当前计划单价（分，10000 = $100）
+  planCurrency?: string // 币种（如 'usd'）
+  periodStart?: number // 当前计费周期开始
+  periodEnd?: number // 当前计费周期结束（下次续费/变更生效）
+  currentCycleAmount?: number // 本周期应收总额（分，recurring_invoice.total）
+  nextInvoiceAmount?: number // 下期账单金额（分；0 = 已排期 Free 或不续费）
+  nextInvoiceAt?: number // 下期账单时间（通常等于周期末）
+  cardBrand?: string // 扣款卡品牌（visa/mastercard…）
+  cardLast4?: string // 扣款卡末四位
+  cardExpMonth?: number // 卡有效期（月）
+  cardExpYear?: number // 卡有效期（年）
+  cardFunding?: string // credit / debit / prepaid
+  latestInvoiceAmount?: number // 最近一张发票金额（分）
+  latestInvoiceStatus?: string // 最近一张发票状态（paid/open…）
+  latestInvoiceAt?: number // 最近一张发票时间
+  latestInvoiceUrl?: string // 最近一张发票的官方收据页链接（可直接打开）
 }
 
 /**

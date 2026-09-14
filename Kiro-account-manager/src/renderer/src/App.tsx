@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { AccountManager } from './components/accounts'
 import { IdleManager } from './components/idle'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
-import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, LogsPage } from './components/pages'
+import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage } from './components/pages'
 import { useWebhookStore } from './store/webhooks'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
@@ -370,6 +370,8 @@ function App(): React.JSX.Element {
         return <RegisterPage />
       case 'subscription':
         return <SubscriptionPage />
+      case 'billing':
+        return <BillingPage />
       case 'webhooks':
         return <WebhooksPage />
       case 'diagnose':

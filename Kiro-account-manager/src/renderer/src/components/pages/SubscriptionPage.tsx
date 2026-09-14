@@ -2293,7 +2293,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             willRenew: undefined,
             renewalCheckedAt: undefined,
             wasPaid: true,
-            ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+            ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {}),
+            ...(r.billing ?? {})
           } as AccountType['subscription']
         })
         return 'already-free'
@@ -2307,7 +2308,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
             scheduledToFree: true,
             wasPaid: true,
             renewalCheckedAt: Date.now(),
-            ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+            ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {}),
+            ...(r.billing ?? {})
           } as AccountType['subscription']
         })
         return 'scheduled-free'
@@ -2320,7 +2322,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
           scheduledToFree: false,
           renewalCheckedAt: Date.now(),
           // 顺带刷新到期时间为门户侧的下周期时间（如有）
-          ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+          ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {}),
+          ...(r.billing ?? {})
         } as AccountType['subscription']
       })
       return willRenew ? 'renew' : 'no-renew'
@@ -2384,7 +2387,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   willRenew: undefined,
                   renewalCheckedAt: undefined,
                   wasPaid: true,
-                  ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+                  ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {}),
+                  ...(r.billing ?? {})
                 } as AccountType['subscription']
               })
               continue
@@ -2398,7 +2402,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   scheduledToFree: true,
                   wasPaid: true,
                   renewalCheckedAt: Date.now(),
-                  ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+                  ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {}),
+                  ...(r.billing ?? {})
                 } as AccountType['subscription']
               })
               continue
@@ -2412,7 +2417,8 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                 willRenew,
                 scheduledToFree: false,
                 renewalCheckedAt: Date.now(),
-                ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {})
+                ...(r.currentPeriodEnd ? { expiresAt: r.currentPeriodEnd * 1000 } : {}),
+                ...(r.billing ?? {})
               } as AccountType['subscription']
             })
           } else {

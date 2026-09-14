@@ -28,6 +28,34 @@ const KIRO_FREE_PRICE_ID = 'price_1RpBqGIHUhwdEnrTbZ8CIM0l'
 const PORTAL_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36'
 
+/** 账单快照：来自门户 GET subscriptions 的同一响应（金额为分，时间已转为毫秒） */
+export interface BillingSnapshot {
+  /** 当前计划单价（分） */
+  planAmount?: number
+  planCurrency?: string
+  /** 计费周期起止（毫秒） */
+  periodStart?: number
+  periodEnd?: number
+  /** 本周期应收总额（分） */
+  currentCycleAmount?: number
+  /** 下期账单金额（分）；0 = 已排期 Free / 不续费 */
+  nextInvoiceAmount?: number
+  /** 下期账单时间（毫秒，通常等于周期末） */
+  nextInvoiceAt?: number
+  /** 扣款卡（仅展示面信息：品牌/末四位/有效期，无敏感凭据） */
+  cardBrand?: string
+  cardLast4?: string
+  cardExpMonth?: number
+  cardExpYear?: number
+  cardFunding?: string
+  /** 最近一张发票 */
+  latestInvoiceAmount?: number
+  latestInvoiceStatus?: string
+  latestInvoiceAt?: number
+  /** 官方收据页链接（浏览器可直接打开） */
+  latestInvoiceUrl?: string
+}
+
 export interface SwitchToFreeResult {
   success: boolean
   error?: string
@@ -48,6 +76,8 @@ export interface SwitchToFreeResult {
   /** 切换前所在计划的产品名（如 "Kiro Pro+"），读取失败时为价格 ID */
   previousPlan?: string
   subId?: string
+  /** 门户读取到的账单快照（切换前状态） */
+  billing?: BillingSnapshot
 }
 
 export interface RenewalCheckResult {
@@ -66,6 +96,8 @@ export interface RenewalCheckResult {
   scheduledToFree?: boolean
   /** 周期末变更生效时间戳（秒），scheduledToFree 时有值 */
   transitionAt?: number
+  /** 账单快照（计划单价/周期/本周期与下期金额/扣款卡/最近发票） */
+  billing?: BillingSnapshot
 }
 
 /**
@@ -93,7 +125,8 @@ export async function checkRenewalStatus(account: ProxyAccount): Promise<Renewal
       subId: sub.subId,
       isFreePlan,
       scheduledToFree: !isFreePlan && sub.upcomingIsFree === true,
-      transitionAt: sub.transitionAt
+      transitionAt: sub.transitionAt,
+      billing: sub.billing
     }
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
@@ -164,11 +197,16 @@ interface PortalSubscription {
   transitionAt?: number
   /** 变更后的下期账单是否为 $0 的 Free（upcoming_invoice 首行价格 = Free 价格） */
   upcomingIsFree?: boolean
+  /** 账单快照（与订阅同响应内联：单价/周期/本周期与下期金额/扣款卡/最近发票） */
+  billing?: BillingSnapshot
 }
 
 /** 查询门户内当前订阅（sub / si / 当前价格 / 续费状态）。无订阅、解析失败均抛错 */
 async function fetchPortalSubscription(cred: PortalCredential, account: ProxyAccount): Promise<PortalSubscription> {
-  const url = `https://billing.stripe.com/v1/billing_portal/sessions/${cred.bps}/subscriptions?expand%5B%5D=data.items.price_details.product`
+  // expand 卡信息：default_payment_method 展开后内联 brand/last4/有效期（仅展示面，无敏感凭据）
+  const url = `https://billing.stripe.com/v1/billing_portal/sessions/${cred.bps}/subscriptions`
+    + `?expand%5B%5D=data.items.price_details.product`
+    + `&expand%5B%5D=data.default_payment_method`
   const response = await fetchWithProxy(url, { method: 'GET', headers: portalHeaders(cred) }, account)
   const data = (await response.json().catch(() => ({}))) as {
     data?: Array<{
@@ -178,9 +216,25 @@ async function fetchPortalSubscription(cred: PortalCredential, account: ProxyAcc
       current_period_end?: number
       has_update_scheduled?: boolean
       transition_at?: number
+      default_payment_method?: {
+        type?: string
+        card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number; funding?: string }
+      } | string
+      recurring_invoice?: { total?: number; amount_due?: number; currency?: string }
       upcoming_invoice?: {
         amount_due?: number
+        total?: number
+        currency?: string
+        created?: number
         lines?: { data?: Array<{ price_details?: { id?: string } }> }
+      }
+      latest_invoice?: {
+        status?: string
+        effective_at?: number
+        amount_due?: number
+        total?: number
+        currency?: string
+        hosted_invoice_url?: string
       }
     }>
   }
@@ -194,7 +248,7 @@ async function fetchPortalSubscription(cred: PortalCredential, account: ProxyAcc
 
   // items 在带 expand 时为 {data:[...]}，不带时可能直接是数组，两种都兼容
   const rawItems = sub.items
-  const itemList: Array<{ id?: string; price_details?: { id?: string; product?: { name?: string } | { name?: string }[] } }> =
+  const itemList: Array<{ id?: string; quantity?: number; current_period_start?: number; price_details?: { id?: string; currency?: string; unit_amount?: number; recurring?: { interval?: string }; product?: { name?: string } | { name?: string }[] } }> =
     rawItems && typeof rawItems === 'object' && Array.isArray((rawItems as { data?: unknown }).data)
       ? (rawItems as { data: typeof itemList }).data
       : Array.isArray(rawItems) ? (rawItems as typeof itemList) : []
@@ -211,6 +265,29 @@ async function fetchPortalSubscription(cred: PortalCredential, account: ProxyAcc
     sub.has_update_scheduled === true &&
     (upcomingFirstPrice === KIRO_FREE_PRICE_ID || sub.upcoming_invoice?.amount_due === 0)
 
+  // 账单快照：金额取分、时间统一转毫秒。default_payment_method 未展开时是字符串 ID，需防御
+  const pm = typeof sub.default_payment_method === 'object' ? sub.default_payment_method : undefined
+  const billing: BillingSnapshot = {
+    planAmount: item.price_details.unit_amount,
+    planCurrency: item.price_details.currency,
+    periodStart: item.current_period_start ? item.current_period_start * 1000 : undefined,
+    periodEnd: sub.current_period_end ? sub.current_period_end * 1000 : undefined,
+    currentCycleAmount: sub.recurring_invoice?.total ?? sub.recurring_invoice?.amount_due,
+    nextInvoiceAmount: sub.upcoming_invoice?.amount_due ?? sub.upcoming_invoice?.total,
+    nextInvoiceAt: sub.upcoming_invoice?.created
+      ? sub.upcoming_invoice.created * 1000
+      : sub.current_period_end ? sub.current_period_end * 1000 : undefined,
+    cardBrand: pm?.card?.brand,
+    cardLast4: pm?.card?.last4,
+    cardExpMonth: pm?.card?.exp_month,
+    cardExpYear: pm?.card?.exp_year,
+    cardFunding: pm?.card?.funding,
+    latestInvoiceAmount: sub.latest_invoice?.amount_due ?? sub.latest_invoice?.total,
+    latestInvoiceStatus: sub.latest_invoice?.status,
+    latestInvoiceAt: sub.latest_invoice?.effective_at ? sub.latest_invoice.effective_at * 1000 : undefined,
+    latestInvoiceUrl: sub.latest_invoice?.hosted_invoice_url
+  }
+
   return {
     subId: sub.id,
     siId: item.id,
@@ -220,7 +297,8 @@ async function fetchPortalSubscription(cred: PortalCredential, account: ProxyAcc
     currentPeriodEnd: sub.current_period_end,
     hasUpdateScheduled: sub.has_update_scheduled,
     transitionAt: sub.transition_at,
-    upcomingIsFree
+    upcomingIsFree,
+    billing
   }
 }
 
@@ -285,7 +363,8 @@ export async function switchSubscriptionToFree(
 
     const base = {
       subId: sub.subId,
-      previousPlan: sub.currentProductName || sub.currentPriceId
+      previousPlan: sub.currentProductName || sub.currentPriceId,
+      billing: sub.billing
     }
 
     // 已是 Free → 无需变更

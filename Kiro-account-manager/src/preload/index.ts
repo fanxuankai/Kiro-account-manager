@@ -1,6 +1,26 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
+/** Stripe 订阅门户账单快照（金额为分，时间为毫秒；与主进程 stripePortal.BillingSnapshot 结构一致） */
+export interface StripeBillingSnapshot {
+  planAmount?: number
+  planCurrency?: string
+  periodStart?: number
+  periodEnd?: number
+  currentCycleAmount?: number
+  nextInvoiceAmount?: number
+  nextInvoiceAt?: number
+  cardBrand?: string
+  cardLast4?: string
+  cardExpMonth?: number
+  cardExpYear?: number
+  cardFunding?: string
+  latestInvoiceAmount?: number
+  latestInvoiceStatus?: string
+  latestInvoiceAt?: number
+  latestInvoiceUrl?: string
+}
+
 // Custom APIs for renderer
 const api = {
   // 打开外部链接
@@ -788,12 +808,12 @@ const api = {
   },
 
   // 自动切订阅到 Free（dryRun=true 只读校验链路，不提交变更）
-  accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean): Promise<{ success: boolean; error?: string; alreadyFree?: boolean; alreadyScheduled?: boolean; wontRenew?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
+  accountSwitchPlanFree: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dryRun?: boolean): Promise<{ success: boolean; error?: string; alreadyFree?: boolean; alreadyScheduled?: boolean; wontRenew?: boolean; switched?: boolean; scheduledToFree?: boolean; transitionAt?: number; dryRun?: boolean; previousPlan?: string; subId?: string; billing?: StripeBillingSnapshot; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
     return ipcRenderer.invoke('account-switch-plan-free', accessToken, region, profileArn, machineId, provider, authMethod, accountId, dryRun)
   },
 
   // 只读检查订阅续费状态（cancelAtPeriodEnd=false 表示下周期会自动续费扣款）
-  accountCheckRenewal: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string): Promise<{ success: boolean; error?: string; cancelAtPeriodEnd?: boolean; currentPeriodEnd?: number; planName?: string; subId?: string; isFreePlan?: boolean; scheduledToFree?: boolean; transitionAt?: number; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
+  accountCheckRenewal: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string): Promise<{ success: boolean; error?: string; cancelAtPeriodEnd?: boolean; currentPeriodEnd?: number; planName?: string; subId?: string; isFreePlan?: boolean; scheduledToFree?: boolean; transitionAt?: number; billing?: StripeBillingSnapshot; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }> => {
     return ipcRenderer.invoke('account-check-renewal', accessToken, region, profileArn, machineId, provider, authMethod, accountId)
   },
 

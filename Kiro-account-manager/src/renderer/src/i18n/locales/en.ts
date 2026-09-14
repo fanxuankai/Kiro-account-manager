@@ -55,6 +55,7 @@ const en = {
     configSync: 'Config Sync',
     register: 'Register',
     subscription: 'Subscription',
+    billing: 'Billing',
     logs: 'Logs',
     settings: 'Settings',
     about: 'About'

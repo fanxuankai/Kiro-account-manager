@@ -264,7 +264,8 @@ export async function switchAccountToFree(
           scheduledToFree: true,
           wasPaid: true,
           renewalCheckedAt: Date.now(),
-          ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+          ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {}),
+          ...(r.billing ?? {})
         } as Account['subscription']
       })
       alert(isEn
@@ -273,7 +274,7 @@ export async function switchAccountToFree(
       )
     } else {
       updateAccount(acc.id, {
-        subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as Account['subscription']
+        subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now(), ...(r.billing ?? {}) } as Account['subscription']
       })
     }
     return 'switched'
@@ -288,7 +289,8 @@ export async function switchAccountToFree(
         scheduledToFree: true,
         wasPaid: true,
         renewalCheckedAt: Date.now(),
-        ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+        ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {}),
+        ...(r.billing ?? {})
       } as Account['subscription']
     })
     alert(isEn
@@ -299,7 +301,7 @@ export async function switchAccountToFree(
   }
   if (r.success && r.wontRenew) {
     updateAccount(acc.id, {
-      subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as Account['subscription']
+      subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now(), ...(r.billing ?? {}) } as Account['subscription']
     })
     alert(isEn
       ? `${acc.email}: subscription is set to not renew (no charge next cycle); no need to switch to Free.`
