@@ -2488,12 +2488,13 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                   scheduledToFree: true,
                   wasPaid: true,
                   renewalCheckedAt: Date.now(),
-                  ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+                  ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {}),
+                  ...(r.billing ?? {})
                 } as AccountType['subscription']
               })
             } else {
               updateAccount(acc.id, {
-                subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
+                subscription: { ...acc.subscription, type: 'Free', title: 'Kiro Free', willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now(), ...(r.billing ?? {}) } as AccountType['subscription']
               })
             }
             results.push({ email: acc.email || acc.id, outcome: 'switched', scheduled: r.scheduledToFree === true })
@@ -2508,13 +2509,14 @@ function ManageSubscriptionsTab({ getAllSubscribed, updateAccount, concurrency, 
                 scheduledToFree: true,
                 wasPaid: true,
                 renewalCheckedAt: Date.now(),
-                ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {})
+                ...(r.transitionAt ? { expiresAt: r.transitionAt * 1000 } : {}),
+                ...(r.billing ?? {})
               } as AccountType['subscription']
             })
             results.push({ email: acc.email || acc.id, outcome: 'already-scheduled' })
           } else if (r.success && r.wontRenew) {
             updateAccount(acc.id, {
-              subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now() } as AccountType['subscription']
+              subscription: { ...acc.subscription, willRenew: false, scheduledToFree: false, wasPaid: true, renewalCheckedAt: Date.now(), ...(r.billing ?? {}) } as AccountType['subscription']
             })
             results.push({ email: acc.email || acc.id, outcome: 'wont-renew' })
           } else {

@@ -2361,6 +2361,8 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => {
     // 设置带版本号的标题（HTML 加载后会覆盖初始标题）
     mainWindow?.setTitle(`Kiro 账号管理器 v${app.getVersion()}`)
+    // 启动即最大化：在 show 之前调用，窗口直接以最大化出现，不闪小窗
+    mainWindow?.maximize()
     mainWindow?.show()
     
     // 检查代理服务自启动配置

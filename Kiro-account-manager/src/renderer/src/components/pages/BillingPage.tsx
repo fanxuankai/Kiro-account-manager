@@ -1,7 +1,7 @@
 // 账单页：按账号展示 Stripe 订阅门户回写的账单快照（计划单价 / 计费周期 / 本周期与下期金额 / 扣款卡 / 最近发票）。
 // 数据来源是「检查续费 / 切 Free」时的同一份门户响应（零额外请求），本页只读快照并提供
 // 「检查账单」入口触发同一只读链路刷新；汇总卡与列表随筛选实时重算。
-import { useState, useCallback, useRef, useMemo, memo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAccountsStore } from '@/store/accounts'
 import { Button, Card, CardContent } from '../ui'
@@ -15,7 +15,12 @@ import {
   CircleDollarSign,
   CalendarClock,
   AlarmClockCheck,
-  HelpCircle
+  HelpCircle,
+  Search,
+  ChevronDown,
+  FolderOpen,
+  Users,
+  Inbox
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -58,6 +63,55 @@ const PLAN_LABELS: Record<PlanKind, string> = {
   Free: 'Free'
 }
 
+// 计划筛选 chip：配色与账号管理页 AccountFilter 的 SubscriptionOptions 完全一致
+const PLAN_CHIP_OPTIONS: { value: PlanKind; label: string; color: string; activeColor: string }[] = [
+  {
+    value: 'Free',
+    label: 'KIRO FREE',
+    color: 'text-gray-500 border-gray-300',
+    activeColor: 'bg-gray-500 text-white border-gray-500'
+  },
+  {
+    value: 'Pro',
+    label: 'KIRO PRO',
+    color: 'text-blue-500 border-blue-300',
+    activeColor: 'bg-blue-500 text-white border-blue-500'
+  },
+  {
+    value: 'Pro_Plus',
+    label: 'KIRO PRO+',
+    color: 'text-purple-500 border-purple-300',
+    activeColor: 'bg-purple-500 text-white border-purple-500'
+  },
+  {
+    value: 'Pro_Max',
+    label: 'KIRO PRO MAX',
+    color: 'text-rose-500 border-rose-300',
+    activeColor: 'bg-rose-500 text-white border-rose-500'
+  },
+  {
+    value: 'Power',
+    label: 'KIRO POWER',
+    color: 'text-amber-500 border-amber-300',
+    activeColor: 'bg-amber-500 text-white border-amber-500'
+  }
+]
+
+// 解析 ARGB 颜色转换为 CSS rgba（标签 chip 激活色，与账号管理页同款）
+function toRgba(argbColor: string): string {
+  let alpha = 255
+  let rgb = argbColor
+  if (argbColor.length === 9 && argbColor.startsWith('#')) {
+    alpha = parseInt(argbColor.slice(1, 3), 16)
+    rgb = '#' + argbColor.slice(3)
+  }
+  const hex = rgb.startsWith('#') ? rgb.slice(1) : rgb
+  const r = parseInt(hex.slice(0, 2), 16)
+  const g = parseInt(hex.slice(2, 4), 16)
+  const b = parseInt(hex.slice(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha / 255})`
+}
+
 // ===== 下期状态（本地快照口径，与订阅页「续费」列一致） =====
 type NextStatus = 'renew' | 'scheduled-free' | 'no-renew' | 'free' | 'unchecked'
 
@@ -82,18 +136,22 @@ const formatShortDate = (ms?: number): string => {
 }
 
 export function BillingPage(): React.ReactNode {
-  const { accounts, groups, tags, updateAccount } = useAccountsStore()
+  const { accounts, groups, tags, updateAccount, sort } = useAccountsStore()
   const { actualLanguage } = useTranslation()
   const isEn = actualLanguage === 'en'
 
-  // ===== 页内筛选（不写入账号库的公共 filter，两页互不影响） =====
-  const [groupIds, setGroupIds] = useState<Set<string>>(new Set())
+  // ===== 页内筛选（不写入账号库的公共 filter，两页互不影响；交互对齐账号管理页） =====
+  const [activeGroupTab, setActiveGroupTab] = useState<'all' | 'ungrouped' | string>('all')
+  const [showGroupMenu, setShowGroupMenu] = useState(false)
   const [tagIds, setTagIds] = useState<Set<string>>(new Set())
   const [planFilter, setPlanFilter] = useState<Set<PlanKind>>(new Set())
   const [statusFilter, setStatusFilter] = useState<Set<NextStatus>>(new Set())
+  const [emailDomains, setEmailDomains] = useState<Set<string>>(new Set())
+  const [showAllDomains, setShowAllDomains] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isChecking, setIsChecking] = useState(false)
+  const groupMenuRef = useRef<HTMLDivElement>(null)
 
   const toggleInSet = <T,>(set: Set<T>, value: T): Set<T> => {
     const next = new Set(set)
@@ -101,6 +159,17 @@ export function BillingPage(): React.ReactNode {
     else next.add(value)
     return next
   }
+
+  // 点击外部收起分组下拉（与账号管理页同款交互）
+  useEffect(() => {
+    const onClick = (e: MouseEvent): void => {
+      if (groupMenuRef.current && !groupMenuRef.current.contains(e.target as Node)) {
+        setShowGroupMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
 
   // 数据集：付费账号（含已排期切 Free 的——本周期仍计费）+ 曾付费/有账单快照的账号；
   // 从未订阅的纯 Free 没有账单可言，排除
@@ -121,10 +190,21 @@ export function BillingPage(): React.ReactNode {
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
     const out = billingAccounts.filter((acc) => {
-      if (groupIds.size > 0 && (!acc.groupId || !groupIds.has(acc.groupId))) return false
+      // 分组与账号管理页同款：顶部互斥单选（全部 / 未分组 / 具体分组）
+      if (activeGroupTab === 'ungrouped' && acc.groupId) return false
+      if (
+        activeGroupTab !== 'all' &&
+        activeGroupTab !== 'ungrouped' &&
+        acc.groupId !== activeGroupTab
+      )
+        return false
       if (tagIds.size > 0 && !(acc.tags ?? []).some((t) => tagIds.has(t))) return false
       if (planFilter.size > 0 && !planFilter.has(planKindOf(acc))) return false
       if (statusFilter.size > 0 && !statusFilter.has(nextStatusOf(acc))) return false
+      if (emailDomains.size > 0) {
+        const domain = acc.email?.slice(acc.email.lastIndexOf('@') + 1).toLowerCase()
+        if (!domain || !emailDomains.has(domain)) return false
+      }
       if (
         kw &&
         !(acc.email?.toLowerCase().includes(kw) || acc.nickname?.toLowerCase().includes(kw))
@@ -132,14 +212,31 @@ export function BillingPage(): React.ReactNode {
         return false
       return true
     })
-    const rank = (acc: AccountType): number => {
-      const st = nextStatusOf(acc)
-      // 未检查 / 已是 Free 的金额不可信，排序垫底；其余按金额降序
-      if (st === 'unchecked' || st === 'free') return -1
-      return acc.subscription?.nextInvoiceAmount ?? -1
+    // 排序与账号管理页共用同一份 sort 设置（store），保证两页账号顺序一致
+    const compare = (a: AccountType, b: AccountType): number => {
+      switch (sort.field) {
+        case 'email':
+          return (a.email || '').localeCompare(b.email || '')
+        case 'nickname':
+          return (a.nickname ?? '').localeCompare(b.nickname ?? '')
+        case 'subscription':
+          return (a.subscription?.type || '').localeCompare(b.subscription?.type || '')
+        case 'usage':
+          return (a.usage?.percentUsed ?? 0) - (b.usage?.percentUsed ?? 0)
+        case 'daysRemaining':
+          return (a.subscription?.daysRemaining ?? 999) - (b.subscription?.daysRemaining ?? 999)
+        case 'lastUsedAt':
+          return (a.lastUsedAt ?? 0) - (b.lastUsedAt ?? 0)
+        case 'createdAt':
+          return (a.createdAt ?? 0) - (b.createdAt ?? 0)
+        case 'status':
+          return (a.status || '').localeCompare(b.status || '')
+        default:
+          return 0
+      }
     }
-    return out.sort((a, b) => rank(b) - rank(a) || (a.email || '').localeCompare(b.email || ''))
-  }, [billingAccounts, groupIds, tagIds, planFilter, statusFilter, keyword])
+    return out.sort((a, b) => (sort.order === 'desc' ? -compare(a, b) : compare(a, b)))
+  }, [billingAccounts, activeGroupTab, tagIds, planFilter, statusFilter, emailDomains, keyword, sort])
 
   // ===== 汇总卡（随筛选重算） =====
   const summary = useMemo(() => {
@@ -293,16 +390,18 @@ export function BillingPage(): React.ReactNode {
   }
 
   const hasActiveFilters =
-    groupIds.size > 0 ||
+    activeGroupTab !== 'all' ||
     tagIds.size > 0 ||
     planFilter.size > 0 ||
     statusFilter.size > 0 ||
+    emailDomains.size > 0 ||
     keyword.trim() !== ''
   const clearFilters = (): void => {
-    setGroupIds(new Set())
+    setActiveGroupTab('all')
     setTagIds(new Set())
     setPlanFilter(new Set())
     setStatusFilter(new Set())
+    setEmailDomains(new Set())
     setKeyword('')
   }
 
@@ -323,6 +422,47 @@ export function BillingPage(): React.ReactNode {
       counts.set(nextStatusOf(acc), (counts.get(nextStatusOf(acc)) ?? 0) + 1)
     return counts
   }, [billingAccounts])
+
+  // 分组 Tab 计数（全部 / 未分组 / 各分组），与账号管理页同口径
+  const groupTabCounts = useMemo(() => {
+    let ungrouped = 0
+    const byGroup = new Map<string, number>()
+    for (const acc of billingAccounts) {
+      if (!acc.groupId) ungrouped++
+      else byGroup.set(acc.groupId, (byGroup.get(acc.groupId) ?? 0) + 1)
+    }
+    return { all: billingAccounts.length, ungrouped, byGroup }
+  }, [billingAccounts])
+  const sortedGroups = useMemo(
+    () => Array.from(groups.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    [groups]
+  )
+  const activeGroup = activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' ? groups.get(activeGroupTab) : undefined
+
+  // 邮箱域名后缀及数量（按数量降序），与账号管理页筛选面板同款
+  const DOMAIN_DISPLAY_LIMIT = 16
+  const domainCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const acc of billingAccounts) {
+      const at = acc.email?.lastIndexOf('@')
+      if (at == null || at < 0) continue
+      const domain = acc.email.slice(at + 1).toLowerCase()
+      if (!domain) continue
+      counts.set(domain, (counts.get(domain) ?? 0) + 1)
+    }
+    return Array.from(counts.entries()).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+    )
+  }, [billingAccounts])
+  // 折叠时也保证已选中的域名可见
+  const visibleDomains = useMemo(() => {
+    if (showAllDomains || domainCounts.length <= DOMAIN_DISPLAY_LIMIT) return domainCounts
+    const top = domainCounts.slice(0, DOMAIN_DISPLAY_LIMIT)
+    for (const entry of domainCounts.slice(DOMAIN_DISPLAY_LIMIT)) {
+      if (emailDomains.has(entry[0])) top.push(entry)
+    }
+    return top
+  }, [domainCounts, showAllDomains, emailDomains])
 
   return (
     <>
@@ -387,131 +527,122 @@ export function BillingPage(): React.ReactNode {
 
         <Card>
           <CardContent className="p-4 space-y-3">
-            {/* 筛选器：账号维度（分组/标签）+ 账单维度（计划/下期状态）+ 搜索 */}
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-              {groups.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {isEn ? 'Group:' : '分组:'}
+            {/* 工具栏：分组下拉（互斥单选，账号管理页同款）+ 搜索框 + 批量检查 */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div ref={groupMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowGroupMenu((v) => !v)}
+                  className="flex items-center gap-1.5 h-9 px-3 text-sm rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md hover:bg-muted/50 transition-colors"
+                >
+                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                  <span>
+                    {activeGroup
+                      ? activeGroup.name
+                      : activeGroupTab === 'ungrouped'
+                        ? isEn
+                          ? 'Ungrouped'
+                          : '未分组'
+                        : isEn
+                          ? 'All Groups'
+                          : '全部分组'}
                   </span>
-                  <div className="flex flex-wrap gap-1">
-                    {Array.from(groups.values()).map((g) => (
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {activeGroupTab === 'all'
+                      ? groupTabCounts.all
+                      : activeGroupTab === 'ungrouped'
+                        ? groupTabCounts.ungrouped
+                        : (groupTabCounts.byGroup.get(activeGroupTab) ?? 0)}
+                    )
+                  </span>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+                {showGroupMenu && (
+                  <div className="absolute left-0 top-full mt-1 z-20 w-52 max-h-72 overflow-y-auto rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-md shadow-lg py-1">
+                    <button
+                      type="button"
+                      className={cn(
+                        'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors',
+                        activeGroupTab === 'all'
+                          ? 'text-primary font-medium'
+                          : 'text-foreground hover:bg-muted/50'
+                      )}
+                      onClick={() => {
+                        setActiveGroupTab('all')
+                        setShowGroupMenu(false)
+                      }}
+                    >
+                      <Users className="h-4 w-4" />
+                      {isEn ? 'All' : '全部'} ({groupTabCounts.all})
+                    </button>
+                    <button
+                      type="button"
+                      className={cn(
+                        'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors',
+                        activeGroupTab === 'ungrouped'
+                          ? 'text-primary font-medium'
+                          : 'text-foreground hover:bg-muted/50'
+                      )}
+                      onClick={() => {
+                        setActiveGroupTab('ungrouped')
+                        setShowGroupMenu(false)
+                      }}
+                    >
+                      <Inbox className="h-4 w-4" />
+                      {isEn ? 'Ungrouped' : '未分组'} ({groupTabCounts.ungrouped})
+                    </button>
+                    {sortedGroups.map((g) => (
                       <button
                         key={g.id}
+                        type="button"
                         className={cn(
-                          'px-2 py-0.5 text-xs rounded border transition-colors',
-                          groupIds.has(g.id)
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'hover:bg-muted'
+                          'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors',
+                          activeGroupTab === g.id
+                            ? 'text-primary font-medium'
+                            : 'text-foreground hover:bg-muted/50'
                         )}
-                        onClick={() => setGroupIds((prev) => toggleInSet(prev, g.id))}
+                        onClick={() => {
+                          setActiveGroupTab(g.id)
+                          setShowGroupMenu(false)
+                        }}
                       >
-                        {g.name}
+                        <span
+                          className="h-2 w-2 rounded-full shrink-0"
+                          style={{ backgroundColor: toRgba(g.color || '#5b8cff') }}
+                        />
+                        <span className="truncate">{g.name}</span>
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          {groupTabCounts.byGroup.get(g.id) ?? 0}
+                        </span>
                       </button>
                     ))}
                   </div>
-                </div>
-              )}
-              {tags.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {isEn ? 'Tags:' : '标签:'}
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {Array.from(tags.values()).map((t) => (
-                      <button
-                        key={t.id}
-                        className={cn(
-                          'px-2 py-0.5 text-xs rounded border transition-colors',
-                          tagIds.has(t.id)
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'hover:bg-muted'
-                        )}
-                        onClick={() => setTagIds((prev) => toggleInSet(prev, t.id))}
-                      >
-                        {t.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {isEn ? 'Plan:' : '计划:'}
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  {(['Pro_Max', 'Pro_Plus', 'Power', 'Pro', 'Free'] as PlanKind[]).map((kind) => (
-                    <button
-                      key={kind}
-                      className={cn(
-                        'px-2 py-0.5 text-xs rounded border transition-colors',
-                        planFilter.has(kind)
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'hover:bg-muted'
-                      )}
-                      onClick={() => setPlanFilter((prev) => toggleInSet(prev, kind))}
-                    >
-                      {PLAN_LABELS[kind]}({planCounts.get(kind) ?? 0})
-                    </button>
-                  ))}
-                </div>
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {isEn ? 'Next:' : '下期:'}
-                </span>
-                <div className="flex flex-wrap gap-1">
-                  {(
-                    [
-                      ['renew', isEn ? 'Renew' : '将扣款'],
-                      ['scheduled-free', isEn ? '→Free' : '已排期Free'],
-                      ['no-renew', isEn ? "Won't renew" : '不续费'],
-                      ['unchecked', isEn ? 'Unchecked' : '未检查'],
-                      ['free', isEn ? 'Free' : '已降Free']
-                    ] as Array<[NextStatus, string]>
-                  ).map(([st, label]) => (
-                    <button
-                      key={st}
-                      className={cn(
-                        'px-2 py-0.5 text-xs rounded border transition-colors',
-                        statusFilter.has(st)
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'hover:bg-muted'
-                      )}
-                      onClick={() => setStatusFilter((prev) => toggleInSet(prev, st))}
-                    >
-                      {label}({statusCounts.get(st) ?? 0})
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
 
-            {/* 搜索 + 批量操作 */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+              {/* 搜索框（账号管理页同款样式） */}
+              <div className="relative flex-1 min-w-[200px] max-w-md">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <input
                   type="text"
+                  placeholder={isEn ? 'Search email / nickname...' : '搜索邮箱 / 昵称...'}
+                  className="w-full pl-9 pr-4 py-2 text-sm rounded-xl bg-[var(--glass-bg-subtle)] backdrop-blur-md border border-[var(--glass-border)] focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/30 transition-all"
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
-                  placeholder={isEn ? 'Search email / nickname…' : '搜索邮箱 / 昵称…'}
-                  className="w-56 px-2.5 py-1.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
                 />
-                {hasActiveFilters && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 text-xs px-2"
-                    onClick={clearFilters}
-                  >
-                    {isEn ? 'Clear' : '清除筛选'}
-                  </Button>
-                )}
-                <span className="text-xs text-muted-foreground">
-                  {isEn ? `${filtered.length} account(s)` : `共 ${filtered.length} 个账号`}
-                </span>
               </div>
-              <div className="flex items-center gap-2">
+
+              {hasActiveFilters && (
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearFilters}>
+                  {isEn ? 'Clear' : '清除筛选'}
+                </Button>
+              )}
+              <span className="text-xs text-muted-foreground">
+                {isEn ? `${filtered.length} account(s)` : `共 ${filtered.length} 个账号`}
+              </span>
+
+              <div className="flex items-center gap-2 ml-auto">
                 <Button
                   variant="outline"
                   size="sm"
@@ -537,6 +668,131 @@ export function BillingPage(): React.ReactNode {
                   {isEn ? 'Check All Billing' : '检查全部账单'}
                 </Button>
               </div>
+            </div>
+
+            {/* 筛选面板：布局与 chip 风格对齐账号管理页 AccountFilter */}
+            <div className="p-3 space-y-2 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)]/40">
+              {/* 第一行：计划（彩色 chip）+ 下期状态 */}
+              <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {isEn ? 'Plan:' : '计划:'}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {PLAN_CHIP_OPTIONS.map((option) => {
+                      const isActive = planFilter.has(option.value)
+                      const count = planCounts.get(option.value)
+                      return (
+                        <button
+                          key={option.value}
+                          className={cn(
+                            'px-2 py-0.5 text-xs rounded border transition-colors',
+                            isActive
+                              ? option.activeColor
+                              : `hover:bg-muted/50 ${option.color}`
+                          )}
+                          onClick={() => setPlanFilter((prev) => toggleInSet(prev, option.value))}
+                        >
+                          {option.label}({count})
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {isEn ? 'Next:' : '下期:'}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {(
+                      [
+                        ['renew', isEn ? 'Renew' : '将扣款'],
+                        ['scheduled-free', isEn ? '→Free' : '已排期Free'],
+                        ['no-renew', isEn ? "Won't renew" : '不续费'],
+                        ['unchecked', isEn ? 'Unchecked' : '未检查'],
+                        ['free', isEn ? 'Free' : '已降Free']
+                      ] as Array<[NextStatus, string]>
+                    ).map(([st, label]) => (
+                      <button
+                        key={st}
+                        className={cn(
+                          'px-2 py-0.5 text-xs rounded border transition-colors',
+                          statusFilter.has(st)
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'hover:bg-muted'
+                        )}
+                        onClick={() => setStatusFilter((prev) => toggleInSet(prev, st))}
+                      >
+                        {label}({statusCounts.get(st) ?? 0})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* 第二行：标签（彩色 chip，激活用标签自身颜色） */}
+              {tags.size > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {isEn ? 'Tags:' : '标签:'}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {Array.from(tags.values()).map((t) => {
+                      const isActive = tagIds.has(t.id)
+                      return (
+                        <button
+                          key={t.id}
+                          className={cn(
+                            'px-2 py-0.5 text-xs rounded border transition-colors',
+                            isActive ? 'text-white border-transparent' : 'hover:bg-muted'
+                          )}
+                          style={isActive ? { backgroundColor: toRgba(t.color) } : undefined}
+                          onClick={() => setTagIds((prev) => toggleInSet(prev, t.id))}
+                        >
+                          {t.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* 第三行：邮箱域名后缀（计数 + 超出折叠） */}
+              {domainCounts.length > 0 && (
+                <div className="flex items-start gap-2">
+                  <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
+                    {isEn ? 'Domain:' : '域名:'}
+                  </span>
+                  <div className="flex flex-wrap gap-1">
+                    {visibleDomains.map(([domain, count]) => (
+                      <button
+                        key={domain}
+                        className={cn(
+                          'px-2 py-0.5 text-xs rounded border transition-colors',
+                          emailDomains.has(domain)
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'hover:bg-muted'
+                        )}
+                        onClick={() => setEmailDomains((prev) => toggleInSet(prev, domain))}
+                      >
+                        @{domain}({count})
+                      </button>
+                    ))}
+                    {domainCounts.length > DOMAIN_DISPLAY_LIMIT && (
+                      <button
+                        className="px-2 py-0.5 text-xs rounded border hover:bg-muted text-muted-foreground transition-colors"
+                        onClick={() => setShowAllDomains(!showAllDomains)}
+                      >
+                        {showAllDomains
+                          ? isEn
+                            ? 'Less'
+                            : '收起'
+                          : `+${domainCounts.length - DOMAIN_DISPLAY_LIMIT}`}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 表头 */}
