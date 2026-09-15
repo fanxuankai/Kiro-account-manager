@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, globalShortcut } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, globalShortcut, protocol } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { checkMacUpdate, downloadMacUpdate, installMacUpdate, cleanupMacUpdateBackups } from './macSelfUpdater'
 import * as machineIdModule from './machineId'
@@ -47,6 +47,13 @@ import {
   type TraySettings,
   defaultTraySettings
 } from './tray'
+
+// 号池登录窗口内接管 kiro:// 授权回调（protocol.handle）——必须在 app ready 前
+// 把 kiro 声明为特权协议，否则页面对该协议的导航仍被当外部协议丢给 OS
+// （会被同样注册了 kiro:// 的 Kiro IDE 抢走，授权链路中断）
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'kiro', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
 
 // ============ 自动更新配置 ============
 autoUpdater.autoDownload = false

@@ -80,16 +80,16 @@ export function LoginPagePool(): React.ReactNode {
   // 批次选项（开始/继续时读一次；持久化 localStorage，重启不丢——避免重启后静默回全自动）
   const [intervalSec, setIntervalSec] = useState<string>(() => localStorage.getItem('loginpool_interval') || '60')
   const [semiAuto, setSemiAuto] = useState((): boolean => localStorage.getItem('loginpool_semiauto') === 'true')
+  const updateSemiAuto = (v: boolean): void => {
+    setSemiAuto(v)
+    localStorage.setItem('loginpool_semiauto', String(v))
+  }
   const [manualPolicy, setManualPolicy] = useState<'wait' | 'skip'>(() =>
     localStorage.getItem('loginpool_manual') === 'skip' ? 'skip' : 'wait'
   )
   const updateIntervalSec = (v: string): void => {
     setIntervalSec(v)
     localStorage.setItem('loginpool_interval', v)
-  }
-  const updateSemiAuto = (v: boolean): void => {
-    setSemiAuto(v)
-    localStorage.setItem('loginpool_semiauto', String(v))
   }
   const updateManualPolicy = (v: 'wait' | 'skip'): void => {
     setManualPolicy(v)
@@ -244,6 +244,8 @@ export function LoginPagePool(): React.ReactNode {
     () => ({
       intervalSec: intervalSec === 'rand' ? ('rand' as const) : Number(intervalSec),
       semiAuto,
+      // 最终形态固定：仅 Authorize 人手点（GitHub 自动化防线之下全自动不可行）
+      authorizeManual: true,
       manualPolicy
     }),
     [intervalSec, semiAuto, manualPolicy]
@@ -316,11 +318,11 @@ export function LoginPagePool(): React.ReactNode {
           </div>
           <label
             className="flex items-center gap-1.5 cursor-pointer"
-            title="半自动：自动填表 + 自动 2FA，Sign in / Verify / Authorize 人手点（全自动被风控盯上时的降级档）"
+            title="人工点击：开启后 Sign in / Verify / Authorize 全部人手点（最保守）；关闭（默认）时仅最后的 Authorize 人手点，填表/2FA/Sign in/Verify 全自动"
           >
             <Switch checked={semiAuto} onCheckedChange={updateSemiAuto} disabled={batchRunningActive} />
             <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Hand className="h-3.5 w-3.5" /> 半自动
+              <Hand className="h-3.5 w-3.5" /> 人工点击
             </span>
           </label>
           <div className="flex items-center gap-1.5" title="触发人机/邮箱设备验证时的策略">

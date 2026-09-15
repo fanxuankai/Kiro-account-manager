@@ -42,6 +42,8 @@ export interface LoginPoolEntryView {
 export interface LoginPoolBatchOptions {
   intervalSec: number | 'rand'
   semiAuto: boolean
+  /** 授权人工点：仅 Authorize 人手点，其余全自动（默认开） */
+  authorizeManual?: boolean
   manualPolicy: 'wait' | 'skip'
 }
 

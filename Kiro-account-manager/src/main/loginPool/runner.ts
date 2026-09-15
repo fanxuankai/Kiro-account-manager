@@ -14,7 +14,7 @@
 // - 人工验证策略：触发 DataDome/邮箱设备验证时，wait=窗口前置等人工过验证后
 //   继续（等待期间重置超时）；skip=标记失败跳下一号。
 
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, protocol } from 'electron'
 import { randomBytes } from 'node:crypto'
 import type { LoginPoolStore, PoolEntry, PoolEntryView } from './store'
 import { totpNow } from './totp'
@@ -26,6 +26,8 @@ interface PageDetect {
   pass: boolean
   otp: boolean
   authorize: boolean
+  redirectLink: string | null
+  continueLink: string | null
   captcha: boolean
   error: string | null
 }
@@ -50,6 +52,10 @@ export interface BatchOptions {
   intervalSec: number | 'rand'
   /** 半自动：true 时只自动填表，Sign in/Verify/Authorize 人手点 */
   semiAuto: boolean
+  /** 授权人工点：填表/2FA/Sign in/Verify 全自动，仅 Authorize 人手点。
+   *  GitHub 对自动授权会话会用「正在重定向」安全页拦截（实测授权虽批准但
+   *  跳转不走），人点 Authorize 则正常 302——默认开启，全自动前请先试水 */
+  authorizeManual?: boolean
   /** 触发人机/设备验证：wait 等人工处理 / skip 标失败跳过 */
   manualPolicy: 'wait' | 'skip'
 }
@@ -89,10 +95,28 @@ const PROBE_JS = `(() => {
     if (text && !/another tab or window|Reload to refresh/i.test(text)) error = text
   }
   const onAuthorizeUrl = !loginEl && !otpEl && location.pathname.startsWith('/login/oauth/authorize')
+  // GitHub 授权完成后的「正在重定向」安全确认页：正文提示 being redirected，
+  // 页面上有带 code 的回调链接（或 setup page 链接）——主动跟进它
+  let redirectLink = null
+  let continueLink = null
+  if (onAuthorizeUrl) {
+    const anchors = [...document.querySelectorAll('a[href]')]
+    const links = anchors.map((a) => a.href)
+    redirectLink =
+      links.find((h) => /[?&]code=/.test(h)) ||
+      links.find((h) => /kiro-prod|auth\.desktop\.kiro\.dev/.test(h)) ||
+      null
+    const cont = anchors.find(
+      (a) => a.offsetParent !== null && /setup page|continue/i.test((a.textContent || '').trim())
+    )
+    if (cont) continueLink = cont.href
+  }
   return {
     url: location.href,
     login: vis(loginEl), pass: vis(passEl), otp: vis(otpEl),
     authorize: vis(authBtn) || onAuthorizeUrl,
+    redirectLink,
+    continueLink,
     captcha: !!document.querySelector('iframe[src*="captcha" i], .octocaptcha-spinner'),
     error
   }
@@ -128,18 +152,22 @@ const HUMAN_TYPE_JS = `(async (payload) => {
 })`
 
 /** 取可点元素视口坐标（先 scrollIntoView 再取 rect 中心）。
- *  规则数组元素：字符串 = CSS 选择器；{ text } = 按按钮文本包含匹配 */
+ *  规则数组元素：字符串 = CSS 选择器；{ text } = 按可点元素文本/value 包含匹配
+ *  （含 input[type=submit]：GitHub OAuth 授权页的 Authorize 是 input 按钮） */
 const CLICK_RECT_JS = `((rulesJson) => {
   const rules = JSON.parse(rulesJson)
+  const clickables = [...document.querySelectorAll('button, input[type="submit"], input[type="button"], a[href]')]
   for (const r of rules) {
     let el = null
     if (typeof r === 'string') {
       const cand = document.querySelector(r)
       if (cand && cand.offsetParent !== null) el = cand
     } else if (r && r.text) {
-      el = [...document.querySelectorAll('button')].find(
-        (b) => (b.textContent || '').toLowerCase().includes(String(r.text).toLowerCase()) && b.offsetParent !== null
-      )
+      const want = String(r.text).toLowerCase()
+      el = clickables.find((b) => {
+        const label = ((b.textContent || b.value || '') + '').trim().toLowerCase()
+        return label.includes(want) && b.offsetParent !== null
+      })
     }
     if (el) {
       el.scrollIntoView({ block: 'center' })
@@ -157,8 +185,23 @@ const VERIFY_SELECTORS = ['button[type="submit"]', 'input[name="commit"]']
 const AUTHORIZE_SELECTORS: Array<string | { text: string }> = [
   '#js-oauth-authorize-btn',
   'button[name="authorize"]',
-  { text: 'authorize' }
+  'input[name="authorize"]',
+  { text: 'authorize' },
+  { text: 'continue' },
+  'button[type="submit"]',
+  'input[type="submit"]'
 ]
+
+/** dump 页面状态（授权链卡住时诊断：标题 + 正文摘要 + 可点元素清单） */
+const DUMP_CLICKABLES_JS = `(() => {
+  const btns = [...document.querySelectorAll('button, input[type="submit"], input[type="button"]')]
+    .filter((b) => b.offsetParent !== null)
+    .slice(0, 12)
+    .map((b) => '<' + b.tagName.toLowerCase() + ' name="' + (b.name || '') + '" value="' + (b.value || '').slice(0, 30) + '">' + (b.textContent || '').trim().slice(0, 30) + '>')
+    .join(' | ') || '(无)'
+  const text = ((document.body && document.body.innerText) || '').replace(/\\s+/g, ' ').trim().slice(0, 200)
+  return 'title="' + document.title + '" 正文="' + text + '" 按钮=[' + btns + ']'
+})()`
 
 const CHROME_MAJOR = process.versions.chrome.split('.')[0] || '134'
 const CHROME_UA =
@@ -167,6 +210,12 @@ const CHROME_UA =
 
 const PROBE_INTERVAL_MS = 1000
 const STEP_TIMEOUT_MS = 180_000
+
+/** 授权回调跳转的落点页（protocol.handle 接管 kiro:// 后渲染在登录窗口内） */
+const KIRO_LANDING_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:-apple-system,system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0d1117;color:#e6edf3}
+.box{text-align:center}.ok{font-size:48px}.h{font-size:18px;margin:12px 0 6px}.s{font-size:13px;color:#8b949e}
+</style></head><body><div class="box"><div class="ok">✅</div><div class="h">授权成功</div><div class="s">正在验证入库，窗口即将自动关闭…</div></div></body></html>`
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -197,6 +246,15 @@ export class LoginPoolRunner {
     this.store = store
     this.deps = deps
     this.events = events
+    // 应用内接管 kiro:// 导航：登录窗口里的授权跳转不经过 OS，不受系统层
+    // 协议归属影响（Kiro IDE 同样注册了 kiro://，OS 可能把回调派给它导致
+    // 跳转链「断掉」——KiroLuker 注释里描述的同款坑）。state 不匹配的调用
+    // 一律忽略，落点统一渲染成功页。
+    protocol.handle('kiro', (request) => {
+      const run = this.activeRun
+      if (run) run.dispatch(request.url)
+      return new Response(KIRO_LANDING_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    })
   }
 
   private log(level: 'info' | 'ok' | 'err' | 'warn', msg: string): void {
@@ -290,6 +348,8 @@ export class LoginPoolRunner {
     resolveCallback: (v: { code?: string; error?: string }) => void
     /** 兜底链路收到回调时置 callbackSeen，让主循环退出 */
     markSeen: () => void
+    /** 解析并派发一条 kiro:// 回调 URL（protocol.handle 应用内接管用） */
+    dispatch: (url: string) => void
   } | null = null
 
   // ── 批次循环 ──
@@ -339,6 +399,26 @@ export class LoginPoolRunner {
       resolveCallback: callbackResolve,
       markSeen: () => {
         callbackSeen = true
+      },
+      dispatch: (url: string) => {
+        if (callbackSeen) return
+        try {
+          const u = new URL(url)
+          const code = u.searchParams.get('code')
+          const state = u.searchParams.get('state')
+          const error = u.searchParams.get('error')
+          if (code && state === login.oauthState) {
+            this.log('info', `${entry.username} 授权回调已由 protocol.handle 应用内拦截`)
+            callbackSeen = true
+            callbackResolve({ code })
+          } else if (error) {
+            this.log('warn', `${entry.username} 授权回调带错误：${error}`)
+            callbackSeen = true
+            callbackResolve({ error })
+          }
+        } catch {
+          /* 非 URL 忽略 */
+        }
       }
     }
 
@@ -410,18 +490,31 @@ export class LoginPoolRunner {
     })
 
     let windowClosed = false
+    win.on('close', () => {
+      this.log('info', '登录窗口 close 事件（谁触发待查：用户/程序/页面）')
+    })
     win.on('closed', () => {
+      this.log('info', '登录窗口已关闭')
       windowClosed = true
       if (this.win === win) this.win = null
       // 不在这里 resolve 失败：授权完成页跳 kiro:// 时页面可能自行关闭，
       // 而系统协议兜底的回调稍后才到——由主循环后的统一等待兜住，
       // 等不到回调再按超时处理
     })
+    win.webContents.on('render-process-gone', (_e, details) => {
+      this.log('err', `页面渲染进程异常退出：${details.reason}${details.exitCode !== undefined ? ` (code ${details.exitCode})` : ''}`)
+    })
 
     // 各阶段动作去重标记（同页重复探测不重复填/点；半自动时只提醒一次）
     const filled = { credentials: false, otp: false }
+    /** cookie 收割结果（KiroLuker 同款路径：授权后凭证种在 app.kiro.dev cookie，不依赖回调跳转） */
+    let cookieCred: { accessToken: string; refreshToken: string; profileArn?: string } | null = null
     const notified = { signin: false, verify: false, authorize: false }
     const clickedOnce = { authorize: false }
+    let authorizeDumped = false
+    let authorizeStuckAt: number | null = null
+    let authorizeReplays = 0
+    let safeLinkClicks = 0
     let aborted = false
     let otpAttempts = 0
 
@@ -441,6 +534,25 @@ export class LoginPoolRunner {
           this.fail(entry, 'timeout', '整体超时（3 分钟无进展）')
           aborted = true
           break
+        }
+
+        // Cookie 收割：授权批准后 Kiro 凭证种在本会话 app.kiro.dev cookie——
+        // 与回调跳转是否完成无关（GitHub 安全页拦截跳转时凭证可能已落地）
+        try {
+          const cookies = await win.webContents.session.cookies.get({ domain: 'app.kiro.dev' })
+          const rt = cookies.find((c) => c.name === 'RefreshToken')?.value
+          if (rt) {
+            this.log('ok', `${entry.username} 检测到 Kiro 会话凭证（cookie 收割），直接入库`)
+            cookieCred = {
+              accessToken: cookies.find((c) => c.name === 'AccessToken')?.value || rt,
+              refreshToken: rt,
+              profileArn: cookies.find((c) => c.name === 'ProfileArn')?.value
+            }
+            callbackSeen = true
+            break
+          }
+        } catch {
+          /* 会话不可用时忽略，下轮再看 */
         }
 
         let detect: PageDetect
@@ -482,7 +594,7 @@ export class LoginPoolRunner {
             const res = await this.fillCredentials(win, entry.username, entry.password)
             if (res) {
               filled.credentials = true
-              this.store.patch(entry.id, { step: 1 })
+              this.store.patch(entry.id, { step: 2 })
               this.emitEntry(this.store.get(entry.id)!)
               this.log('info', `${entry.username} 账密已填（拟人节奏）`)
             } else {
@@ -503,7 +615,7 @@ export class LoginPoolRunner {
           } else {
             const clicked = await this.click(win, SIGNIN_SELECTORS)
             if (clicked) {
-              this.store.patch(entry.id, { step: 2 })
+              this.store.patch(entry.id, { step: 3 })
               this.emitEntry(this.store.get(entry.id)!)
             }
           }
@@ -532,7 +644,7 @@ export class LoginPoolRunner {
             if (ok) {
               filled.otp = true
               otpAttempts += 1
-              this.store.patch(entry.id, { step: 3 })
+              this.store.patch(entry.id, { step: 4 })
               this.emitEntry(this.store.get(entry.id)!)
               this.log('info', `${entry.username} 2FA 码已填（${t.code}，剩 ${Math.ceil(t.remainMs / 1000)}s）`)
             } else {
@@ -548,27 +660,81 @@ export class LoginPoolRunner {
           } else {
             const clicked = await this.click(win, VERIFY_SELECTORS)
             if (clicked) {
-              this.store.patch(entry.id, { step: 4 })
+              this.store.patch(entry.id, { step: 5 })
               this.emitEntry(this.store.get(entry.id)!)
             }
           }
           continue
         }
 
-        // OAuth 授权页：直接点 Authorize
+        // OAuth 授权页：点 Authorize（确认页场景）；已授权过的号无确认页，
+        // GitHub 直接 302 → Kiro 中转 → kiro://——若跳转链中断页面会停在
+        // authorize 空白态（无可点元素），此时重放登录 URL 自愈（GitHub 会话
+        // 已在分区 cookie 里，重放不会再要账密/2FA）
         if (detect.authorize) {
+          // GitHub「正在重定向」安全页：trusted 鼠标事件点击「继续」链接。
+          // 不能用 loadURL 直航——丢失页面上下文会被 Cognito 判 access_denied；
+          // trusted 点击与 Sign in/Verify 的自动点击同原理，页面侧无法区分人机
+          if (detect.continueLink && safeLinkClicks < 2) {
+            safeLinkClicks += 1
+            this.log('info', `${entry.username} 点击授权跳转「继续」链接（第 ${safeLinkClicks} 次，trusted 事件）`)
+            await this.click(win, [{ text: 'setup page' }, { text: 'continue' }])
+            await sleep(randInt(1500, 2500))
+            continue
+          }
           if (this.opts.semiAuto) {
             if (!notified.authorize) {
               notified.authorize = true
-              this.log('info', `${entry.username} 半自动模式：请在窗口中手动点 Authorize`)
+              this.log('info', `${entry.username} 半自动模式：请在窗口中手动点 Authorize（若页面自动跳转则无需操作）`)
               this.focusWindow()
             }
+          } else if (this.opts.authorizeManual) {
+            // 授权人工点档：前置自动化全部完成，只等人在窗口里点 Authorize
+            if (!notified.authorize) {
+              notified.authorize = true
+              this.log('info', `${entry.username} 请在窗口中手动点 Authorize（其余已全自动完成）`)
+              this.focusWindow()
+            }
+            authorizeStuckAt = null
           } else if (!clickedOnce.authorize) {
             const clicked = await this.click(win, AUTHORIZE_SELECTORS)
             if (clicked) {
               clickedOnce.authorize = true
-              this.store.patch(entry.id, { step: 5 })
+              authorizeStuckAt = null
+              this.store.patch(entry.id, { step: 6 })
               this.emitEntry(this.store.get(entry.id)!)
+            } else {
+              // 授权完成后的「正在重定向」安全页：主动跟进带 code 的回调链接
+              if (detect.redirectLink && authorizeReplays < 3) {
+                authorizeReplays += 1
+                authorizeStuckAt = null
+                this.log('info', `${entry.username} 跟进授权重定向链接（第 ${authorizeReplays} 次）：${detect.redirectLink.slice(0, 100)}`)
+                try {
+                  await win.loadURL(detect.redirectLink)
+                } catch {
+                  /* 载入失败由后续探测兜 */
+                }
+                continue
+              }
+              if (!authorizeDumped) {
+                // 卡住时 dump 页面真实状态（标题/正文/按钮）——不再盲猜 DOM
+                authorizeDumped = true
+                const dump = await this.dumpClickables(win)
+                this.log('warn', `${entry.username} Authorize 按钮未匹配，页面状态：${dump}`)
+              }
+              if (!authorizeStuckAt) {
+                authorizeStuckAt = Date.now()
+              } else if (Date.now() - authorizeStuckAt > 20_000 && authorizeReplays < 2) {
+                authorizeReplays += 1
+                authorizeStuckAt = null
+                authorizeDumped = false
+                this.log('warn', `${entry.username} 授权链无进展，重放登录 URL 自愈（第 ${authorizeReplays} 次）`)
+                try {
+                  await win.loadURL(login.url)
+                } catch {
+                  /* 载入失败由后续探测兜 */
+                }
+              }
             }
           }
           continue
@@ -578,6 +744,21 @@ export class LoginPoolRunner {
       }
 
       if (aborted) return
+
+      // cookie 收割路径：凭证已到手，无需 code/token 交换，直接交界面入库
+      if (cookieCred) {
+        this.store.patch(entry.id, { step: 8, state: 'used', failReason: undefined })
+        this.emitEntry(this.store.get(entry.id)!)
+        this.log('ok', `${entry.username} cookie 凭证交给界面验证入库`)
+        this.events.onResult({
+          entryId: entry.id,
+          username: entry.username,
+          accessToken: cookieCred.accessToken,
+          refreshToken: cookieCred.refreshToken,
+          profileArn: cookieCred.profileArn
+        })
+        return
+      }
 
       // 统一等待回调：窗口可能已被页面 self-close（OAuth 自定义协议常见行为），
       // 系统协议兜底可能稍后才到，最多等 15s；token 交换不依赖窗口存活
@@ -598,12 +779,12 @@ export class LoginPoolRunner {
         this.fail(entry, 'callback-error', '回调缺少授权码')
         return
       }
-      this.store.patch(entry.id, { step: 6 })
+      this.store.patch(entry.id, { step: 7 })
       this.emitEntry(this.store.get(entry.id)!)
       this.log('info', `${entry.username} 已拦截 kiro:// 回调，交换 token…`)
       const token = await this.deps.exchangeSocialToken(cb.code, login.codeVerifier)
       if (token.success) {
-        this.store.patch(entry.id, { step: 7, state: 'used', failReason: undefined })
+        this.store.patch(entry.id, { step: 8, state: 'used', failReason: undefined })
         this.emitEntry(this.store.get(entry.id)!)
         this.log('ok', `${entry.username} token 交换成功，交给界面验证入库`)
         this.events.onResult({
@@ -657,6 +838,15 @@ export class LoginPoolRunner {
       true
     )) as { ok: boolean; error?: string }
     return res?.ok === true
+  }
+
+  /** dump 页面可点元素（Authorize 点击失败时记录，诊断选择器） */
+  private async dumpClickables(win: BrowserWindow): Promise<string> {
+    try {
+      return (await win.webContents.executeJavaScript(DUMP_CLICKABLES_JS, true)) as string
+    } catch {
+      return '(页面跳转中，无法读取)'
+    }
   }
 
   /** trusted 点击：拿元素视口坐标 → sendInputEvent 鼠标事件（OS 输入管线）。

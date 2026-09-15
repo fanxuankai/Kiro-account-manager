@@ -523,12 +523,14 @@ interface KiroApi {
   loginPoolStart: (opts: {
     intervalSec: number | 'rand'
     semiAuto: boolean
+    authorizeManual?: boolean
     manualPolicy: 'wait' | 'skip'
   }) => Promise<{ success: boolean; error?: string }>
   loginPoolPause: () => Promise<{ success: boolean }>
   loginPoolRunOne: (id: string, opts?: {
     intervalSec: number | 'rand'
     semiAuto: boolean
+    authorizeManual?: boolean
     manualPolicy: 'wait' | 'skip'
   }) => Promise<{ success: boolean; error?: string }>
   loginPoolFocusWindow: () => Promise<{ success: boolean }>
