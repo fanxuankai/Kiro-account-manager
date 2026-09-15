@@ -20,7 +20,8 @@ import {
   ChevronDown,
   FolderOpen,
   Users,
-  Inbox
+  Inbox,
+  Filter
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -149,6 +150,8 @@ export function BillingPage(): React.ReactNode {
   const [emailDomains, setEmailDomains] = useState<Set<string>>(new Set())
   const [showAllDomains, setShowAllDomains] = useState(false)
   const [keyword, setKeyword] = useState('')
+  // 高级筛选气泡（账号管理页同款：漏斗按钮展开，维度在气泡内紧凑排布）
+  const [showFilterPopover, setShowFilterPopover] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isChecking, setIsChecking] = useState(false)
   const groupMenuRef = useRef<HTMLDivElement>(null)
@@ -207,7 +210,13 @@ export function BillingPage(): React.ReactNode {
       }
       if (
         kw &&
-        !(acc.email?.toLowerCase().includes(kw) || acc.nickname?.toLowerCase().includes(kw))
+        !(
+          acc.email?.toLowerCase().includes(kw) ||
+          acc.nickname?.toLowerCase().includes(kw) ||
+          // 卡尾号按原样数字匹配（无大小写），卡品牌走小写包含（如输入 visa / mastercard）
+          acc.subscription?.cardLast4?.includes(keyword.trim()) ||
+          acc.subscription?.cardBrand?.toLowerCase().includes(kw)
+        )
       )
         return false
       return true
@@ -389,13 +398,9 @@ export function BillingPage(): React.ReactNode {
     }
   }
 
-  const hasActiveFilters =
-    activeGroupTab !== 'all' ||
-    tagIds.size > 0 ||
-    planFilter.size > 0 ||
-    statusFilter.size > 0 ||
-    emailDomains.size > 0 ||
-    keyword.trim() !== ''
+  // 气泡维度是否有激活（不含分组 tab 与搜索词——两者有各自的入口与高亮）
+  const filterChipsActive =
+    tagIds.size > 0 || planFilter.size > 0 || statusFilter.size > 0 || emailDomains.size > 0
   const clearFilters = (): void => {
     setActiveGroupTab('all')
     setTagIds(new Set())
@@ -626,23 +631,173 @@ export function BillingPage(): React.ReactNode {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <input
                   type="text"
-                  placeholder={isEn ? 'Search email / nickname...' : '搜索邮箱 / 昵称...'}
+                  placeholder={isEn ? 'Search email / nickname / card last4...' : '搜索邮箱 / 昵称 / 卡尾号...'}
                   className="w-full pl-9 pr-4 py-2 text-sm rounded-xl bg-[var(--glass-bg-subtle)] backdrop-blur-md border border-[var(--glass-border)] focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/30 transition-all"
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
                 />
               </div>
 
-              {hasActiveFilters && (
-                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={clearFilters}>
-                  {isEn ? 'Clear' : '清除筛选'}
-                </Button>
-              )}
               <span className="text-xs text-muted-foreground">
                 {isEn ? `${filtered.length} account(s)` : `共 ${filtered.length} 个账号`}
               </span>
 
               <div className="flex items-center gap-2 ml-auto">
+                {/* 高级筛选气泡（账号管理页同款交互：漏斗按钮展开） */}
+                <div className="relative">
+                  <Button
+                    variant={showFilterPopover ? 'default' : 'ghost'}
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => setShowFilterPopover((v) => !v)}
+                    title={isEn ? 'Toggle advanced filter' : '展开/收起高级筛选'}
+                  >
+                    <Filter className="h-4 w-4" />
+                  </Button>
+                  {showFilterPopover && (
+                    <div className="absolute right-0 top-full mt-2 z-50 min-w-[560px] bg-popover border rounded-lg shadow-lg">
+                      {/* 气泡箭头 */}
+                      <div className="absolute -top-2 right-4 w-4 h-4 bg-popover border-l border-t rotate-45" />
+                      <div className="p-3 space-y-2">
+                        {/* 清除筛选 */}
+                        {filterChipsActive && (
+                          <div className="flex justify-end">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-6 text-xs px-2"
+                              onClick={clearFilters}
+                            >
+                              {isEn ? 'Clear' : '清除筛选'}
+                            </Button>
+                          </div>
+                        )}
+                        {/* 第一行：计划（彩色 chip）+ 下期状态 */}
+                        <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground shrink-0">
+                              {isEn ? 'Plan:' : '计划:'}
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {PLAN_CHIP_OPTIONS.map((option) => {
+                                const isActive = planFilter.has(option.value)
+                                const count = planCounts.get(option.value)
+                                return (
+                                  <button
+                                    key={option.value}
+                                    className={cn(
+                                      'px-2 py-0.5 text-xs rounded border transition-colors',
+                                      isActive
+                                        ? option.activeColor
+                                        : `hover:bg-muted/50 ${option.color}`
+                                    )}
+                                    onClick={() => setPlanFilter((prev) => toggleInSet(prev, option.value))}
+                                  >
+                                    {option.label}({count})
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground shrink-0">
+                              {isEn ? 'Next:' : '下期:'}
+                            </span>
+                            <div className="flex flex-wrap gap-1">
+                              {(
+                                [
+                                  ['renew', isEn ? 'Renew' : '将扣款'],
+                                  ['scheduled-free', isEn ? '→Free' : '已排期Free'],
+                                  ['no-renew', isEn ? "Won't renew" : '不续费'],
+                                  ['unchecked', isEn ? 'Unchecked' : '未检查'],
+                                  ['free', isEn ? 'Free' : '已降Free']
+                                ] as Array<[NextStatus, string]>
+                              ).map(([st, label]) => (
+                                <button
+                                  key={st}
+                                  className={cn(
+                                    'px-2 py-0.5 text-xs rounded border transition-colors',
+                                    statusFilter.has(st)
+                                      ? 'bg-primary text-primary-foreground border-primary'
+                                      : 'hover:bg-muted'
+                                  )}
+                                  onClick={() => setStatusFilter((prev) => toggleInSet(prev, st))}
+                                >
+                                  {label}({statusCounts.get(st) ?? 0})
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* 第二行：标签（激活用标签自身颜色）+ 邮箱域名 */}
+                        <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                          {tags.size > 0 && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                {isEn ? 'Tags:' : '标签:'}
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {Array.from(tags.values()).map((t) => {
+                                  const isActive = tagIds.has(t.id)
+                                  return (
+                                    <button
+                                      key={t.id}
+                                      className={cn(
+                                        'px-2 py-0.5 text-xs rounded border transition-colors',
+                                        isActive ? 'text-white border-transparent' : 'hover:bg-muted'
+                                      )}
+                                      style={isActive ? { backgroundColor: toRgba(t.color) } : undefined}
+                                      onClick={() => setTagIds((prev) => toggleInSet(prev, t.id))}
+                                    >
+                                      {t.name}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {domainCounts.length > 0 && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-muted-foreground shrink-0">
+                                {isEn ? 'Domain:' : '域名:'}
+                              </span>
+                              <div className="flex flex-wrap gap-1">
+                                {visibleDomains.map(([domain, count]) => (
+                                  <button
+                                    key={domain}
+                                    className={cn(
+                                      'px-2 py-0.5 text-xs rounded border transition-colors',
+                                      emailDomains.has(domain)
+                                        ? 'bg-primary text-primary-foreground border-primary'
+                                        : 'hover:bg-muted'
+                                    )}
+                                    onClick={() => setEmailDomains((prev) => toggleInSet(prev, domain))}
+                                  >
+                                    @{domain}({count})
+                                  </button>
+                                ))}
+                                {domainCounts.length > DOMAIN_DISPLAY_LIMIT && (
+                                  <button
+                                    className="px-2 py-0.5 text-xs rounded border hover:bg-muted text-muted-foreground transition-colors"
+                                    onClick={() => setShowAllDomains(!showAllDomains)}
+                                  >
+                                    {showAllDomains
+                                      ? isEn
+                                        ? 'Less'
+                                        : '收起'
+                                      : `+${domainCounts.length - DOMAIN_DISPLAY_LIMIT}`}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <Button
                   variant="outline"
                   size="sm"
@@ -668,131 +823,6 @@ export function BillingPage(): React.ReactNode {
                   {isEn ? 'Check All Billing' : '检查全部账单'}
                 </Button>
               </div>
-            </div>
-
-            {/* 筛选面板：布局与 chip 风格对齐账号管理页 AccountFilter */}
-            <div className="p-3 space-y-2 rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)]/40">
-              {/* 第一行：计划（彩色 chip）+ 下期状态 */}
-              <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {isEn ? 'Plan:' : '计划:'}
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {PLAN_CHIP_OPTIONS.map((option) => {
-                      const isActive = planFilter.has(option.value)
-                      const count = planCounts.get(option.value)
-                      return (
-                        <button
-                          key={option.value}
-                          className={cn(
-                            'px-2 py-0.5 text-xs rounded border transition-colors',
-                            isActive
-                              ? option.activeColor
-                              : `hover:bg-muted/50 ${option.color}`
-                          )}
-                          onClick={() => setPlanFilter((prev) => toggleInSet(prev, option.value))}
-                        >
-                          {option.label}({count})
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {isEn ? 'Next:' : '下期:'}
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {(
-                      [
-                        ['renew', isEn ? 'Renew' : '将扣款'],
-                        ['scheduled-free', isEn ? '→Free' : '已排期Free'],
-                        ['no-renew', isEn ? "Won't renew" : '不续费'],
-                        ['unchecked', isEn ? 'Unchecked' : '未检查'],
-                        ['free', isEn ? 'Free' : '已降Free']
-                      ] as Array<[NextStatus, string]>
-                    ).map(([st, label]) => (
-                      <button
-                        key={st}
-                        className={cn(
-                          'px-2 py-0.5 text-xs rounded border transition-colors',
-                          statusFilter.has(st)
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'hover:bg-muted'
-                        )}
-                        onClick={() => setStatusFilter((prev) => toggleInSet(prev, st))}
-                      >
-                        {label}({statusCounts.get(st) ?? 0})
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* 第二行：标签（彩色 chip，激活用标签自身颜色） */}
-              {tags.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {isEn ? 'Tags:' : '标签:'}
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {Array.from(tags.values()).map((t) => {
-                      const isActive = tagIds.has(t.id)
-                      return (
-                        <button
-                          key={t.id}
-                          className={cn(
-                            'px-2 py-0.5 text-xs rounded border transition-colors',
-                            isActive ? 'text-white border-transparent' : 'hover:bg-muted'
-                          )}
-                          style={isActive ? { backgroundColor: toRgba(t.color) } : undefined}
-                          onClick={() => setTagIds((prev) => toggleInSet(prev, t.id))}
-                        >
-                          {t.name}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* 第三行：邮箱域名后缀（计数 + 超出折叠） */}
-              {domainCounts.length > 0 && (
-                <div className="flex items-start gap-2">
-                  <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
-                    {isEn ? 'Domain:' : '域名:'}
-                  </span>
-                  <div className="flex flex-wrap gap-1">
-                    {visibleDomains.map(([domain, count]) => (
-                      <button
-                        key={domain}
-                        className={cn(
-                          'px-2 py-0.5 text-xs rounded border transition-colors',
-                          emailDomains.has(domain)
-                            ? 'bg-primary text-primary-foreground border-primary'
-                            : 'hover:bg-muted'
-                        )}
-                        onClick={() => setEmailDomains((prev) => toggleInSet(prev, domain))}
-                      >
-                        @{domain}({count})
-                      </button>
-                    ))}
-                    {domainCounts.length > DOMAIN_DISPLAY_LIMIT && (
-                      <button
-                        className="px-2 py-0.5 text-xs rounded border hover:bg-muted text-muted-foreground transition-colors"
-                        onClick={() => setShowAllDomains(!showAllDomains)}
-                      >
-                        {showAllDomains
-                          ? isEn
-                            ? 'Less'
-                            : '收起'
-                          : `+${domainCounts.length - DOMAIN_DISPLAY_LIMIT}`}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* 表头 */}
