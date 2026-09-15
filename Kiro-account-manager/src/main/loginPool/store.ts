@@ -26,8 +26,10 @@ export interface PoolEntry {
   doneAt?: number
 }
 
-/** 渲染进程视图条目：剥离明文凭据，只带打码展示位 */
+/** 渲染进程视图条目：含明文凭据（表格「显示明文」开关用，本机自用无外发）+ 打码展示位 */
 export type PoolEntryView = Omit<PoolEntry, 'password' | 'secret'> & {
+  password: string
+  secret: string
   passwordMasked: string
   secretMasked: string
 }
@@ -81,6 +83,8 @@ export class LoginPoolStore {
     const { password, secret, ...rest } = e
     return {
       ...rest,
+      password,
+      secret,
       passwordMasked: '•'.repeat(Math.min(password.length, 10)),
       secretMasked: secret.slice(0, 4) + '••••'
     }

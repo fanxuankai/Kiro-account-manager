@@ -48,7 +48,7 @@ export interface LoginPoolDeps {
 export interface BatchOptions {
   /** 号间冷却秒数；'rand' = 每次随机 30–120s */
   intervalSec: number | 'rand'
-  /** 点击人工兜底：true 时只自动填表，Sign in/Verify/Authorize 人手点 */
+  /** 半自动：true 时只自动填表，Sign in/Verify/Authorize 人手点 */
   semiAuto: boolean
   /** 触发人机/设备验证：wait 等人工处理 / skip 标失败跳过 */
   manualPolicy: 'wait' | 'skip'
@@ -78,13 +78,23 @@ const PROBE_JS = `(() => {
   const loginEl = q('input#login_field') || q('input[name="login"]')
   const passEl = q('input#password') || q('input[type="password"]')
   const otpEl = q('input[name="app_otp"]') || q('input#app_totp') || q('input[autocomplete="one-time-code"]')
-  const authBtn = q('#js-oauth-authorize-btn') || q('button[name="authorize"]')
-  const flash = q('.flash-error, .flash-warn')
+  const authBtn = q('#js-oauth-authorize-btn') || q('button[name="authorize"]') ||
+    [...document.querySelectorAll('button')].find((b) => /^authorize/i.test((b.textContent || '').trim()) && vis(b))
+  // 只认红色错误条（.flash-error = 表单级错误）；flash-warn 里 "another tab or
+  // window / Reload to refresh" 是 GitHub 会话提示，登录页常态存在，不能当失败
+  let error = null
+  const flash = q('.flash-error')
+  if (flash) {
+    const text = (flash.textContent || '').trim().slice(0, 140)
+    if (text && !/another tab or window|Reload to refresh/i.test(text)) error = text
+  }
+  const onAuthorizeUrl = !loginEl && !otpEl && location.pathname.startsWith('/login/oauth/authorize')
   return {
     url: location.href,
-    login: vis(loginEl), pass: vis(passEl), otp: vis(otpEl), authorize: vis(authBtn),
+    login: vis(loginEl), pass: vis(passEl), otp: vis(otpEl),
+    authorize: vis(authBtn) || onAuthorizeUrl,
     captcha: !!document.querySelector('iframe[src*="captcha" i], .octocaptcha-spinner'),
-    error: flash ? (flash.textContent || '').trim().slice(0, 140) : null
+    error
   }
 })()`
 
@@ -117,16 +127,25 @@ const HUMAN_TYPE_JS = `(async (payload) => {
   return { ok: true }
 })`
 
-/** 取可点元素视口坐标（先 scrollIntoView 再取 rect 中心） */
-const CLICK_RECT_JS = `((selectorListJson) => {
-  const sels = JSON.parse(selectorListJson)
-  for (const s of sels) {
-    const el = document.querySelector(s)
-    if (el && el.offsetParent !== null) {
+/** 取可点元素视口坐标（先 scrollIntoView 再取 rect 中心）。
+ *  规则数组元素：字符串 = CSS 选择器；{ text } = 按按钮文本包含匹配 */
+const CLICK_RECT_JS = `((rulesJson) => {
+  const rules = JSON.parse(rulesJson)
+  for (const r of rules) {
+    let el = null
+    if (typeof r === 'string') {
+      const cand = document.querySelector(r)
+      if (cand && cand.offsetParent !== null) el = cand
+    } else if (r && r.text) {
+      el = [...document.querySelectorAll('button')].find(
+        (b) => (b.textContent || '').toLowerCase().includes(String(r.text).toLowerCase()) && b.offsetParent !== null
+      )
+    }
+    if (el) {
       el.scrollIntoView({ block: 'center' })
-      const r = el.getBoundingClientRect()
-      if (r.width > 0 && r.height > 0) {
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      const rect = el.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) {
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
       }
     }
   }
@@ -135,7 +154,11 @@ const CLICK_RECT_JS = `((selectorListJson) => {
 
 const SIGNIN_SELECTORS = ['input[name="commit"]', 'button[type="submit"]']
 const VERIFY_SELECTORS = ['button[type="submit"]', 'input[name="commit"]']
-const AUTHORIZE_SELECTORS = ['#js-oauth-authorize-btn', 'button[name="authorize"]', 'button#js-oauth-authorize-btn']
+const AUTHORIZE_SELECTORS: Array<string | { text: string }> = [
+  '#js-oauth-authorize-btn',
+  'button[name="authorize"]',
+  { text: 'authorize' }
+]
 
 const CHROME_MAJOR = process.versions.chrome.split('.')[0] || '134'
 const CHROME_UA =
@@ -198,7 +221,7 @@ export class LoginPoolRunner {
     this.opts = opts
     this.running = true
     this.paused = false
-    this.log('info', `批次开始：间隔 ${opts.intervalSec === 'rand' ? '随机 30–120s' : opts.intervalSec + 's'}，点击${opts.semiAuto ? '人工兜底' : '全自动'}，人工验证=${opts.manualPolicy === 'wait' ? '等待接管' : '跳过'}`)
+    this.log('info', `批次开始：间隔 ${opts.intervalSec === 'rand' ? '随机 30–120s' : opts.intervalSec + 's'}，模式=${opts.semiAuto ? '半自动（按钮人手点）' : '全自动'}，人工验证=${opts.manualPolicy === 'wait' ? '等待接管' : '跳过'}`)
     this.emitBatch()
     void this.runBatch()
   }
@@ -223,14 +246,15 @@ export class LoginPoolRunner {
     }
   }
 
-  /** 单跑一个号（批次运行中拒绝） */
-  runOne(id: string): void {
+  /** 单跑一个号（批次运行中拒绝）；opts 传入则覆盖当前选项（semiAuto 等即时生效） */
+  runOne(id: string, opts?: BatchOptions): void {
     if (this.running) {
       this.log('warn', '批次执行中，不能单跑')
       return
     }
     const entry = this.store.get(id)
     if (!entry || entry.state === 'running') return
+    if (opts) this.opts = opts
     this.store.patch(id, { state: 'running', step: 0, failReason: undefined })
     const fresh = this.store.get(id)!
     this.emitEntry(fresh)
@@ -248,6 +272,7 @@ export class LoginPoolRunner {
     const run = this.activeRun
     if (run && state === run.oauthState) {
       this.log('info', '经系统协议兜底收到回调')
+      run.markSeen()
       run.resolveCallback({ code })
     }
   }
@@ -263,6 +288,8 @@ export class LoginPoolRunner {
   private activeRun: {
     oauthState: string
     resolveCallback: (v: { code?: string; error?: string }) => void
+    /** 兜底链路收到回调时置 callbackSeen，让主循环退出 */
+    markSeen: () => void
   } | null = null
 
   // ── 批次循环 ──
@@ -302,11 +329,18 @@ export class LoginPoolRunner {
     const partition = `loginpool-${Date.now()}-${randomBytes(3).toString('hex')}`
     const login = this.deps.buildGithubLoginUrl()
 
-    let callbackResolve: (v: { code?: string; error?: string }) => void
+    let callbackResolve!: (v: { code?: string; error?: string }) => void
     const callbackPromise = new Promise<{ code?: string; error?: string }>((resolve) => {
       callbackResolve = resolve
     })
-    this.activeRun = { oauthState: login.oauthState, resolveCallback: callbackResolve! }
+    let callbackSeen = false
+    this.activeRun = {
+      oauthState: login.oauthState,
+      resolveCallback: callbackResolve,
+      markSeen: () => {
+        callbackSeen = true
+      }
+    }
 
     const win = new BrowserWindow({
       width: 1080,
@@ -323,42 +357,52 @@ export class LoginPoolRunner {
     this.win = win
     win.webContents.setUserAgent(CHROME_UA)
 
-    let callbackSeen = false
-    const handleCallbackUrl = (url: string): void => {
+    const handleCallbackUrl = (url: string, from: string): void => {
       if (callbackSeen) return
       try {
         const u = new URL(url)
         const code = u.searchParams.get('code')
         const state = u.searchParams.get('state')
         const error = u.searchParams.get('error')
+        this.log('info', `拦截到回调（${from}）`)
         if (code && state) {
           callbackSeen = true
-          callbackResolve!({ code })
+          callbackResolve({ code })
         } else if (error) {
           callbackSeen = true
-          callbackResolve!({ error })
+          callbackResolve({ error })
         }
       } catch {
         /* 非 URL 忽略 */
       }
     }
 
+    // 导航日志：每次页面跳转记录 URL（诊断「卡在某步」用）
+    let lastLoggedUrl = ''
+    const logNavigation = (url: string, tag: string): void => {
+      if (!url || url === lastLoggedUrl) return
+      lastLoggedUrl = url
+      this.log('info', `页面${tag}：${url.slice(0, 120)}`)
+    }
+    win.webContents.on('did-navigate', (_e, url) => logNavigation(url, ''))
+    win.webContents.on('did-navigate-in-page', (_e, url) => logNavigation(url, '(in-page)'))
+
     // kiro:// 四路拦截（302 主文档跳转在不同 Chromium 版本里走的回调不同）
     win.webContents.on('will-navigate', (event, url) => {
       if (url.startsWith('kiro://')) {
         event.preventDefault()
-        handleCallbackUrl(url)
+        handleCallbackUrl(url, 'will-navigate')
       }
     })
     win.webContents.on('did-start-navigation', (_e, url) => {
-      if (url.startsWith('kiro://')) handleCallbackUrl(url)
+      if (url.startsWith('kiro://')) handleCallbackUrl(url, 'did-start-navigation')
     })
-    win.webContents.on('did-fail-load', (_e, _code, _desc, url) => {
-      if (url && url.startsWith('kiro://')) handleCallbackUrl(url)
+    win.webContents.on('did-fail-load', (_e, _code, desc, url) => {
+      if (url && url.startsWith('kiro://')) handleCallbackUrl(url, `did-fail-load:${desc || ''}`)
     })
     win.webContents.setWindowOpenHandler(({ url }) => {
       if (url.startsWith('kiro://')) {
-        handleCallbackUrl(url)
+        handleCallbackUrl(url, 'window-open')
         return { action: 'deny' }
       }
       if (/^https?:\/\//i.test(url)) return { action: 'allow' }
@@ -366,12 +410,12 @@ export class LoginPoolRunner {
     })
 
     let windowClosed = false
-    let finishedThisRun = false
     win.on('closed', () => {
       windowClosed = true
       if (this.win === win) this.win = null
-      // 用户手关窗口且流程未完成 → 按取消处理
-      if (!callbackSeen && !finishedThisRun) callbackResolve!({ error: 'window-closed' })
+      // 不在这里 resolve 失败：授权完成页跳 kiro:// 时页面可能自行关闭，
+      // 而系统协议兜底的回调稍后才到——由主循环后的统一等待兜住，
+      // 等不到回调再按超时处理
     })
 
     // 各阶段动作去重标记（同页重复探测不重复填/点；半自动时只提醒一次）
@@ -534,15 +578,16 @@ export class LoginPoolRunner {
       }
 
       if (aborted) return
-      if (windowClosed) {
-        this.fail(entry, 'window-closed', '窗口被手动关闭')
-        return
-      }
 
-      // 等回调到达（拦截可能在探测间隔内刚发生；窗口关闭也会带 error 回来）
+      // 统一等待回调：窗口可能已被页面 self-close（OAuth 自定义协议常见行为），
+      // 系统协议兜底可能稍后才到，最多等 15s；token 交换不依赖窗口存活
       const cb = await Promise.race([callbackPromise, sleep(15_000).then(() => null)])
       if (!cb) {
-        this.fail(entry, 'timeout', '等待授权回调超时')
+        this.fail(
+          entry,
+          'timeout',
+          windowClosed ? '窗口已关闭且 15s 内未收到授权回调（若人工关闭属正常取消）' : '等待授权回调超时'
+        )
         return
       }
       if (cb.error) {
@@ -575,7 +620,6 @@ export class LoginPoolRunner {
     } catch (err) {
       this.fail(entry, 'unexpected', err instanceof Error ? err.message : String(err))
     } finally {
-      finishedThisRun = true
       this.activeRun = null
       this.win = null
       if (!win.isDestroyed()) {
@@ -615,8 +659,9 @@ export class LoginPoolRunner {
     return res?.ok === true
   }
 
-  /** trusted 点击：拿元素视口坐标 → sendInputEvent 鼠标事件（OS 输入管线） */
-  private async click(win: BrowserWindow, selectors: string[]): Promise<boolean> {
+  /** trusted 点击：拿元素视口坐标 → sendInputEvent 鼠标事件（OS 输入管线）。
+   *  规则数组元素：字符串 = CSS 选择器；{ text } = 按按钮文本匹配 */
+  private async click(win: BrowserWindow, selectors: Array<string | { text: string }>): Promise<boolean> {
     const rect = (await win.webContents.executeJavaScript(
       `(${CLICK_RECT_JS})(${JSON.stringify(JSON.stringify(selectors))})`,
       true

@@ -21,7 +21,7 @@ export interface StripeBillingSnapshot {
   latestInvoiceUrl?: string
 }
 
-/** 号池条目视图（主进程剥离明文凭据后的只读投影） */
+/** 号池条目视图（含明文凭据：表格「显示明文」开关用 + 打码展示位） */
 export interface LoginPoolEntryView {
   id: string
   username: string
@@ -32,6 +32,8 @@ export interface LoginPoolEntryView {
   addedAt: number
   takenAt?: number
   doneAt?: number
+  password: string
+  secret: string
   passwordMasked: string
   secretMasked: string
 }
@@ -457,7 +459,12 @@ const api = {
   },
 
   // ─── 号池（GitHub 账密+2FA 批量激活 Kiro）───
-  loginPoolList: (): Promise<LoginPoolEntryView[]> => {
+  /** 全量快照：条目视图 + 批次状态 + 最近日志（页面重挂恢复用） */
+  loginPoolList: (): Promise<{
+    entries: LoginPoolEntryView[]
+    batch: { running: boolean; paused: boolean; cooldownSec: number; unused: number }
+    logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
+  }> => {
     return ipcRenderer.invoke('login-pool:list')
   },
   loginPoolAddText: (text: string): Promise<{ added: number; updated: number; bad: string[] }> => {
@@ -484,8 +491,8 @@ const api = {
   loginPoolPause: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('login-pool:pause')
   },
-  loginPoolRunOne: (id: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('login-pool:run-one', id)
+  loginPoolRunOne: (id: string, opts?: LoginPoolBatchOptions): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('login-pool:run-one', id, opts)
   },
   loginPoolFocusWindow: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('login-pool:focus-window')

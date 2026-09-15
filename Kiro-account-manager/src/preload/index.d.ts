@@ -494,20 +494,26 @@ interface KiroApi {
   cancelSocialLogin: () => Promise<{ success: boolean }>
 
   // ─── 号池（GitHub 账密+2FA 批量激活 Kiro）───
-  /** 号池条目视图（主进程剥离明文凭据后的只读投影） */
+  /** 全量快照：条目视图 + 批次状态 + 最近日志（页面重挂恢复用） */
   loginPoolList: () => Promise<{
-    id: string
-    username: string
-    state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
-    step: number
-    failReason?: string
-    kiroEmail?: string
-    addedAt: number
-    takenAt?: number
-    doneAt?: number
-    passwordMasked: string
-    secretMasked: string
-  }[]>
+    entries: {
+      id: string
+      username: string
+      state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+      step: number
+      failReason?: string
+      kiroEmail?: string
+      addedAt: number
+      takenAt?: number
+      doneAt?: number
+      password: string
+      secret: string
+      passwordMasked: string
+      secretMasked: string
+    }[]
+    batch: { running: boolean; paused: boolean; cooldownSec: number; unused: number }
+    logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
+  }>
   loginPoolAddText: (text: string) => Promise<{ added: number; updated: number; bad: string[] }>
   loginPoolMarkWasted: (id: string) => Promise<{ success: boolean }>
   loginPoolRestore: (id: string) => Promise<{ success: boolean }>
@@ -520,7 +526,11 @@ interface KiroApi {
     manualPolicy: 'wait' | 'skip'
   }) => Promise<{ success: boolean; error?: string }>
   loginPoolPause: () => Promise<{ success: boolean }>
-  loginPoolRunOne: (id: string) => Promise<{ success: boolean; error?: string }>
+  loginPoolRunOne: (id: string, opts?: {
+    intervalSec: number | 'rand'
+    semiAuto: boolean
+    manualPolicy: 'wait' | 'skip'
+  }) => Promise<{ success: boolean; error?: string }>
   loginPoolFocusWindow: () => Promise<{ success: boolean }>
   loginPoolManualCallback: (code: string, state: string) => Promise<{ success: boolean }>
   loginPoolMarkStored: (id: string, kiroEmail: string) => Promise<{ success: boolean }>
@@ -536,6 +546,8 @@ interface KiroApi {
       addedAt: number
       takenAt?: number
       doneAt?: number
+      password: string
+      secret: string
       passwordMasked: string
       secretMasked: string
     }

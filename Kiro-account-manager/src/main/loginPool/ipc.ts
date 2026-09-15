@@ -19,8 +19,6 @@ export interface LoginPoolBatchState {
   unused: number
 }
 
-let runner: LoginPoolRunner | null = null
-
 export function registerLoginPoolIpc(opts: {
   userDataDir: string
   deps: LoginPoolDeps
@@ -33,18 +31,46 @@ export function registerLoginPoolIpc(opts: {
     if (win && !win.isDestroyed()) win.webContents.send('login-pool-update', update)
   }
 
-  runner = new LoginPoolRunner(store, opts.deps, {
+  // 页面级快照缓存：切页导致组件重挂时，进页面拉一次全量恢复
+  // （渲染层组件状态随卸载清零，日志/批次状态必须由主进程持有）
+  const recentLogs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }> = []
+  let lastBatch: { running: boolean; paused: boolean; cooldownSec: number; unused: number } = {
+    running: false,
+    paused: false,
+    cooldownSec: 0,
+    unused: 0
+  }
+
+  const runner = new LoginPoolRunner(store, opts.deps, {
     onEntry: (entry) => send({ kind: 'entry', entry }),
-    onLog: (line) => send({ kind: 'log', line }),
-    onBatch: (state) => send({ kind: 'batch', state }),
+    onLog: (line) => {
+      // 双写主进程 console：日志会随 proxyLogStore 落盘，问题诊断不依赖用户复制 UI 日志
+      console.log(`[LoginPool ${line.level}] ${line.msg}`)
+      recentLogs.push(line)
+      if (recentLogs.length > 200) recentLogs.splice(0, recentLogs.length - 200)
+      send({ kind: 'log', line })
+    },
+    onBatch: (state) => {
+      lastBatch = state
+      send({ kind: 'batch', state })
+    },
     onResult: (payload) => send({ kind: 'result', payload })
   })
 
   const log = (level: 'info' | 'ok' | 'err' | 'warn', msg: string): void => {
-    send({ kind: 'log', line: { time: new Date().toTimeString().slice(0, 8), level, msg } })
+    const line = { time: new Date().toTimeString().slice(0, 8), level, msg }
+    console.log(`[LoginPool ${level}] ${msg}`)
+    recentLogs.push(line)
+    if (recentLogs.length > 200) recentLogs.splice(0, recentLogs.length - 200)
+    send({ kind: 'log', line })
   }
 
-  ipcMain.handle('login-pool:list', () => store.listViews())
+  // 返回全量快照：条目 + 批次状态 + 最近日志（页面重挂时恢复用）
+  ipcMain.handle('login-pool:list', () => ({
+    entries: store.listViews(),
+    batch: lastBatch,
+    logs: [...recentLogs]
+  }))
 
   ipcMain.handle('login-pool:add-text', (_e, text: string) => {
     const { items, bad } = parseLoginPoolText(text)
@@ -101,14 +127,14 @@ export function registerLoginPoolIpc(opts: {
     return { success: true }
   })
 
-  ipcMain.handle('login-pool:run-one', (_e, id: string) => {
+  ipcMain.handle('login-pool:run-one', (_e, id: string, batchOpts?: BatchOptions) => {
     if (runner!.running) {
       return { success: false, error: '批次执行中，不能单跑' }
     }
     if (!store.get(id)) {
       return { success: false, error: '条目不存在' }
     }
-    runner!.runOne(id)
+    runner!.runOne(id, batchOpts)
     return { success: true }
   })
 

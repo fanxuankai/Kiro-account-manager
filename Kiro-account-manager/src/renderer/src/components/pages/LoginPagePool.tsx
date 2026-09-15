@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button, Card, CardContent, CardHeader, CardTitle, Badge, Input, Label, Switch } from '../ui'
 import {
   Play, Pause, Plus, RotateCcw, Ban, ExternalLink, CheckCircle2, Clock, Loader2,
-  KeyRound, EyeOff, Search, ChevronRight, Terminal, Trash2, Undo2, X
+  KeyRound, EyeOff, Eye, Hand, Search, ChevronRight, Terminal, Trash2, Undo2, X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
@@ -25,6 +25,8 @@ interface PoolEntryView {
   addedAt: number
   takenAt?: number
   doneAt?: number
+  password: string
+  secret: string
   passwordMasked: string
   secretMasked: string
 }
@@ -66,11 +68,33 @@ export function LoginPagePool(): React.ReactNode {
   const [addOpen, setAddOpen] = useState(false)
   const [filter, setFilter] = useState<'all' | PoolEntryView['state']>('all')
   const [query, setQuery] = useState('')
+  // 凭据明文显示开关（默认打码；记忆在 localStorage）
+  const [showSecrets, setShowSecrets] = useState((): boolean => localStorage.getItem('loginpool_show_secrets') === 'true')
+  const toggleShowSecrets = (): void => {
+    setShowSecrets((v) => {
+      localStorage.setItem('loginpool_show_secrets', String(!v))
+      return !v
+    })
+  }
 
-  // 批次选项（开始/继续时读一次）
-  const [intervalSec, setIntervalSec] = useState<string>('60')
-  const [semiAuto, setSemiAuto] = useState(false)
-  const [manualPolicy, setManualPolicy] = useState<'wait' | 'skip'>('wait')
+  // 批次选项（开始/继续时读一次；持久化 localStorage，重启不丢——避免重启后静默回全自动）
+  const [intervalSec, setIntervalSec] = useState<string>(() => localStorage.getItem('loginpool_interval') || '60')
+  const [semiAuto, setSemiAuto] = useState((): boolean => localStorage.getItem('loginpool_semiauto') === 'true')
+  const [manualPolicy, setManualPolicy] = useState<'wait' | 'skip'>(() =>
+    localStorage.getItem('loginpool_manual') === 'skip' ? 'skip' : 'wait'
+  )
+  const updateIntervalSec = (v: string): void => {
+    setIntervalSec(v)
+    localStorage.setItem('loginpool_interval', v)
+  }
+  const updateSemiAuto = (v: boolean): void => {
+    setSemiAuto(v)
+    localStorage.setItem('loginpool_semiauto', String(v))
+  }
+  const updateManualPolicy = (v: 'wait' | 'skip'): void => {
+    setManualPolicy(v)
+    localStorage.setItem('loginpool_manual', v)
+  }
 
   const logRef = useRef<HTMLDivElement>(null)
   const pushLog = useCallback((line: LogLine) => {
@@ -171,9 +195,18 @@ export function LoginPagePool(): React.ReactNode {
     [addAccount, isAccountExists, pushLog]
   )
 
+  /** 拉全量快照刷新（操作后调用；restoreLog=false 不动日志区） */
+  const refreshList = useCallback((restoreLogs = false): void => {
+    void window.api.loginPoolList().then((snap) => {
+      setEntries(snap.entries)
+      setBatch(snap.batch)
+      if (restoreLogs) setLogs(snap.logs)
+    })
+  }, [])
+
   // 初始化 + 订阅主进程事件
   useEffect(() => {
-    void window.api.loginPoolList().then((list) => setEntries(list))
+    refreshList(true)
     const unsubscribe = window.api.onLoginPoolUpdate((update) => {
       if (update.kind === 'entry') {
         setEntries((prev) => {
@@ -199,7 +232,7 @@ export function LoginPagePool(): React.ReactNode {
       unsubscribe()
       unsubCallback()
     }
-  }, [handleResult])
+  }, [handleResult, refreshList])
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
@@ -207,14 +240,18 @@ export function LoginPagePool(): React.ReactNode {
 
   // ── 操作 ──
 
-  const startOrResume = useCallback(() => {
-    const opts = {
+  const currentOpts = useCallback(
+    () => ({
       intervalSec: intervalSec === 'rand' ? ('rand' as const) : Number(intervalSec),
       semiAuto,
       manualPolicy
-    }
-    void window.api.loginPoolStart(opts)
-  }, [intervalSec, semiAuto, manualPolicy])
+    }),
+    [intervalSec, semiAuto, manualPolicy]
+  )
+
+  const startOrResume = useCallback(() => {
+    void window.api.loginPoolStart(currentOpts())
+  }, [currentOpts])
 
   const current = entries.find((e) => e.state === 'running') || null
   const list = entries.filter((e) => (filter === 'all' || e.state === filter) && (!query || e.username.includes(query)))
@@ -266,7 +303,7 @@ export function LoginPagePool(): React.ReactNode {
             <Label className="text-xs text-muted-foreground whitespace-nowrap">批次间隔</Label>
             <select
               value={intervalSec}
-              onChange={(e) => setIntervalSec(e.target.value)}
+              onChange={(e) => updateIntervalSec(e.target.value)}
               disabled={batchRunningActive}
               title="相邻两个号之间的冷却，防风控"
               className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
@@ -279,18 +316,18 @@ export function LoginPagePool(): React.ReactNode {
           </div>
           <label
             className="flex items-center gap-1.5 cursor-pointer"
-            title="勾选后自动填表+自动 2FA，Sign in / Verify / Authorize 由人手点（防风控降级档）"
+            title="半自动：自动填表 + 自动 2FA，Sign in / Verify / Authorize 人手点（全自动被风控盯上时的降级档）"
           >
-            <Switch checked={semiAuto} onCheckedChange={setSemiAuto} disabled={batchRunningActive} />
+            <Switch checked={semiAuto} onCheckedChange={updateSemiAuto} disabled={batchRunningActive} />
             <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <EyeOff className="h-3.5 w-3.5" /> 点击人工兜底
+              <Hand className="h-3.5 w-3.5" /> 半自动
             </span>
           </label>
           <div className="flex items-center gap-1.5" title="触发人机/邮箱设备验证时的策略">
             <Label className="text-xs text-muted-foreground whitespace-nowrap">人工验证</Label>
             <select
               value={manualPolicy}
-              onChange={(e) => setManualPolicy(e.target.value as 'wait' | 'skip')}
+              onChange={(e) => updateManualPolicy(e.target.value as 'wait' | 'skip')}
               disabled={batchRunningActive}
               className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
             >
@@ -345,10 +382,20 @@ export function LoginPagePool(): React.ReactNode {
           <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索账号…" className="h-8 w-44 pl-8 text-xs" />
         </div>
-        <Button size="sm" variant="ghost" className="h-8 text-xs" title="把已入库的条目移出列表（账号保留在账号管理）" onClick={() => { void window.api.loginPoolClearFinished().then(() => window.api.loginPoolList().then(setEntries)) }}>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 text-xs"
+          title={showSecrets ? '密码/2FA 当前明文显示，点击恢复打码' : '显示密码/2FA 明文'}
+          onClick={toggleShowSecrets}
+        >
+          {showSecrets ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+          {showSecrets ? '明文' : '打码'}
+        </Button>
+        <Button size="sm" variant="ghost" className="h-8 text-xs" title="把已入库的条目移出列表（账号保留在账号管理）" onClick={() => { void window.api.loginPoolClearFinished().then(() => refreshList()) }}>
           <Trash2 className="h-3.5 w-3.5" /> 清除已入库
         </Button>
-        <Button size="sm" variant="ghost" className="h-8 text-xs" title="已入库/失败/作废全部拨回未用，再轮一遍" onClick={() => { void window.api.loginPoolRestoreAll().then(() => window.api.loginPoolList().then(setEntries)) }}>
+        <Button size="sm" variant="ghost" className="h-8 text-xs" title="已入库/失败/作废全部拨回未用，再轮一遍" onClick={() => { void window.api.loginPoolRestoreAll().then(() => refreshList()) }}>
           <Undo2 className="h-3.5 w-3.5" /> 全部恢复未用
         </Button>
       </div>
@@ -384,8 +431,16 @@ export function LoginPagePool(): React.ReactNode {
                     <span className={cn('block h-1 w-1 rounded-full', e.state === 'running' ? 'bg-primary animate-pulse' : 'bg-transparent')} />
                   </td>
                   <td className="py-1.5 px-2 font-mono">{e.username}</td>
-                  <td className="py-1.5 px-2 text-muted-foreground">{e.passwordMasked}</td>
-                  <td className="py-1.5 px-2 text-muted-foreground font-mono">{e.secretMasked}</td>
+                  <td className="py-1.5 px-2 font-mono">
+                    <span className={cn(!showSecrets && 'text-muted-foreground')} title={showSecrets ? undefined : '点击工具栏「打码/明文」切换'}>
+                      {showSecrets ? e.password : e.passwordMasked}
+                    </span>
+                  </td>
+                  <td className="py-1.5 px-2 font-mono">
+                    <span className={cn(!showSecrets && 'text-muted-foreground')}>
+                      {showSecrets ? e.secret : e.secretMasked}
+                    </span>
+                  </td>
                   <td className="py-1.5 px-2"><StateBadge state={e.state} /></td>
                   <td className="py-1.5 px-2">
                     {e.state === 'running' ? (
@@ -398,41 +453,67 @@ export function LoginPagePool(): React.ReactNode {
                   </td>
                   <td className="py-1.5 px-2 text-muted-foreground truncate max-w-[180px]" title={e.kiroEmail}>{e.kiroEmail ?? '—'}</td>
                   <td className="py-1.5 px-2 text-red-600 dark:text-red-400 truncate max-w-[200px]" title={e.failReason}>{e.failReason ?? '—'}</td>
-                  <td className="py-1.5 px-3 text-right whitespace-nowrap">
-                    {e.state === 'unused' && (
-                      <Button size="sm" variant="ghost" className="h-6 px-2" disabled={batch.running} onClick={() => void window.api.loginPoolRunOne(e.id)}>单跑</Button>
-                    )}
-                    {e.state === 'failed' && (
-                      <Button size="sm" variant="ghost" className="h-6 px-2" disabled={batch.running} onClick={() => void window.api.loginPoolRunOne(e.id)}>重试</Button>
-                    )}
-                    {e.state !== 'running' && (
-                      <>
+                  <td className="py-1.5 px-3">
+                    <div className="flex items-center justify-end gap-1">
+                      {e.state === 'unused' && (
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="h-6 px-2"
-                          title={e.state === 'used' ? '拨回未用（可再轮一遍）' : '恢复未用'}
-                          onClick={() => { void window.api.loginPoolRestore(e.id).then(() => window.api.loginPoolList().then(setEntries)) }}
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
+                          disabled={batch.running}
+                          onClick={() => void window.api.loginPoolRunOne(e.id, currentOpts())}
                         >
-                          <RotateCcw className="h-3 w-3" />
+                          <Play className="h-3 w-3" /> 单跑
                         </Button>
+                      )}
+                      {e.state === 'failed' && (
                         <Button
                           size="sm"
-                          variant="ghost"
-                          className="h-6 px-2 text-muted-foreground"
-                          title={e.state === 'wasted' ? '删除条目' : '作废（不再参与取号）'}
-                          onClick={() => {
-                            if (e.state === 'wasted') {
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                          disabled={batch.running}
+                          onClick={() => void window.api.loginPoolRunOne(e.id, currentOpts())}
+                        >
+                          <RotateCcw className="h-3 w-3" /> 重试
+                        </Button>
+                      )}
+                      {e.state !== 'running' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400 hover:bg-sky-500/20"
+                          title={e.state === 'used' ? '拨回未用，可再轮一遍' : '拨回未用'}
+                          onClick={() => { void window.api.loginPoolRestore(e.id).then(() => refreshList()) }}
+                        >
+                          <Undo2 className="h-3 w-3" /> 恢复
+                        </Button>
+                      )}
+                      {e.state !== 'running' && (
+                        e.state === 'wasted' ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[11px] gap-1 rounded-md border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/20"
+                            title="从池中删除此条目"
+                            onClick={() => {
                               void window.api.loginPoolRemove(e.id).then(() => setEntries((prev) => prev.filter((x) => x.id !== e.id)))
-                            } else {
-                              void window.api.loginPoolMarkWasted(e.id).then(() => window.api.loginPoolList().then(setEntries))
-                            }
-                          }}
-                        >
-                          {e.state === 'wasted' ? <Trash2 className="h-3 w-3" /> : <Ban className="h-3 w-3" />}
-                        </Button>
-                      </>
-                    )}
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" /> 删除
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-2 text-[11px] gap-1 rounded-md border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                            title="作废后不再参与取号"
+                            onClick={() => { void window.api.loginPoolMarkWasted(e.id).then(() => refreshList()) }}
+                          >
+                            <Ban className="h-3 w-3" /> 作废
+                          </Button>
+                        )
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -487,7 +568,7 @@ export function LoginPagePool(): React.ReactNode {
       </Card>
 
       {/* 入池弹窗 */}
-      {addOpen && <AddPoolDialog onClose={() => setAddOpen(false)} onDone={() => { void window.api.loginPoolList().then(setEntries) }} pushLog={pushLog} />}
+      {addOpen && <AddPoolDialog onClose={() => setAddOpen(false)} onDone={() => { refreshList() }} pushLog={pushLog} />}
     </div>
   )
 }
