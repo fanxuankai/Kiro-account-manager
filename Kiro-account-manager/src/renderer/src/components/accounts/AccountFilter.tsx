@@ -54,11 +54,20 @@ function toRgba(argbColor: string): string {
 // 域名筛选默认展示的最大数量，超出部分折叠
 const DOMAIN_DISPLAY_LIMIT = 16
 
-// 时间戳 → date input 需要的 yyyy-MM-dd（本地时区）
-const toDateInputValue = (ts: number): string => {
+// 时间戳 → datetime-local input 需要的 yyyy-MM-ddTHH:mm（本地时区）
+const toDateTimeInputValue = (ts: number): string => {
   const d = new Date(ts)
   const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+// datetime-local 值 → 时间戳；只填了日期没填时间时，min 补 00:00 / max 补当天末尾，
+// 与原「整天筛选」行为兼容
+const parseDateTimeInput = (v: string, endOfDay: boolean): number | undefined => {
+  if (!v) return undefined
+  const full = v.includes('T') ? v : `${v}${endOfDay ? 'T23:59:59.999' : 'T00:00:00'}`
+  const t = new Date(full).getTime()
+  return Number.isNaN(t) ? undefined : t
 }
 
 /** 筛选面板所需的 store 切片（主库与闲置库均满足此结构） */
@@ -368,33 +377,33 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
               <span className="text-xs text-muted-foreground">{isEn ? 'd' : '天'}</span>
             </div>
 
-            {/* 添加日期范围 */}
+            {/* 添加日期范围（精确到分钟） */}
             <div className="flex items-center gap-1">
               <span className="text-xs text-muted-foreground">{isEn ? 'Added:' : '添加日期:'}</span>
               <input
-                type="date"
-                className="w-[7.5rem] px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
-                value={filter.createdAtMin !== undefined ? toDateInputValue(filter.createdAtMin) : ''}
+                type="datetime-local"
+                className="w-40 px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
+                value={filter.createdAtMin !== undefined ? toDateTimeInputValue(filter.createdAtMin) : ''}
                 onChange={(e) =>
                   setRangeFilter(
                     'createdAtMin',
                     'createdAtMax',
-                    e.target.value ? new Date(`${e.target.value}T00:00:00`).getTime() : undefined,
+                    parseDateTimeInput(e.target.value, false),
                     filter.createdAtMax
                   )
                 }
               />
               <span className="text-muted-foreground text-xs">-</span>
               <input
-                type="date"
-                className="w-[7.5rem] px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
-                value={filter.createdAtMax !== undefined ? toDateInputValue(filter.createdAtMax) : ''}
+                type="datetime-local"
+                className="w-40 px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
+                value={filter.createdAtMax !== undefined ? toDateTimeInputValue(filter.createdAtMax) : ''}
                 onChange={(e) =>
                   setRangeFilter(
                     'createdAtMin',
                     'createdAtMax',
                     filter.createdAtMin,
-                    e.target.value ? new Date(`${e.target.value}T23:59:59.999`).getTime() : undefined
+                    parseDateTimeInput(e.target.value, true)
                   )
                 }
               />
