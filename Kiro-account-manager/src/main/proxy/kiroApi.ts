@@ -2389,6 +2389,8 @@ export interface SubscriptionPlan {
 export interface SubscriptionListResponse {
   disclaimer?: string[]
   subscriptionPlans?: SubscriptionPlan[]
+  // 失败原因（含 HTTP 状态码），供调用方识别 token 失效并做刷新重试
+  error?: string
 }
 
 // 订阅请求专用 User-Agent（匹配 Kiro IDE 实际报文格式）
@@ -2430,16 +2432,24 @@ export async function fetchAvailableSubscriptions(account: ProxyAccount): Promis
   try {
     const response = await fetchWithProxy(url, { method: 'POST', headers, body }, account)
     const responseText = await response.text()
-    console.log(`[KiroAPI] ListAvailableSubscriptions → ${response.status}`, JSON.parse(responseText))
-    
+    // 响应体可能为空或非 JSON（网关错误页），安全解析后再记日志
+    let data: SubscriptionListResponse | null = null
+    try {
+      data = JSON.parse(responseText)
+    } catch {
+      // 保留 responseText 供下方错误摘要
+    }
+    console.log(`[KiroAPI] ListAvailableSubscriptions → ${response.status}`, data)
+
     if (!response.ok) {
-      return {}
+      // 带上状态码与响应体摘要，供上层做 token 过期识别
+      return { error: `HTTP ${response.status} ${responseText.slice(0, 200)}`.trim() }
     }
 
-    return JSON.parse(responseText)
+    return data ?? { error: 'Empty response body' }
   } catch (error) {
     console.error('[KiroAPI] ListAvailableSubscriptions error:', error)
-    return {}
+    return { error: error instanceof Error ? error.message : 'Failed to list subscriptions' }
   }
 }
 

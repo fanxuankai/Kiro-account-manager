@@ -311,38 +311,68 @@ export function SubscriptionPage() {
     return { eligible, blocked, reasonBuckets, totalScanned: source.length }
   }, [accounts, selectedIds, filterDowngradedFree])
 
+  // 刷新后的凭据回写账号库（与 ManageSubscriptionsTab 内 persistRefreshedCredentials 同逻辑）
+  const persistPlansCredentials = useCallback((acc: AccountType, cred?: { accessToken: string; refreshToken?: string; expiresIn?: number }): void => {
+    if (!cred?.accessToken || cred.accessToken === acc.credentials?.accessToken) return
+    updateAccount(acc.id, {
+      credentials: {
+        ...acc.credentials,
+        accessToken: cred.accessToken,
+        refreshToken: cred.refreshToken ?? acc.credentials?.refreshToken,
+        ...(cred.expiresIn ? { expiresAt: Date.now() + cred.expiresIn * 1000 } : {})
+      } as AccountType['credentials']
+    })
+  }, [updateAccount])
+
   // 加载可用订阅计划（用任一可用账户调用）
   const handleLoadPlans = async () => {
-    // 计划列表与账号是否可升级无关：优先可升级账号，否则退而取任意有凭证的账号
-    const upgradeableAccounts = getUpgradeableAccounts()
-    const fallbackAcc = Array.from(accounts.values()).find(a => a?.credentials?.accessToken)
-    const acc = upgradeableAccounts[0] ?? fallbackAcc
-    if (!acc) {
+    // 计划列表与账号是否可升级无关：任一凭证有效的账号都能拉到全量计划。
+    // 优先可升级账号，再补任意有凭证的账号；单个账号 token 失效时自动换下一个重试
+    const candidates: AccountType[] = []
+    for (const a of [...getUpgradeableAccounts(), ...Array.from(accounts.values())]) {
+      if (a?.credentials?.accessToken && !candidates.some(c => c.id === a.id)) candidates.push(a)
+    }
+    if (candidates.length === 0) {
       alert(isEn ? 'No account with credentials to load plans' : '没有可用凭证的账号，无法加载计划')
       return
     }
 
     setIsLoadingPlans(true)
     try {
-      const result = await window.api.accountGetSubscriptions(
-        acc.credentials.accessToken,
-        acc.credentials?.region,
-        acc.profileArn,
-        acc.machineId,
-        acc.credentials?.provider || acc.idp,
-        acc.credentials?.authMethod,
-        acc.id
-      )
-      if (result.success && result.plans && result.plans.length > 0) {
-        setAvailablePlans(result.plans)
-        // 默认选择第一个 PRO 计划
-        const defaultPlan = result.plans.find(p => 
-          p.qSubscriptionType?.toUpperCase().includes('PRO') && !p.qSubscriptionType?.toUpperCase().includes('PLUS')
-        ) || result.plans[0]
-        setSelectedPlanType(defaultPlan.qSubscriptionType)
+      // 单账号失败多为 token 失效（主进程已先刷新重试一次）；最多换 3 个账号，避免连环 403
+      const tryLimit = Math.min(candidates.length, 3)
+      let lastError = ''
+      for (let i = 0; i < tryLimit; i++) {
+        const acc = candidates[i]
+        const result = await window.api.accountGetSubscriptions(
+          acc.credentials.accessToken,
+          acc.credentials?.region,
+          acc.profileArn,
+          acc.machineId,
+          acc.credentials?.provider || acc.idp,
+          acc.credentials?.authMethod,
+          acc.id
+        )
+        if (result.success && result.plans && result.plans.length > 0) {
+          persistPlansCredentials(acc, result.credentials)
+          setAvailablePlans(result.plans)
+          // 默认选择第一个 PRO 计划
+          const defaultPlan = result.plans.find(p =>
+            p.qSubscriptionType?.toUpperCase().includes('PRO') && !p.qSubscriptionType?.toUpperCase().includes('PLUS')
+          ) || result.plans[0]
+          setSelectedPlanType(defaultPlan.qSubscriptionType)
+          setIsLoadingPlans(false)
+          return
+        }
+        lastError = result.error || 'No subscription plans returned'
       }
+      alert(isEn
+        ? `Failed to load plans (tried ${tryLimit} accounts):\n${lastError}`
+        : `加载订阅计划失败（已尝试 ${tryLimit} 个账号）：\n${lastError}`
+      )
     } catch (error) {
       console.error('[SubscriptionPage] Failed to load plans:', error)
+      alert(isEn ? `Failed to load plans: ${String(error)}` : `加载订阅计划失败：${String(error)}`)
     }
     setIsLoadingPlans(false)
   }

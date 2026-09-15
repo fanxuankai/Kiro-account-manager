@@ -6816,15 +6816,29 @@ app.whenReady().then(async () => {
   // IPC: 获取可用订阅列表
   ipcMain.handle('account-get-subscriptions', async (_event, accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => {
     try {
-      const result = await fetchAvailableSubscriptions({ id: accountId || 'subscription-request', accessToken, region: region || 'us-east-1', profileArn, machineId, provider, authMethod } as ProxyAccount)
-      if (result.subscriptionPlans) {
-        return { 
-          success: true, 
-          plans: result.subscriptionPlans,
-          disclaimer: result.disclaimer 
+      const run = (token: string) => fetchAvailableSubscriptions(
+        { id: accountId || 'subscription-request', accessToken: token, region: region || 'us-east-1', profileArn, machineId, provider, authMethod } as ProxyAccount
+      )
+      let result = await run(accessToken)
+      // accessToken 过期兜底：刷新后重试一次，并把新凭据带回 renderer 持久化（与检查续费/切 Free 一致）。
+      // 403 多为 token 失效但 AWS 响应体文案不统一，一并触发刷新重试
+      if (!result.subscriptionPlans && accountId && (isTokenExpiredError(result.error) || result.error?.includes('HTTP 403'))) {
+        const refreshed = await refreshAccountAccessToken(accountId)
+        if (refreshed) {
+          result = await run(refreshed.accessToken)
+          if (result.subscriptionPlans) {
+            return { success: true, plans: result.subscriptionPlans, disclaimer: result.disclaimer, credentials: refreshed }
+          }
         }
       }
-      return { success: false, error: 'No subscription plans returned', plans: [] }
+      if (result.subscriptionPlans) {
+        return {
+          success: true,
+          plans: result.subscriptionPlans,
+          disclaimer: result.disclaimer
+        }
+      }
+      return { success: false, error: result.error || 'No subscription plans returned', plans: [] }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to get subscriptions', plans: [] }
     }
