@@ -450,6 +450,8 @@ export function SubscriptionPage() {
           setLinks(prev => prev.map((link) =>
             link.accountId === acc.id ? { ...link, status: 'success', url: tokenResult.url, generatedAt: Date.now(), validated: false } : link
           ))
+          // 回写"待付款"标记：账号管理页徽章与筛选据此点亮（升级成功后订阅变 Pro 自动熄灭）
+          updateAccount(acc.id, { subscription: { ...acc.subscription, paymentLinkAt: Date.now() } })
         } else {
           setLinks(prev => prev.map((link) =>
             link.accountId === acc.id ? { ...link, status: 'error', error: tokenResult.error || 'Failed to get URL' } : link
@@ -654,6 +656,10 @@ export function SubscriptionPage() {
         acc.credentials?.authMethod,
         acc.id
       )
+      // 刷新成功 = 仍在待付款流程，更新账号管理的"待付款"标记时间
+      if (r.success && r.url) {
+        updateAccount(accountId, { subscription: { ...acc.subscription, paymentLinkAt: Date.now() } })
+      }
       setLinks(prev => prev.map((l) =>
         l.accountId === accountId
           ? (r.success && r.url

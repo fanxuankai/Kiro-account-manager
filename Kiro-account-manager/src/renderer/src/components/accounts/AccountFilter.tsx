@@ -95,8 +95,7 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
   const stats = getStats()
 
   // 从现有账号中提取邮箱域名后缀及数量，按数量降序
-  const domainCounts = useMemo(() => {
-    const counts = new Map<string, number>()
+  const domainCounts = useMemo(() => {    const counts = new Map<string, number>()
     for (const account of accounts.values()) {
       const atIndex = account.email.lastIndexOf('@')
       if (atIndex < 0) continue
@@ -131,7 +130,8 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
     filter.daysRemainingMax !== undefined ||
     filter.createdAtMin !== undefined ||
     filter.createdAtMax !== undefined ||
-    filter.bannedOnly
+    filter.bannedOnly ||
+    filter.pendingPaymentOnly
   )
 
   const toggleArrayFilter = <T extends string>(

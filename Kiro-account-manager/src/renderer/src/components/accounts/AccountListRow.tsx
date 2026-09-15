@@ -20,7 +20,9 @@ import {
   KeyRound,
   FolderOpen,
   Copy,
-  ArrowDownCircle
+  ArrowDownCircle,
+  CreditCard,
+  Wallet
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
@@ -35,7 +37,10 @@ import {
   tokenExpiryLevel,
   isBannedError,
   switchAccountToFree,
-  isFreeTierAccount
+  isFreeTierAccount,
+  formatCardLabel,
+  formatCardTooltip,
+  isPendingPayment
 } from './_helpers'
 
 interface AccountListRowProps {
@@ -483,6 +488,32 @@ function AccountListRowComponent({
         >
           {account.idp}
         </Badge>
+
+        {/* 待付款：已获取升级支付链接但账号仍为 Free（升级成功自动消失） */}
+        {isPendingPayment(account) && (
+          <Badge
+            variant="outline"
+            className="text-[10px] h-5 px-1.5 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 min-w-[64px] flex items-center justify-center gap-1"
+            title={isEn
+              ? `Payment link fetched at ${new Date(account.subscription.paymentLinkAt!).toLocaleString()} but still on Free plan`
+              : `支付链接获取于 ${new Date(account.subscription.paymentLinkAt!).toLocaleString()}，账号仍为 Free（未升级 = 未付款）`}
+          >
+            <Wallet className="w-3 h-3 shrink-0" />
+            {isEn ? 'Pending' : '待付款'}
+          </Badge>
+        )}
+
+        {/* 扣款卡（账单快照回写，仅有数据的账号显示；min-w 保持跨行对齐） */}
+        {account.subscription.cardLast4 && (
+          <Badge
+            variant="outline"
+            className="text-[10px] h-5 px-1.5 font-normal border-muted-foreground/30 bg-muted/30 text-muted-foreground min-w-[86px] flex items-center justify-center gap-1"
+            title={formatCardTooltip(account.subscription, isEn)}
+          >
+            <CreditCard className="w-3 h-3 shrink-0" />
+            {formatCardLabel(account.subscription)}
+          </Badge>
+        )}
 
         {/* Token 剩余时间（自动续期保活的状态一眼可见：正常灰 / 半小时内橙 / 过期红） */}
         {account.credentials.expiresAt ? (() => {

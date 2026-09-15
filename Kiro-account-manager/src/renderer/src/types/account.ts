@@ -89,6 +89,7 @@ export interface AccountSubscription {
   latestInvoiceStatus?: string // 最近一张发票状态（paid/open…）
   latestInvoiceAt?: number // 最近一张发票时间
   latestInvoiceUrl?: string // 最近一张发票的官方收据页链接（可直接打开）
+  paymentLinkAt?: number // 最近一次获取升级支付链接的时间（"待付款"标记；升级成功后保留作历史，显示/筛选只在账号仍为 Free 时命中）
 }
 
 /**
@@ -190,6 +191,7 @@ export interface AccountFilter {
   createdAtMin?: number // 添加日期下限（时间戳 ms，含当天 0 点起）
   createdAtMax?: number // 添加日期上限（时间戳 ms，含当天全天）
   bannedOnly?: boolean // 仅显示封禁账号
+  pendingPaymentOnly?: boolean // 仅显示待付款（发过升级支付链接且账号仍为 Free，未升级 = 未付款）
 }
 
 /**

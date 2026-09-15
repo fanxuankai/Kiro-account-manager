@@ -8,6 +8,7 @@ import type { Account } from '@/types/account'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
+import { formatCardLabel, formatCardTooltip } from './_helpers'
 
 interface ModelInfo {
   id: string
@@ -341,6 +342,15 @@ export function AccountDetailDialog({
                  <div className="flex justify-between items-center py-1 border-b border-primary/10 last:border-0">
                    <span className="text-muted-foreground text-xs">{isEn ? 'Plan Type' : '订阅类型'}</span>
                    <span className="font-mono text-xs" title={subscription.rawType}>{subscription.rawType || '-'}</span>
+                 </div>
+                 <div className="flex justify-between items-center py-1 border-b border-primary/10 last:border-0">
+                   <span className="text-muted-foreground text-xs">{isEn ? 'Charge Card' : '扣款卡'}</span>
+                   <span
+                     className="font-mono text-xs"
+                     title={formatCardTooltip(subscription, isEn) || (isEn ? 'No billing snapshot yet' : '暂无账单快照（检查续费 / 切 Free 后回写）')}
+                   >
+                     {formatCardLabel(subscription) || '-'}
+                   </span>
                  </div>
                  <div className="flex justify-between items-center py-1 border-b border-primary/10 last:border-0">
                    <span className="text-muted-foreground text-xs">{isEn ? 'Overage Rate' : '超额费率'}</span>

@@ -110,6 +110,52 @@ export function getSubscriptionColor(type: string, title?: string): string {
   return 'bg-gray-500'
 }
 
+// ============ 扣款卡展示（账单快照回写，仅品牌与末四位，无敏感凭据） ============
+
+// 卡号订阅片段类型（Account.subscription 的卡字段子集）
+type CardInfo = {
+  cardBrand?: string
+  cardLast4?: string
+  cardExpMonth?: number
+  cardExpYear?: number
+  cardFunding?: string
+}
+
+// 徽章短文本：如 "VISA •4242"；无卡返回空串（调用方据此不渲染）
+export function formatCardLabel(sub?: CardInfo): string {
+  if (!sub?.cardLast4) return ''
+  return `${(sub.cardBrand || 'CARD').toUpperCase()} •${sub.cardLast4}`
+}
+
+// 完整悬浮提示：品牌末四位 · 有效期 · 卡种，附数据来源说明
+// （卡信息来自 Stripe 门户快照，只在"检查续费 / 切 Free"时回写，所以部分账号暂无）
+export function formatCardTooltip(sub?: CardInfo, isEn = false): string {
+  const label = formatCardLabel(sub)
+  if (!label) return ''
+  const parts: string[] = [label]
+  if (sub?.cardExpMonth && sub?.cardExpYear) {
+    parts.push(`${String(sub.cardExpMonth).padStart(2, '0')}/${sub.cardExpYear}`)
+  }
+  if (sub?.cardFunding) parts.push(sub.cardFunding)
+  const note = isEn
+    ? 'From billing snapshot (updated on renewal check / switch to Free)'
+    : '来自账单快照（检查续费 / 切 Free 时更新）'
+  return `${isEn ? 'Charge card' : '扣款卡'} ${parts.join(' · ')}\n${note}`
+}
+
+// ============ 待付款判定（发过升级支付链接且账号仍为 Free） ============
+
+// 参数用结构子集：Account / 闲置账号 / 筛选面板的部分视图均可传入。
+// 升级成功（订阅不再是 Free）即视为已付款，标记自动不再命中——paymentLinkAt 保留作历史
+export function isPendingPayment(
+  a: { subscription?: { type?: string; title?: string; paymentLinkAt?: number } } | null | undefined
+): boolean {
+  if (!a?.subscription?.paymentLinkAt) return false
+  const type = (a.subscription.type || '').toUpperCase()
+  const title = (a.subscription.title || '').toUpperCase()
+  return type.includes('FREE') || title.includes('FREE') || (!type && !title)
+}
+
 // ============ 状态文本 ============
 
 export const StatusLabelsZh: Record<string, string> = {

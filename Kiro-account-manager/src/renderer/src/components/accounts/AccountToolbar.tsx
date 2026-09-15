@@ -3,9 +3,9 @@ import { Button, Badge } from '../ui'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import { AccountFilterPanel } from './AccountFilter'
-import { toRgba } from './_helpers'
+import { toRgba, isPendingPayment } from './_helpers'
 import { cn } from '@/lib/utils'
-import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon } from 'lucide-react'
+import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon, Wallet } from 'lucide-react'
 import {
   Search,
   Plus,
@@ -236,6 +236,15 @@ export function AccountToolbar({
     [groups]
   )
 
+  // 待付款账号数（发过升级支付链接且仍为 Free）——独立于分组/筛选维度的快捷视图开关
+  const pendingPaymentCount = useMemo(() => {
+    let n = 0
+    for (const a of accounts.values()) {
+      if (isPendingPayment(a)) n++
+    }
+    return n
+  }, [accounts])
+
   // 当前激活 Tab 的展示信息（用于按钮文字 + 颜色圆点）
   const activeTabInfo = useMemo(() => {
     if (activeGroupTab === 'all') {
@@ -425,6 +434,27 @@ export function AccountToolbar({
                 {activeTabInfo.count}
               </Badge>
               <ChevronDown className="h-3 w-3 ml-1" />
+            </Button>
+
+            {/* 待付款快捷视图：发过升级支付链接且仍为 Free 的账号（与分组视图叠加生效） */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                filter.pendingPaymentOnly
+                  ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                  : 'text-amber-600 dark:text-amber-400 hover:bg-amber-500/10'
+              )}
+              onClick={() => setFilter({ ...filter, pendingPaymentOnly: !filter.pendingPaymentOnly })}
+              title={isEn
+                ? 'Accounts with a fetched payment link but still on Free plan (stacks with group view)'
+                : '已获取支付链接但账号仍为 Free（未升级 = 未付款）；可与分组视图叠加'}
+            >
+              <Wallet className="h-3.5 w-3.5" />
+              {isEn ? 'Pending Pay' : '待付款'}
+              <Badge className={cn('ml-1.5 h-4 px-1 text-[10px] tabular-nums border-0', filter.pendingPaymentOnly ? 'bg-white/20 text-white' : 'bg-amber-500/15 text-amber-700 dark:text-amber-300')}>
+                {pendingPaymentCount}
+              </Badge>
             </Button>
 
             {showGroupMenu && (() => {
