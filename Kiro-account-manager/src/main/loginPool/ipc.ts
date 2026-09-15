@@ -1,0 +1,136 @@
+// 号池 IPC：主进程为唯一数据源（login-pool.json + 执行状态），
+// 渲染进程只持视图；所有变化经 'login-pool-update' 事件推送。
+
+import { ipcMain, type BrowserWindow } from 'electron'
+import { LoginPoolStore, type PoolEntryView } from './store'
+import { LoginPoolRunner, type BatchOptions, type LoginPoolDeps, type ResultPayload } from './runner'
+import { parseLoginPoolText } from './totp'
+
+export type LoginPoolUpdate =
+  | { kind: 'entry'; entry: PoolEntryView }
+  | { kind: 'log'; line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string } }
+  | { kind: 'batch'; state: { running: boolean; paused: boolean; cooldownSec: number; unused: number } }
+  | { kind: 'result'; payload: ResultPayload }
+
+export interface LoginPoolBatchState {
+  running: boolean
+  paused: boolean
+  cooldownSec: number
+  unused: number
+}
+
+let runner: LoginPoolRunner | null = null
+
+export function registerLoginPoolIpc(opts: {
+  userDataDir: string
+  deps: LoginPoolDeps
+  getMainWindow: () => BrowserWindow | null
+}): void {
+  const store = new LoginPoolStore(opts.userDataDir)
+
+  const send = (update: LoginPoolUpdate): void => {
+    const win = opts.getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send('login-pool-update', update)
+  }
+
+  runner = new LoginPoolRunner(store, opts.deps, {
+    onEntry: (entry) => send({ kind: 'entry', entry }),
+    onLog: (line) => send({ kind: 'log', line }),
+    onBatch: (state) => send({ kind: 'batch', state }),
+    onResult: (payload) => send({ kind: 'result', payload })
+  })
+
+  const log = (level: 'info' | 'ok' | 'err' | 'warn', msg: string): void => {
+    send({ kind: 'log', line: { time: new Date().toTimeString().slice(0, 8), level, msg } })
+  }
+
+  ipcMain.handle('login-pool:list', () => store.listViews())
+
+  ipcMain.handle('login-pool:add-text', (_e, text: string) => {
+    const { items, bad } = parseLoginPoolText(text)
+    const added = store.addMany(items)
+    return { added, updated: items.length - added, bad }
+  })
+
+  ipcMain.handle('login-pool:mark-wasted', (_e, id: string) => {
+    store.markWasted(id)
+    const entry = store.get(id)
+    if (entry) send({ kind: 'entry', entry: store.toView(entry) })
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:restore', (_e, id: string) => {
+    store.restore(id)
+    const entry = store.get(id)
+    if (entry) send({ kind: 'entry', entry: store.toView(entry) })
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:remove', (_e, id: string) => {
+    store.remove(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:clear-finished', () => {
+    store.clearFinished()
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:restore-all', () => {
+    store.restoreAll()
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:start', (_e, batchOpts: BatchOptions) => {
+    if (!store.countUnused()) {
+      return { success: false, error: '池内没有未用账号' }
+    }
+    if (runner!.running && !runner!.paused) {
+      return { success: false, error: '批次已在执行中' }
+    }
+    if (runner!.running && runner!.paused) {
+      runner!.resume(batchOpts)
+    } else {
+      runner!.start(batchOpts)
+    }
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:pause', () => {
+    runner!.pause()
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:run-one', (_e, id: string) => {
+    if (runner!.running) {
+      return { success: false, error: '批次执行中，不能单跑' }
+    }
+    if (!store.get(id)) {
+      return { success: false, error: '条目不存在' }
+    }
+    runner!.runOne(id)
+    return { success: true }
+  })
+
+  ipcMain.handle('login-pool:focus-window', () => {
+    runner!.focusWindow()
+    return { success: true }
+  })
+
+  // 系统协议兜底：窗口内四路拦截万一漏掉、OS 把 kiro:// 转回本应用时，
+  // 渲染进程从 social-auth-callback 转发到这里（state 匹配才生效）
+  ipcMain.handle('login-pool:manual-callback', (_e, code: string, state: string) => {
+    runner!.handleManualCallback(code, state)
+    return { success: true }
+  })
+
+  // 渲染进程完成 verifyAccountCredentials + addAccount 后回填：step=8、Kiro 邮箱
+  ipcMain.handle('login-pool:mark-stored', (_e, id: string, kiroEmail: string) => {
+    store.patch(id, { step: 8, kiroEmail })
+    const entry = store.get(id)
+    if (entry) send({ kind: 'entry', entry: store.toView(entry) })
+    return { success: true }
+  })
+
+  log('info', '号池模块已就绪')
+}

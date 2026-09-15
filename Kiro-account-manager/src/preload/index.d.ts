@@ -493,6 +493,70 @@ interface KiroApi {
   // 取消 Social Auth 登录
   cancelSocialLogin: () => Promise<{ success: boolean }>
 
+  // ─── 号池（GitHub 账密+2FA 批量激活 Kiro）───
+  /** 号池条目视图（主进程剥离明文凭据后的只读投影） */
+  loginPoolList: () => Promise<{
+    id: string
+    username: string
+    state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+    step: number
+    failReason?: string
+    kiroEmail?: string
+    addedAt: number
+    takenAt?: number
+    doneAt?: number
+    passwordMasked: string
+    secretMasked: string
+  }[]>
+  loginPoolAddText: (text: string) => Promise<{ added: number; updated: number; bad: string[] }>
+  loginPoolMarkWasted: (id: string) => Promise<{ success: boolean }>
+  loginPoolRestore: (id: string) => Promise<{ success: boolean }>
+  loginPoolRemove: (id: string) => Promise<{ success: boolean }>
+  loginPoolClearFinished: () => Promise<{ success: boolean }>
+  loginPoolRestoreAll: () => Promise<{ success: boolean }>
+  loginPoolStart: (opts: {
+    intervalSec: number | 'rand'
+    semiAuto: boolean
+    manualPolicy: 'wait' | 'skip'
+  }) => Promise<{ success: boolean; error?: string }>
+  loginPoolPause: () => Promise<{ success: boolean }>
+  loginPoolRunOne: (id: string) => Promise<{ success: boolean; error?: string }>
+  loginPoolFocusWindow: () => Promise<{ success: boolean }>
+  loginPoolManualCallback: (code: string, state: string) => Promise<{ success: boolean }>
+  loginPoolMarkStored: (id: string, kiroEmail: string) => Promise<{ success: boolean }>
+  onLoginPoolUpdate: (callback: (update: {
+    kind: 'entry'
+    entry: {
+      id: string
+      username: string
+      state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+      step: number
+      failReason?: string
+      kiroEmail?: string
+      addedAt: number
+      takenAt?: number
+      doneAt?: number
+      passwordMasked: string
+      secretMasked: string
+    }
+  } | {
+    kind: 'log'
+    line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }
+  } | {
+    kind: 'batch'
+    state: { running: boolean; paused: boolean; cooldownSec: number; unused: number }
+  } | {
+    kind: 'result'
+    payload: {
+      entryId: string
+      username: string
+      accessToken: string
+      refreshToken: string
+      profileArn?: string
+      expiresIn?: number
+    }
+  }) => void) => () => void
+
   // 监听 Social Auth 回调
   onSocialAuthCallback: (callback: (data: { code?: string; state?: string; error?: string }) => void) => () => void
 

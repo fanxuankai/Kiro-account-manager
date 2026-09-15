@@ -13,3 +13,5 @@ export { RegisterPage } from './RegisterPage'
 export { SubscriptionPage } from './SubscriptionPage'
 export { BillingPage } from './BillingPage'
 export { LogsPage } from './LogsPage'
+// 号池：GitHub 账号（账密+2FA）批量自动激活 Kiro
+export { LoginPagePool } from './LoginPagePool'

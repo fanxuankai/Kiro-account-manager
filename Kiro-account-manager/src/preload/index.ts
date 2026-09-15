@@ -21,6 +21,45 @@ export interface StripeBillingSnapshot {
   latestInvoiceUrl?: string
 }
 
+/** 号池条目视图（主进程剥离明文凭据后的只读投影） */
+export interface LoginPoolEntryView {
+  id: string
+  username: string
+  state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+  step: number
+  failReason?: string
+  kiroEmail?: string
+  addedAt: number
+  takenAt?: number
+  doneAt?: number
+  passwordMasked: string
+  secretMasked: string
+}
+
+/** 号池批次选项 */
+export interface LoginPoolBatchOptions {
+  intervalSec: number | 'rand'
+  semiAuto: boolean
+  manualPolicy: 'wait' | 'skip'
+}
+
+/** 号池主进程 → 渲染事件 */
+export type LoginPoolUpdate =
+  | { kind: 'entry'; entry: LoginPoolEntryView }
+  | { kind: 'log'; line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string } }
+  | { kind: 'batch'; state: { running: boolean; paused: boolean; cooldownSec: number; unused: number } }
+  | {
+      kind: 'result'
+      payload: {
+        entryId: string
+        username: string
+        accessToken: string
+        refreshToken: string
+        profileArn?: string
+        expiresIn?: number
+      }
+    }
+
 // Custom APIs for renderer
 const api = {
   // 打开外部链接
@@ -415,6 +454,56 @@ const api = {
   // 取消 Social Auth 登录
   cancelSocialLogin: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('cancel-social-login')
+  },
+
+  // ─── 号池（GitHub 账密+2FA 批量激活 Kiro）───
+  loginPoolList: (): Promise<LoginPoolEntryView[]> => {
+    return ipcRenderer.invoke('login-pool:list')
+  },
+  loginPoolAddText: (text: string): Promise<{ added: number; updated: number; bad: string[] }> => {
+    return ipcRenderer.invoke('login-pool:add-text', text)
+  },
+  loginPoolMarkWasted: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:mark-wasted', id)
+  },
+  loginPoolRestore: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:restore', id)
+  },
+  loginPoolRemove: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:remove', id)
+  },
+  loginPoolClearFinished: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:clear-finished')
+  },
+  loginPoolRestoreAll: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:restore-all')
+  },
+  loginPoolStart: (opts: LoginPoolBatchOptions): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('login-pool:start', opts)
+  },
+  loginPoolPause: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:pause')
+  },
+  loginPoolRunOne: (id: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('login-pool:run-one', id)
+  },
+  loginPoolFocusWindow: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:focus-window')
+  },
+  loginPoolManualCallback: (code: string, state: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:manual-callback', code, state)
+  },
+  loginPoolMarkStored: (id: string, kiroEmail: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:mark-stored', id, kiroEmail)
+  },
+  onLoginPoolUpdate: (callback: (update: LoginPoolUpdate) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, update: LoginPoolUpdate): void => {
+      callback(update)
+    }
+    ipcRenderer.on('login-pool-update', handler)
+    return () => {
+      ipcRenderer.removeListener('login-pool-update', handler)
+    }
   },
 
   // 监听 Social Auth 回调

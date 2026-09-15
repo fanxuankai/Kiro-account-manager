@@ -54,6 +54,7 @@ const zh = {
     diagnose: '一键诊断',
     configSync: '配置同步',
     register: '注册',
+    loginPool: '号池',
     subscription: '批量订阅',
     billing: '账单',
     logs: '系统日志',

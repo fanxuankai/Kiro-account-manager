@@ -54,6 +54,7 @@ const en = {
     diagnose: 'Diagnostics',
     configSync: 'Config Sync',
     register: 'Register',
+    loginPool: 'Login Pool',
     subscription: 'Subscription',
     billing: 'Billing',
     logs: 'Logs',

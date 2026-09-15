@@ -34,6 +34,8 @@ import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
 import { registerProxyPoolIpcHandlers } from './ipc/proxyPool'
+import { registerLoginPoolIpc } from './loginPool/ipc'
+import { randomBytes, createHash } from 'node:crypto'
 import {
   createTray,
   destroyTray,
@@ -2986,6 +2988,55 @@ app.whenReady().then(async () => {
    */
   // 代理池相关 IPC handler 已拆分到独立模块，便于后续维护
   registerProxyPoolIpcHandlers()
+
+  // ============ 号池（GitHub 账密+2FA 批量激活 Kiro）============
+  // 应用内窗口自动化登录，替代「系统无痕浏览器 + 插件」流程；
+  // PKCE 构建与 token 交换复用 start-social-login / exchange-social-token 的同源逻辑
+  registerLoginPoolIpc({
+    userDataDir: app.getPath('userData'),
+    getMainWindow: () => mainWindow,
+    deps: {
+      buildGithubLoginUrl: () => {
+        const codeVerifier = randomBytes(64).toString('base64url').substring(0, 128)
+        const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+        const oauthState = randomBytes(32).toString('base64url')
+        const loginUrl = new URL(`${KIRO_AUTH_ENDPOINT}/login`)
+        loginUrl.searchParams.set('idp', 'Github')
+        loginUrl.searchParams.set('redirect_uri', 'kiro://kiro.kiroAgent/authenticate-success')
+        loginUrl.searchParams.set('code_challenge', codeChallenge)
+        loginUrl.searchParams.set('code_challenge_method', 'S256')
+        loginUrl.searchParams.set('state', oauthState)
+        return { url: loginUrl.toString(), codeVerifier, oauthState }
+      },
+      exchangeSocialToken: async (code, codeVerifier) => {
+        try {
+          const tokenRes = await fetchWithAppProxy(`${KIRO_AUTH_ENDPOINT}/oauth/token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code,
+              code_verifier: codeVerifier,
+              redirect_uri: 'kiro://kiro.kiroAgent/authenticate-success'
+            })
+          })
+          if (!tokenRes.ok) {
+            const errText = await tokenRes.text()
+            console.error('[LoginPool] Token exchange failed:', tokenRes.status, errText)
+            return { success: false, error: `HTTP ${tokenRes.status}: ${errText}` }
+          }
+          const tokenData = (await tokenRes.json()) as {
+            accessToken: string
+            refreshToken: string
+            profileArn?: string
+            expiresIn?: number
+          }
+          return { success: true, accessToken: tokenData.accessToken, refreshToken: tokenData.refreshToken, profileArn: tokenData.profileArn, expiresIn: tokenData.expiresIn }
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : 'token 交换失败' }
+        }
+      }
+    }
+  })
 
   // ============ 账号-代理绑定（反代时 N 账号一个 IP）============
   /**
