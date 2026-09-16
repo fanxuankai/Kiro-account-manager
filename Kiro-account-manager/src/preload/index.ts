@@ -38,12 +38,9 @@ export interface LoginPoolEntryView {
   secretMasked: string
 }
 
-/** 号池批次选项 */
+/** 号池批次选项（固定形态：程序填表/2FA/点 Sign in；Verify/Authorize/继续链接人点） */
 export interface LoginPoolBatchOptions {
   intervalSec: number | 'rand'
-  semiAuto: boolean
-  /** 授权人工点：仅 Authorize 人手点，其余全自动（默认开） */
-  authorizeManual?: boolean
   manualPolicy: 'wait' | 'skip'
 }
 

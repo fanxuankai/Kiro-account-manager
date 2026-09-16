@@ -4,10 +4,10 @@
 // → loginPoolMarkStored 回填，与「添加账号」弹窗的 GitHub 登录完全同一条入库链路。
 
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Button, Card, CardContent, CardHeader, CardTitle, Badge, Input, Label, Switch } from '../ui'
+import { Button, Card, CardContent, CardHeader, CardTitle, Badge, Input, Label } from '../ui'
 import {
   Play, Pause, Plus, RotateCcw, Ban, ExternalLink, CheckCircle2, Clock, Loader2,
-  KeyRound, EyeOff, Eye, Hand, Search, ChevronRight, Terminal, Trash2, Undo2, X
+  KeyRound, EyeOff, Eye, Search, ChevronRight, Terminal, Trash2, Undo2, X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
@@ -77,13 +77,9 @@ export function LoginPagePool(): React.ReactNode {
     })
   }
 
-  // 批次选项（开始/继续时读一次；持久化 localStorage，重启不丢——避免重启后静默回全自动）
+  // 批次选项（开始/继续时读一次；持久化 localStorage，重启不丢）
+  // 固定形态：程序填表/2FA/点 Sign in；Verify/Authorize/继续链接由人点，不再提供开关
   const [intervalSec, setIntervalSec] = useState<string>(() => localStorage.getItem('loginpool_interval') || '60')
-  const [semiAuto, setSemiAuto] = useState((): boolean => localStorage.getItem('loginpool_semiauto') === 'true')
-  const updateSemiAuto = (v: boolean): void => {
-    setSemiAuto(v)
-    localStorage.setItem('loginpool_semiauto', String(v))
-  }
   const [manualPolicy, setManualPolicy] = useState<'wait' | 'skip'>(() =>
     localStorage.getItem('loginpool_manual') === 'skip' ? 'skip' : 'wait'
   )
@@ -243,12 +239,9 @@ export function LoginPagePool(): React.ReactNode {
   const currentOpts = useCallback(
     () => ({
       intervalSec: intervalSec === 'rand' ? ('rand' as const) : Number(intervalSec),
-      semiAuto,
-      // 最终形态固定：仅 Authorize 人手点（GitHub 自动化防线之下全自动不可行）
-      authorizeManual: true,
       manualPolicy
     }),
-    [intervalSec, semiAuto, manualPolicy]
+    [intervalSec, manualPolicy]
   )
 
   const startOrResume = useCallback(() => {
@@ -316,15 +309,6 @@ export function LoginPagePool(): React.ReactNode {
               <option value="rand">随机 30–120s</option>
             </select>
           </div>
-          <label
-            className="flex items-center gap-1.5 cursor-pointer"
-            title="人工点击：开启后 Sign in / Verify / Authorize 全部人手点（最保守）；关闭（默认）时仅最后的 Authorize 人手点，填表/2FA/Sign in/Verify 全自动"
-          >
-            <Switch checked={semiAuto} onCheckedChange={updateSemiAuto} disabled={batchRunningActive} />
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <Hand className="h-3.5 w-3.5" /> 人工点击
-            </span>
-          </label>
           <div className="flex items-center gap-1.5" title="触发人机/邮箱设备验证时的策略">
             <Label className="text-xs text-muted-foreground whitespace-nowrap">人工验证</Label>
             <select
