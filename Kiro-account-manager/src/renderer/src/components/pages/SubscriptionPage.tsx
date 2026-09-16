@@ -124,6 +124,8 @@ interface SubscriptionLink {
   generatedAt?: number
   /** 链接是否经过本地有效性探测且通过 */
   validated?: boolean
+  /** 生成链接时所选套餐的友好名（复制时作为说明一起带出） */
+  planName?: string
 }
 
 interface OverageItem {
@@ -409,6 +411,11 @@ export function SubscriptionPage() {
       : allUpgradeable
     if (upgradeableAccounts.length === 0 || !selectedPlanType) return
 
+    // 本批次所选套餐的友好名：复制链接时作为说明一起带出
+    const planLabel =
+      availablePlans.find((p) => p.qSubscriptionType === selectedPlanType)?.description?.title ||
+      selectedPlanType
+
     setIsFetching(true)
 
     // 初始化状态：只重置本批次账号的条目，保留其他账号已获取的链接；条目更新一律按 accountId 定位
@@ -447,9 +454,20 @@ export function SubscriptionPage() {
         )
 
         if (tokenResult.success && tokenResult.url) {
-          setLinks(prev => prev.map((link) =>
-            link.accountId === acc.id ? { ...link, status: 'success', url: tokenResult.url, generatedAt: Date.now(), validated: false } : link
-          ))
+          setLinks((prev) =>
+            prev.map((link) =>
+              link.accountId === acc.id
+                ? {
+                    ...link,
+                    status: 'success',
+                    url: tokenResult.url,
+                    generatedAt: Date.now(),
+                    validated: false,
+                    planName: planLabel
+                  }
+                : link
+            )
+          )
           // 回写"待付款"标记：账号管理页徽章与筛选据此点亮（升级成功后订阅变 Pro 自动熄灭）
           updateAccount(acc.id, { subscription: { ...acc.subscription, paymentLinkAt: Date.now() } })
         } else {
@@ -643,6 +661,10 @@ export function SubscriptionPage() {
     }
     const acc = accounts.get(accountId)
     if (!acc || !acc.credentials?.accessToken) return
+    // 记录本次所选套餐的友好名：复制链接时作为说明一起带出
+    const planLabel =
+      availablePlans.find((p) => p.qSubscriptionType === selectedPlanType)?.description?.title ||
+      selectedPlanType
 
     setLinks(prev => prev.map((l) => l.accountId === accountId ? { ...l, status: 'loading', error: undefined } : l))
     try {
@@ -660,14 +682,23 @@ export function SubscriptionPage() {
       if (r.success && r.url) {
         updateAccount(accountId, { subscription: { ...acc.subscription, paymentLinkAt: Date.now() } })
       }
-      setLinks(prev => prev.map((l) =>
-        l.accountId === accountId
-          ? (r.success && r.url
-            ? { ...l, status: 'success', url: r.url, error: undefined, generatedAt: Date.now(), validated: false }
-            : { ...l, status: 'error', error: r.error || 'Failed' }
-          )
-          : l
-      ))
+      setLinks((prev) =>
+        prev.map((l) =>
+          l.accountId === accountId
+            ? r.success && r.url
+              ? {
+                  ...l,
+                  status: 'success',
+                  url: r.url,
+                  error: undefined,
+                  generatedAt: Date.now(),
+                  validated: false,
+                  planName: planLabel
+                }
+              : { ...l, status: 'error', error: r.error || 'Failed' }
+            : l
+        )
+      )
     } catch (err) {
       setLinks(prev => prev.map((l) =>
         l.accountId === accountId
@@ -750,15 +781,26 @@ export function SubscriptionPage() {
     )
   }
 
-  // 复制单个链接
-  const handleCopyLink = async (url: string) => {
-    await navigator.clipboard.writeText(url)
+  // 组装复制文本：邮箱 + 说明 + 链接一起复制，方便日后按邮箱检索发出去的聊天记录
+  const formatLinkText = (link: SubscriptionLink): string => {
+    const plan = link.planName || 'Kiro'
+    const note = isEn
+      ? `${plan} subscription upgrade link, valid for 15 minutes, please complete payment soon`
+      : `${plan} 订阅升级链接，15 分钟内有效，请尽快完成支付`
+    return isEn
+      ? `Email: ${link.email}\nNote: ${note}\nLink: ${link.url}`
+      : `邮箱：${link.email}\n说明：${note}\n链接：${link.url}`
   }
 
-  // 导出链接
-  const handleExport = async (mode: 'selected' | 'all') => {
+  // 复制单个链接（连同邮箱与说明）
+  const handleCopyLink = async (link: SubscriptionLink): Promise<void> => {
+    await navigator.clipboard.writeText(formatLinkText(link))
+  }
+
+  // 导出链接（批量复制同样带邮箱与说明，条目间空行分隔）
+  const handleExport = async (mode: 'selected' | 'all'): Promise<void> => {
     const targetLinks = getTargetLinks(mode)
-    const text = targetLinks.map(l => l.url).join('\n')
+    const text = targetLinks.map(formatLinkText).join('\n\n')
     await navigator.clipboard.writeText(text)
   }
 
@@ -1782,7 +1824,11 @@ export function SubscriptionPage() {
                     size="sm"
                     onClick={() => handleExport('selected')}
                     disabled={selectedCount === 0}
-                    title={isEn ? 'Copy selected links' : '复制选中链接'}
+                    title={
+                      isEn
+                        ? 'Copy selected links with email and note'
+                        : '复制选中链接（带邮箱与说明）'
+                    }
                   >
                     <Copy className="h-4 w-4 mr-1" />
                     {isEn ? `Export Selected (${selectedCount})` : `导出选中 (${selectedCount})`}
@@ -1792,7 +1838,11 @@ export function SubscriptionPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleExport('all')}
-                    title={isEn ? 'Copy all links' : '复制全部链接'}
+                    title={
+                      isEn
+                        ? 'Copy all links with email and note'
+                        : '复制全部链接（带邮箱与说明）'
+                    }
                   >
                     <Download className="h-4 w-4 mr-1" />
                     {isEn ? `Export All (${successCount})` : `全部导出 (${successCount})`}
@@ -1934,9 +1984,9 @@ export function SubscriptionPage() {
                               <QrCodeIcon className="h-3.5 w-3.5" />
                             </button>
                             <button
-                              onClick={() => handleCopyLink(link.url!)}
+                              onClick={() => handleCopyLink(link)}
                               className="p-1 rounded hover:bg-muted"
-                              title={isEn ? 'Copy link' : '复制链接'}
+                              title={isEn ? 'Copy email + note + link' : '复制邮箱+说明+链接'}
                             >
                               <Copy className="h-3.5 w-3.5" />
                             </button>

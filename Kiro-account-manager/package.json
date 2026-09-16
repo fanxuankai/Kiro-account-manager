@@ -1,6 +1,6 @@
 {
   "name": "kiro-account-manager",
-  "version": "1.7.38",
+  "version": "1.7.39",
   "description": "Kiro Account Manager - Manage your Kiro accounts, usage and subscriptions",
   "main": "./out/main/index.js",
   "author": "Kiro",
