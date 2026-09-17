@@ -59,12 +59,14 @@ const STEPS = [
 // ─── 页面 ────────────────────────────────────────────────────────────
 
 export function LoginPagePool(): React.ReactNode {
-  const { accounts, addAccount } = useAccountsStore()
+  const { accounts, addAccount, proxyPool, proxyPoolConfig } = useAccountsStore()
 
   const [entries, setEntries] = useState<PoolEntryView[]>([])
   const [batch, setBatch] = useState<BatchState>({ running: false, paused: false, cooldownSec: 0, unused: 0 })
   const [logs, setLogs] = useState<LogLine[]>([])
   const [showLogs, setShowLogs] = useState(true)
+  // 日志跟随滚动：仅当用户本来就贴底时才自动滚到最新；往上翻阅历史时不打扰
+  const [followEnd, setFollowEnd] = useState(true)
   const [addOpen, setAddOpen] = useState(false)
   const [filter, setFilter] = useState<'all' | PoolEntryView['state']>('all')
   const [query, setQuery] = useState('')
@@ -91,6 +93,21 @@ export function LoginPagePool(): React.ReactNode {
     setManualPolicy(v)
     localStorage.setItem('loginpool_manual', v)
   }
+  // 出口代理模式：off=直连（现状）；pool=静态代理池（session 注入逐号不同 IP）；
+  // api=动态提链接口（批量提取一次性端点逐号消费，同入口不同端口=不同出口）
+  const [proxyMode, setProxyMode] = useState<'off' | 'pool' | 'api'>(
+    () =>
+      (localStorage.getItem('loginpool_proxymode') as 'off' | 'pool' | 'api' | null) ??
+      (localStorage.getItem('loginpool_usepool') === 'true' ? 'pool' : 'off')
+  )
+  const updateProxyMode = (v: 'off' | 'pool' | 'api'): void => {
+    setProxyMode(v)
+    localStorage.setItem('loginpool_proxymode', v)
+  }
+  const usablePoolCount = Array.from(proxyPool.values()).filter(
+    (p) => p.enabled && p.status === 'alive'
+  ).length
+  // 提链源配置在「代理池」页维护（dynamicApiUrl 等），这里只读
 
   const logRef = useRef<HTMLDivElement>(null)
   const pushLog = useCallback((line: LogLine) => {
@@ -231,17 +248,50 @@ export function LoginPagePool(): React.ReactNode {
   }, [handleResult, refreshList])
 
   useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
-  }, [logs])
+    if (followEnd) logRef.current?.scrollTo({ top: logRef.current.scrollHeight })
+  }, [logs, followEnd])
+
+  /** 距底 40px 内视为"贴底"，恢复跟随；翻上去则暂停跟随 */
+  const handleLogScroll = (e: React.UIEvent<HTMLDivElement>): void => {
+    const el = e.currentTarget
+    setFollowEnd(el.scrollHeight - el.scrollTop - el.clientHeight < 40)
+  }
 
   // ── 操作 ──
+
+  // 出口代理参数：pool 模式只取「启用 + 验活可用」的池条目快照；
+  // api 模式带代理池页维护的提链源配置（num 由主进程按批量值覆盖）
+  const buildProxyOpts = useCallback(() => {
+    if (proxyMode === 'off') return undefined
+    if (proxyMode === 'api') {
+      return {
+        enabled: true,
+        mode: 'api' as const,
+        entries: [] as Array<{ url: string; usedCount: number; latencyMs?: number }>,
+        strategy: proxyPoolConfig.strategy,
+        api: {
+          url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
+          viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
+          batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
+        }
+      }
+    }
+    const usable = Array.from(proxyPool.values()).filter((p) => p.enabled && p.status === 'alive')
+    return {
+      enabled: true,
+      entries: usable.map((p) => ({ url: p.url, usedCount: p.usedCount || 0, latencyMs: p.latencyMs })),
+      strategy: proxyPoolConfig.strategy,
+      upstreamProxy: (proxyPoolConfig.upstreamProxy || '').trim() || undefined
+    }
+  }, [proxyMode, proxyPool, proxyPoolConfig])
 
   const currentOpts = useCallback(
     () => ({
       intervalSec: intervalSec === 'rand' ? ('rand' as const) : Number(intervalSec),
-      manualPolicy
+      manualPolicy,
+      proxy: buildProxyOpts()
     }),
-    [intervalSec, manualPolicy]
+    [intervalSec, manualPolicy, buildProxyOpts]
   )
 
   const startOrResume = useCallback(() => {
@@ -319,6 +369,24 @@ export function LoginPagePool(): React.ReactNode {
             >
               <option value="wait">暂停等人工</option>
               <option value="skip">标失败跳过</option>
+            </select>
+          </div>
+          <div
+            className="flex items-center gap-1.5"
+            title="每个登录窗口独立出口 IP：代理池=session 注入逐号不同；提链 API=批量提取一次性端点逐号消费。取不到可用代理该号失败，不直连"
+          >
+            <Label className="text-xs text-muted-foreground whitespace-nowrap">出口代理</Label>
+            <select
+              value={proxyMode}
+              onChange={(e) => updateProxyMode(e.target.value as 'off' | 'pool' | 'api')}
+              disabled={batchRunningActive}
+              className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
+            >
+              <option value="off">关闭</option>
+              <option value="pool">代理池{usablePoolCount > 0 ? `（${usablePoolCount} 可用）` : '（池空）'}</option>
+              <option value="api">
+                提链 API{!(proxyPoolConfig.dynamicApiUrl || '').trim() ? '（未配置）' : ''}
+              </option>
             </select>
           </div>
         </div>
@@ -536,19 +604,38 @@ export function LoginPagePool(): React.ReactNode {
           <ChevronRight className={cn('h-4 w-4 text-muted-foreground transition-transform', showLogs && 'rotate-90')} />
         </CardHeader>
         {showLogs && (
-          <div ref={logRef} className="max-h-36 overflow-y-auto p-3 font-mono text-[11px] leading-5 space-y-0.5 bg-zinc-950 text-zinc-200 rounded-b-xl">
-            {logs.length === 0 && <div className="text-zinc-600">暂无日志</div>}
-            {logs.map((l, i) => (
-              <div key={i} className="flex gap-2">
-                <span className="text-zinc-600 shrink-0">{l.time}</span>
-                <span className={cn(
-                  l.level === 'ok' && 'text-emerald-400',
-                  l.level === 'err' && 'text-red-400',
-                  l.level === 'warn' && 'text-amber-400',
-                  l.level === 'info' && 'text-zinc-300'
-                )}>{l.msg}</span>
-              </div>
-            ))}
+          <div className="relative">
+            <div
+              ref={logRef}
+              onScroll={handleLogScroll}
+              className="h-[42vh] max-h-[520px] min-h-[200px] overflow-y-auto p-3 font-mono text-xs leading-5 space-y-0.5 bg-zinc-950 text-zinc-200 rounded-b-xl"
+            >
+              {logs.length === 0 && <div className="text-zinc-600">暂无日志</div>}
+              {logs.map((l, i) => (
+                <div key={i} className="flex gap-2">
+                  <span className="text-zinc-600 shrink-0">{l.time}</span>
+                  <span className={cn(
+                    l.level === 'ok' && 'text-emerald-400',
+                    l.level === 'err' && 'text-red-400',
+                    l.level === 'warn' && 'text-amber-400',
+                    l.level === 'info' && 'text-zinc-300'
+                  )}>{l.msg}</span>
+                </div>
+              ))}
+            </div>
+            {!followEnd && (
+              <button
+                type="button"
+                onClick={() => {
+                  const el = logRef.current
+                  if (el) el.scrollTo({ top: el.scrollHeight })
+                  setFollowEnd(true)
+                }}
+                className="absolute bottom-2 right-3 rounded-full border border-zinc-700 bg-zinc-800/95 px-2.5 py-1 text-[11px] text-zinc-300 shadow hover:bg-zinc-700"
+              >
+                ↓ 回到底部
+              </button>
+            )}
           </div>
         )}
       </Card>

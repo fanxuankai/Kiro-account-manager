@@ -107,10 +107,28 @@ export function registerLoginPoolIpc(opts: {
     return { success: true }
   })
 
+  /** 出口代理开关开启但配置不完整：启动即拒绝，别让批次逐号空转失败 */
+  const proxyInvalid = (opts?: BatchOptions): string | null => {
+    const proxy = opts?.proxy
+    if (!proxy?.enabled) return null
+    if (proxy.mode === 'api') {
+      if (!(proxy.api?.url || '').trim()) {
+        return '提链 API 模式需要在「代理池」页的动态提链源里配置接口地址'
+      }
+      return null
+    }
+    if (!proxy.entries || proxy.entries.length === 0) {
+      return '已开启出口代理但代理池无可用条目（需在代理池页启用并验活）'
+    }
+    return null
+  }
+
   ipcMain.handle('login-pool:start', (_e, batchOpts: BatchOptions) => {
     if (!store.countUnused()) {
       return { success: false, error: '池内没有未用账号' }
     }
+    const proxyError = proxyInvalid(batchOpts)
+    if (proxyError) return { success: false, error: proxyError }
     if (runner!.running && !runner!.paused) {
       return { success: false, error: '批次已在执行中' }
     }
@@ -134,6 +152,8 @@ export function registerLoginPoolIpc(opts: {
     if (!store.get(id)) {
       return { success: false, error: '条目不存在' }
     }
+    const proxyError = proxyInvalid(batchOpts)
+    if (proxyError) return { success: false, error: proxyError }
     runner!.runOne(id, batchOpts)
     return { success: true }
   })

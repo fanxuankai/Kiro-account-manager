@@ -31,6 +31,7 @@ import {
 import { openAccountPortal } from './kiroPortal'
 import { openaiToKiro } from './proxy/translator'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
+import { acquireDynamicExit, getSharedDynamicSource, resolveViaProxy } from './proxy/dynamicProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
 import { registerProxyPoolIpcHandlers } from './ipc/proxyPool'
@@ -6902,16 +6903,36 @@ app.whenReady().then(async () => {
     }
   })
 
-  // IPC: 获取订阅管理/支付链接
-  ipcMain.handle('account-get-subscription-url', async (_event, accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => {
+  // IPC: 获取订阅管理/支付链接（dynamicProxy 传入时每条链接经一个提链一次性端点发出）
+  ipcMain.handle('account-get-subscription-url', async (_event, accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }) => {
+    // 提链出口路由（可选）：探测确认后返回，用完释放本地中继
+    let releaseExit: (() => Promise<void>) | null = null
     try {
-      const result = await fetchSubscriptionToken({ id: accountId || 'subscription-request', accessToken, region: region || 'us-east-1', profileArn, machineId, provider, authMethod } as ProxyAccount, subscriptionType)
+      const account = { id: accountId || 'subscription-request', accessToken, region: region || 'us-east-1', profileArn, machineId, provider, authMethod } as ProxyAccount
+      if (dynamicProxy?.url) {
+        const cfg = {
+          url: dynamicProxy.url,
+          viaProxy: resolveViaProxy(dynamicProxy.viaProxy),
+          batchSize: Math.min(20, Math.max(1, Math.round(dynamicProxy.batchSize ?? 5)))
+        }
+        const route = await acquireDynamicExit(
+          getSharedDynamicSource(cfg),
+          cfg.viaProxy,
+          (level, msg) => console.log(`[订阅提链 ${level}] ${msg}`)
+        )
+        releaseExit = route.release
+        // getNetworkAgent 的第一优先级就是 account.proxyUrl，挂上本地中继即整条请求走提链出口
+        account.proxyUrl = route.proxyRules
+      }
+      const result = await fetchSubscriptionToken(account, subscriptionType)
       if (result.encodedVerificationUrl) {
         return { success: true, url: result.encodedVerificationUrl, status: result.status }
       }
       return { success: false, error: result.message || 'No subscription URL returned' }
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : 'Failed to get subscription URL' }
+    } finally {
+      if (releaseExit) await releaseExit().catch(() => undefined)
     }
   })
 

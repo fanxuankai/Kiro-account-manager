@@ -523,11 +523,29 @@ interface KiroApi {
   loginPoolStart: (opts: {
     intervalSec: number | 'rand'
     manualPolicy: 'wait' | 'skip'
+    /** 出口代理（代理池快照或提链源配置，主进程逐号消费，只读不回写） */
+    proxy?: {
+      enabled: boolean
+      mode?: 'pool' | 'api'
+      entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
+      strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
+      upstreamProxy?: string
+      api?: { url: string; viaProxy?: string; batchSize?: number }
+    }
   }) => Promise<{ success: boolean; error?: string }>
   loginPoolPause: () => Promise<{ success: boolean }>
   loginPoolRunOne: (id: string, opts?: {
     intervalSec: number | 'rand'
     manualPolicy: 'wait' | 'skip'
+    /** 出口代理（代理池快照或提链源配置，主进程逐号消费，只读不回写） */
+    proxy?: {
+      enabled: boolean
+      mode?: 'pool' | 'api'
+      entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
+      strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
+      upstreamProxy?: string
+      api?: { url: string; viaProxy?: string; batchSize?: number }
+    }
   }) => Promise<{ success: boolean; error?: string }>
   loginPoolFocusWindow: () => Promise<{ success: boolean }>
   loginPoolManualCallback: (code: string, state: string) => Promise<{ success: boolean }>
@@ -778,8 +796,8 @@ interface KiroApi {
   // 获取可用订阅列表
   accountGetSubscriptions: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => Promise<{ success: boolean; error?: string; plans: Array<{ name: string; qSubscriptionType: string; description: { title: string; billingInterval: string; featureHeader: string; features: string[] }; pricing: { amount: number; currency: string } }>; disclaimer?: string[]; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }>
 
-  // 获取订阅管理/支付链接
-  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => Promise<{ success: boolean; error?: string; url?: string; status?: string }>
+  // 获取订阅管理/支付链接（dynamicProxy 传入时该请求经提链出口发出，见代理池页「动态提链源」）
+  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }) => Promise<{ success: boolean; error?: string; url?: string; status?: string }>
 
   // 设置用户超额偏好
   accountSetOverage: (accessToken: string, overageStatus: 'ENABLED' | 'DISABLED', region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => Promise<{ success: boolean; error?: string }>

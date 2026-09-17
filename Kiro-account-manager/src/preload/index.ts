@@ -42,6 +42,16 @@ export interface LoginPoolEntryView {
 export interface LoginPoolBatchOptions {
   intervalSec: number | 'rand'
   manualPolicy: 'wait' | 'skip'
+  /** 出口代理（代理池快照或提链 API 配置，批次/单跑时传入；主进程逐号消费，只读不回写） */
+  proxy?: {
+    enabled: boolean
+    /** pool=静态代理池条目（默认）；api=动态提链接口（一次性端点，批量提取逐号消费） */
+    mode?: 'pool' | 'api'
+    entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
+    strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
+    upstreamProxy?: string
+    api?: { url: string; viaProxy?: string; batchSize?: number }
+  }
 }
 
 /** 号池主进程 → 渲染事件 */
@@ -882,9 +892,9 @@ const api = {
     return ipcRenderer.invoke('account-get-subscriptions', accessToken, region, profileArn, machineId, provider, authMethod, accountId)
   },
 
-  // 获取订阅管理/支付链接
-  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string): Promise<{ success: boolean; error?: string; url?: string; status?: string }> => {
-    return ipcRenderer.invoke('account-get-subscription-url', accessToken, subscriptionType, region, profileArn, machineId, provider, authMethod, accountId)
+  // 获取订阅管理/支付链接（dynamicProxy 传入时该请求经提链出口发出，见代理池页「动态提链源」）
+  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }): Promise<{ success: boolean; error?: string; url?: string; status?: string }> => {
+    return ipcRenderer.invoke('account-get-subscription-url', accessToken, subscriptionType, region, profileArn, machineId, provider, authMethod, accountId, dynamicProxy)
   },
 
   // 设置用户超额偏好

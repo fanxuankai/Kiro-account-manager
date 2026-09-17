@@ -181,7 +181,7 @@ function parseImportedLinks(text: string): Array<{ email: string; url: string }>
 }
 
 export function SubscriptionPage() {
-  const { accounts, selectedIds, updateAccount, removeAccount } = useAccountsStore()
+  const { accounts, selectedIds, updateAccount, removeAccount, proxyPoolConfig } = useAccountsStore()
   const { actualLanguage } = useTranslation()
   const isEn = actualLanguage === 'en'
 
@@ -430,6 +430,24 @@ export function SubscriptionPage() {
     })
   }, [linkedAccountIds])
 
+  // 获取链接经提链出口（可选）：每条链接经「代理池」页动态提链源的一个一次性端点发出；
+  // 未在代理池页配置接口地址时开关不生效（退回普通直连路径）
+  const [useDynamicExit, setUseDynamicExit] = useState(
+    (): boolean => localStorage.getItem('sublink_dynamic') === 'true'
+  )
+  const toggleDynamicExit = (v: boolean): void => {
+    setUseDynamicExit(v)
+    localStorage.setItem('sublink_dynamic', String(v))
+  }
+  const dynamicProxyCfg =
+    useDynamicExit && (proxyPoolConfig.dynamicApiUrl || '').trim()
+      ? {
+          url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
+          viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
+          batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
+        }
+      : undefined
+
   // 批量并发获取订阅链接（已获取过链接的账号不参与；结果与已有链接合并而非整表替换）
   const handleBatchFetch = async () => {
     const allUpgradeable = getPendingFetchAccounts()
@@ -477,7 +495,8 @@ export function SubscriptionPage() {
           acc.machineId,
           acc.credentials?.provider || acc.idp,
           acc.credentials?.authMethod,
-          acc.id
+          acc.id,
+          dynamicProxyCfg
         )
 
         if (tokenResult.success && tokenResult.url) {
@@ -1689,6 +1708,24 @@ export function SubscriptionPage() {
                   : `获取链接 (${linkPickIds.size > 0 ? linkPickIds.size : pendingFetchCount})`
                 }
               </Button>
+
+              <div
+                className="flex items-center gap-1.5"
+                title={
+                  isEn
+                    ? 'Each link is fetched through a one-time endpoint from the proxy pool page\'s dynamic extract source. No effect until the API URL is configured there.'
+                    : '每条链接经「代理池」页动态提链源的一次性端点发出（逐链接独立出口、不复用）；未在该页配置接口地址时开关不生效'
+                }
+              >
+                <Switch
+                  checked={useDynamicExit}
+                  onCheckedChange={toggleDynamicExit}
+                  disabled={isFetching}
+                />
+                <span className="text-xs text-muted-foreground select-none">
+                  {isEn ? 'Dynamic exit' : '提链出口'}
+                </span>
+              </div>
 
               <Button
                 variant="ghost"

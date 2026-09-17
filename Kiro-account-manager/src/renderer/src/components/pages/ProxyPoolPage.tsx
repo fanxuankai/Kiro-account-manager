@@ -800,6 +800,60 @@ export function ProxyPoolPage(): React.ReactNode {
         </CardContent>
       </Card>
 
+      {/* 动态提链源：一次性端点的批量提取配置（与上方静态池条目互不影响） */}
+      <Card className="hover-lift">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Link2 className="h-4 w-4 text-primary" />
+            {isEn ? 'Dynamic Extract Source' : '动态提链源'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            {isEn
+              ? 'Batch-extract one-time endpoints from a whitelist API (plain-text IP:port per line, e.g. novproxy). Consumers opt in: login-pool windows and batch subscription link fetching, one endpoint each. Independent of the static entries above.'
+              : '从白名单提链接口批量提取一次性端点（纯文本每行一个 IP:port，如 novproxy）。号池注册、批量订阅获取链接可选接入，每个窗口/链接消费一个独立出口；与上方静态池条目互不影响。'}
+          </p>
+          <div className="space-y-1">
+            <Label className="text-xs">{isEn ? 'Extract API URL' : '提链接口地址'}</Label>
+            <Input
+              value={proxyPoolConfig.dynamicApiUrl || ''}
+              onChange={(e) => setProxyPoolConfig({ dynamicApiUrl: e.target.value })}
+              placeholder="https://white.example.com/white/api?region=US&num=1&time=10&format=1&type=txt"
+              className="h-8 text-xs font-mono"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              {isEn
+                ? 'num is overridden by batch size below; time (minutes) sets endpoint TTL; region etc. stay as written.'
+                : 'num 会按下方提取数量覆盖；time（分钟）决定端点有效期；region 等参数按 URL 原样生效。'}
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">{isEn ? 'Local relay' : '本地中转'}</Label>
+              <Input
+                value={proxyPoolConfig.dynamicViaProxy || ''}
+                onChange={(e) => setProxyPoolConfig({ dynamicViaProxy: e.target.value })}
+                placeholder={isEn ? 'empty = system proxy' : '留空=自动取系统代理'}
+                className="h-8 text-xs font-mono"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">{isEn ? 'Batch size (num)' : '提取数量（num）'}</Label>
+              <Input
+                type="number" min={1} max={20}
+                value={proxyPoolConfig.dynamicBatchSize ?? 5}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10)
+                  if (!isNaN(v) && v >= 1 && v <= 20) setProxyPoolConfig({ dynamicBatchSize: v })
+                }}
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* 添加代理 */}
       <Card className="hover-lift">
         <CardHeader className="pb-3">

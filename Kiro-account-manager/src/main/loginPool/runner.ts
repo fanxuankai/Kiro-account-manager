@@ -14,10 +14,19 @@
 // - 人工验证策略：触发 DataDome/邮箱设备验证时，wait=窗口前置等人工过验证后
 //   继续（等待期间重置超时）；skip=标记失败跳下一号。
 
-import { BrowserWindow, protocol } from 'electron'
+import { BrowserWindow, protocol, session, type Session } from 'electron'
 import { randomBytes } from 'node:crypto'
 import type { LoginPoolStore, PoolEntry, PoolEntryView } from './store'
 import { totpNow } from './totp'
+import { ChainProxyRelay } from '../registration/chainProxy'
+import {
+  acquireDynamicExit,
+  getSharedDynamicSource,
+  onDynamicSourceLog,
+  resolveViaProxy
+} from '../proxy/dynamicProxy'
+import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
+import { injectProxySession } from './proxySession'
 
 /** 页面探测结果（PROBE_JS 的返回结构） */
 interface PageDetect {
@@ -52,7 +61,51 @@ export interface BatchOptions {
   intervalSec: number | 'rand'
   /** 触发人机/设备验证：wait 等人工处理 / skip 标失败跳过 */
   manualPolicy: 'wait' | 'skip'
+  /** 出口代理（代理池快照，批次启动时由渲染层传入；主进程逐号消费，只读不回写） */
+  proxy?: LoginPoolProxyOptions
 }
+
+/** 出口代理候选：渲染层从代理池筛出的 可用+启用 条目 */
+export interface LoginPoolProxyCandidate {
+  url: string
+  usedCount: number
+  latencyMs?: number
+}
+
+export type LoginPoolProxyStrategy = 'round_robin' | 'random' | 'least_used' | 'fastest'
+
+/** 号池出口代理选项：开启后每个登录窗口取独立出口，取不到则该号失败，绝不直连 */
+export interface LoginPoolProxyOptions {
+  enabled: boolean
+  /** pool=静态代理池条目（默认）；api=动态提链接口（一次性端点，批量提取逐号消费） */
+  mode?: 'pool' | 'api'
+  entries: LoginPoolProxyCandidate[]
+  strategy: LoginPoolProxyStrategy
+  /** 上游中转代理（可选）：目标代理要求非大陆来源 IP 时串联代理链 */
+  upstreamProxy?: string
+  /** api 模式配置 */
+  api?: {
+    /** 提链接口地址（num 参数会被批量值覆盖） */
+    url: string
+    /** 本地可信中转；留空自动取系统代理 */
+    viaProxy?: string
+    /** 单次批量提取数量，默认 5 */
+    batchSize?: number
+  }
+}
+
+/** 单号出口代理装配结果：off=未启用 / ok=可用 / failed=该号失败跳过（绝不直连） */
+export type EntryProxySetup =
+  | { kind: 'off' }
+  | {
+      kind: 'ok'
+      proxyRules: string
+      exitIp: string
+      latencyMs: number
+      /** 释放本地中继等资源；窗口关闭时调用 */
+      release: () => Promise<void>
+    }
+  | { kind: 'failed'; error: string }
 
 export interface ResultPayload {
   entryId: string
@@ -183,6 +236,8 @@ const CHROME_UA =
 
 const PROBE_INTERVAL_MS = 1000
 const STEP_TIMEOUT_MS = 180_000
+/** 单号最多连试几个出口代理后放弃（每次尝试都经 ipify 真实探测，失败即弃） */
+const PROXY_MAX_ATTEMPTS = 3
 
 /** 授权回调跳转的落点页（protocol.handle 接管 kiro:// 后渲染在登录窗口内） */
 const KIRO_LANDING_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -215,6 +270,9 @@ export class LoginPoolRunner {
   /** 当前执行窗口（观察按钮置前用；人工等待时保持显示） */
   private win: BrowserWindow | null = null
 
+  /** 出口代理轮换游标（round_robin / least_used / fastest 按序消费；random 不用） */
+  private proxyCursor = 0
+
   constructor(store: LoginPoolStore, deps: LoginPoolDeps, events: LoginPoolEvents) {
     this.store = store
     this.deps = deps
@@ -228,6 +286,8 @@ export class LoginPoolRunner {
       if (run) run.dispatch(request.url)
       return new Response(KIRO_LANDING_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
     })
+    // 全局提链池（与订阅取链接共用一份队列与记忆）的动态转发进号池 UI 日志
+    onDynamicSourceLog((m) => this.log('info', `[提链] ${m}`))
   }
 
   private log(level: 'info' | 'ok' | 'err' | 'warn', msg: string): void {
@@ -252,7 +312,15 @@ export class LoginPoolRunner {
     this.opts = opts
     this.running = true
     this.paused = false
-    this.log('info', `批次开始：间隔 ${opts.intervalSec === 'rand' ? '随机 30–120s' : opts.intervalSec + 's'}，模式=填表/2FA/点 Sign in 自动，Verify/Authorize/继续链接人点，人工验证=${opts.manualPolicy === 'wait' ? '等待接管' : '跳过'}`)
+    const proxyDesc = opts.proxy?.enabled
+      ? opts.proxy.mode === 'api'
+        ? `，出口代理=提链 API（批量 ${Math.min(20, Math.max(1, Math.round(opts.proxy.api?.batchSize ?? 5)))} 个/次）`
+        : `，出口代理=池内 ${opts.proxy.entries.length} 条（${opts.proxy.strategy}${opts.proxy.upstreamProxy ? '，经上游中转' : ''}）`
+      : ''
+    this.log(
+      'info',
+      `批次开始：间隔 ${opts.intervalSec === 'rand' ? '随机 30–120s' : opts.intervalSec + 's'}，模式=填表/2FA/点 Sign in 自动，Verify/Authorize/继续链接人点，人工验证=${opts.manualPolicy === 'wait' ? '等待接管' : '跳过'}${proxyDesc}`
+    )
     this.emitBatch()
     void this.runBatch()
   }
@@ -356,11 +424,142 @@ export class LoginPoolRunner {
     this.emitBatch()
   }
 
+  // ── 出口代理装配 ──
+
+  /** 按策略从剩余候选中挑一个：轮询按序前进；最少使用/最快优先先排序再按游标取 */
+  private pickProxyCandidate(
+    cfg: LoginPoolProxyOptions,
+    remaining: LoginPoolProxyCandidate[]
+  ): LoginPoolProxyCandidate | null {
+    if (!remaining.length) return null
+    if (cfg.strategy === 'random') return remaining[Math.floor(Math.random() * remaining.length)]
+    let ordered = remaining
+    if (cfg.strategy === 'least_used') {
+      ordered = [...remaining].sort((a, b) => a.usedCount - b.usedCount)
+    } else if (cfg.strategy === 'fastest') {
+      ordered = [...remaining].sort((a, b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity))
+    }
+    const pick = ordered[this.proxyCursor % ordered.length]
+    this.proxyCursor += 1
+    return pick
+  }
+
+  /**
+   * 为单个号装配出口代理：候选 → 每号独立 session 注入（保证逐号不同 IP）→
+   * 按需起本地中继（Chromium proxyRules 挂不了账密；上游中转串联代理链）→
+   * ipify 探测真实出口。探测失败换下一个候选，最多 PROXY_MAX_ATTEMPTS 个；
+   * 全部失败返回 failed——该号标失败跳过，绝不回退直连暴露本机 IP。
+   */
+  private async setupEntryProxy(entry: PoolEntry): Promise<EntryProxySetup> {
+    const cfg = this.opts.proxy
+    if (!cfg?.enabled) return { kind: 'off' }
+    if (cfg.mode === 'api') return this.setupEntryProxyFromApi(entry, cfg)
+    let remaining = cfg.entries.filter((c) => !!c.url)
+    if (!remaining.length) {
+      return { kind: 'failed', error: '代理池无可用代理（需启用且验活为可用）' }
+    }
+    const upstream = (cfg.upstreamProxy || '').trim()
+    let lastError = ''
+    for (let attempt = 1; attempt <= PROXY_MAX_ATTEMPTS; attempt++) {
+      const candidate = this.pickProxyCandidate(cfg, remaining)
+      if (!candidate) break
+      remaining = remaining.filter((c) => c !== candidate)
+      const targetUrl = injectProxySession(candidate.url)
+      // 带凭据或配了上游中转 → 本地中继；无凭据无上游的代理直接作为 proxyRules，零额外跳
+      let relay: ChainProxyRelay | null = null
+      let proxyRules = targetUrl
+      if (upstream || proxyUrlHasCredentials(targetUrl)) {
+        try {
+          // 无上游时把目标代理自身当 upstream（退化为直连代理 + CONNECT 认证）
+          relay = new ChainProxyRelay(upstream || targetUrl, targetUrl, (m) => this.log('warn', m))
+          proxyRules = await relay.start()
+        } catch (err) {
+          this.log(
+            'warn',
+            `${entry.username} 本地代理中继启动失败：${err instanceof Error ? err.message : String(err)}`
+          )
+          continue
+        }
+      }
+      const probe = await probeExitIp(proxyRules)
+      if (probe.ok && probe.ip && probe.ms !== undefined) {
+        this.log(
+          'ok',
+          `${entry.username} 出口代理已接通：${probe.ip}（${probe.ms}ms，经 ${maskProxyUrl(candidate.url)}）`
+        )
+        return {
+          kind: 'ok',
+          proxyRules,
+          exitIp: probe.ip,
+          latencyMs: probe.ms,
+          release: async () => {
+            if (relay) await relay.stop()
+          }
+        }
+      }
+      if (relay) await relay.stop()
+      lastError = probe.error || '未知错误'
+      this.log(
+        'warn',
+        `${entry.username} 代理 ${maskProxyUrl(candidate.url)} 探测失败（${lastError}），换下一个`
+      )
+    }
+    return {
+      kind: 'failed',
+      error: `出口代理不可用（${lastError || '无候选'}），该号已跳过，未直连`
+    }
+  }
+
+  /**
+   * 提链 API 模式：每个号从全局共享池消费一个一次性端点（同入口不同端口 = 不同出口），
+   * 走共享的「端点→中继→探测→计次」出口路由；提链接口本身不可用则直接失败该号
+   * （内部已重试，换端点无意义）。
+   */
+  private async setupEntryProxyFromApi(
+    entry: PoolEntry,
+    cfg: LoginPoolProxyOptions
+  ): Promise<EntryProxySetup> {
+    const resolved = {
+      url: cfg.api?.url || '',
+      viaProxy: resolveViaProxy(cfg.api?.viaProxy),
+      batchSize: Math.min(20, Math.max(1, Math.round(cfg.api?.batchSize ?? 5)))
+    }
+    try {
+      const route = await acquireDynamicExit(
+        getSharedDynamicSource(resolved),
+        resolved.viaProxy,
+        (level, msg) => this.log(level, `${entry.username} ${msg}`)
+      )
+      return {
+        kind: 'ok',
+        proxyRules: route.proxyRules,
+        exitIp: route.exitIp,
+        latencyMs: route.latencyMs,
+        release: route.release
+      }
+    } catch (err) {
+      return {
+        kind: 'failed',
+        error: `${err instanceof Error ? err.message : String(err)}，该号已跳过，未直连`
+      }
+    }
+  }
+
   // ── 单号执行：窗口 + 状态机 ──
 
   private async runEntry(entry: PoolEntry): Promise<void> {
     const partition = `loginpool-${Date.now()}-${randomBytes(3).toString('hex')}`
     const login = this.deps.buildGithubLoginUrl()
+
+    // 出口代理在设 activeRun / 开窗之前装配：失败直接跳号，无需清理任何资源
+    const proxy = await this.setupEntryProxy(entry)
+    if (proxy.kind === 'failed') {
+      this.fail(entry, 'no-proxy', proxy.error)
+      return
+    }
+    let releaseProxy: (() => Promise<void>) | null = null
+    let entrySession: Session | null = null
+    if (proxy.kind === 'ok') releaseProxy = proxy.release
 
     let callbackResolve!: (v: { code?: string; error?: string }) => void
     const callbackPromise = new Promise<{ code?: string; error?: string }>((resolve) => {
@@ -395,13 +594,25 @@ export class LoginPoolRunner {
       }
     }
 
+    // 先显式建会话再开窗：setProxy 必须在 loadURL 之前完成，保证 GitHub 页面
+    // 第一个请求就走池出口；partition → session 对象对 BrowserWindow 等价
+    const ses = session.fromPartition(partition)
+    entrySession = ses
+    if (proxy.kind === 'ok') {
+      await ses.setProxy({
+        mode: 'fixed_servers',
+        proxyRules: proxy.proxyRules,
+        proxyBypassRules: '<-loopback>'
+      })
+    }
+
     const win = new BrowserWindow({
       width: 1080,
       height: 840,
       title: `Kiro 登录 · ${entry.username}`,
       autoHideMenuBar: true,
       webPreferences: {
-        partition,
+        session: ses,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true
@@ -706,6 +917,9 @@ export class LoginPoolRunner {
     } finally {
       this.activeRun = null
       this.win = null
+      // 出口代理资源随窗口一起释放：中继停掉，会话掐断所有在途连接
+      if (releaseProxy) void releaseProxy().catch(() => undefined)
+      if (entrySession) void entrySession.closeAllConnections().catch(() => undefined)
       if (!win.isDestroyed()) {
         // 留 1.2s 让页面收尾（半自动模式下用户可能还想看一眼），随后自动关窗
         setTimeout(() => {

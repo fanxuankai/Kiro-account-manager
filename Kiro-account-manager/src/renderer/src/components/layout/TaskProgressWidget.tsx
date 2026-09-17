@@ -5,6 +5,7 @@ import { useAccountsStore } from '@/store/accounts'
  * 批量刷新的全局进度悬浮球（fixed 定位右下角，所有页面可见）：
  * 80px 环形进度球（中心 n/N）+ 球下方一行小标签标注刷新类型与「自动」，
  * 脱离文档流不占布局空间，pointer-events-none 不拦截点击；空闲时不渲染。
+ * 底部抬高到 bottom-32：订阅页底几行的复制链接按钮在右下角，压太低会挡视线。
  * 必须用 createPortal 挂到 body：应用根容器有 `.ambient-bg > * { position: relative }`，
  * 会把普通子元素的 fixed 覆盖成 relative（UpdateDialog/CloseConfirmDialog 同理走 portal）。
  */
@@ -25,7 +26,7 @@ export function TaskProgressWidget(): React.ReactNode {
     <div
       role="status"
       className={
-        'fixed bottom-6 right-6 z-50 flex flex-col items-center gap-1.5 ' +
+        'fixed bottom-32 right-6 z-50 flex flex-col items-center gap-1.5 ' +
         'animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-none'
       }
     >
