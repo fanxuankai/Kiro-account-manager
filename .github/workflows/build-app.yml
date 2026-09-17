@@ -1,17 +1,17 @@
-# 手动打包：仅 Windows(NSIS 安装包)与 macOS(dmg/zip,x64+arm64)
-# 触发方式:Actions → Build App → Run workflow,或 gh workflow run build-app.yml
+# 打包并发布到 GitHub Releases(草稿):Windows(NSIS)+ macOS(dmg/zip 双架构)
+# 触发:Actions → Build App → Run workflow,或 gh workflow run build-app.yml
+# 发布的 Release 标签取 package.json 版本(v{version}),为草稿状态,确认后手动发布
 name: Build App
 
 on:
   workflow_dispatch:
 
-env:
-  # 只产出 artifact，不发布 GitHub Releases（eb26 在 CI 检测到仓库时会默认尝试发布）
-  EP_PUBLISH: never
-
 concurrency:
   group: build-app-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -19,7 +19,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     env:
-      # 帮 node-gyp 定位 runner 上的 VS2022 C++ 工具链（better-sqlite3 源码重编译用）
+      # 帮 node-gyp 定位 runner 上的 VS2022 C++ 工具链(如需源码重编译)
       GYP_MSVS_VERSION: "2022"
     defaults:
       run:
@@ -36,20 +36,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build & package (Windows)
-        run: npm run build:win -- --publish never
+      - name: Build & publish (Windows)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:win -- --publish always
 
-      - name: Upload artifacts
+      - name: Upload artifacts (backup)
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64-setup
           path: |
             Kiro-account-manager/dist/*-setup.exe
             Kiro-account-manager/dist/latest.yml
-          if-no-files-found: error
+          if-no-files-found: warn
 
   build-macos:
     name: macOS (dmg/zip x64+arm64)
+    # 串行发布:与 Windows 共写同一个 Release(v{version}),避免并发建 Release 冲突
+    needs: build-windows
     runs-on: macos-14
     timeout-minutes: 45
     defaults:
@@ -67,10 +71,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build & package (macOS)
-        run: npm run build:mac -- --publish never
+      - name: Build & publish (macOS)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run build:mac -- --publish always
 
-      - name: Upload artifacts
+      - name: Upload artifacts (backup)
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
@@ -78,4 +84,4 @@ jobs:
             Kiro-account-manager/dist/*.dmg
             Kiro-account-manager/dist/*-mac.zip
             Kiro-account-manager/dist/latest-mac.yml
-          if-no-files-found: error
+          if-no-files-found: warn
