@@ -1,11 +1,5 @@
 appId: com.kiro.account-manager
 productName: Kiro Account Manager
-# electron-updater 的更新源：generic 静态地址指向 latest release 的下载入口，
-# 更新检查/差分下载全程不触 api.github.com（匿名 60 次/小时·按 IP，办公网共享出口
-# 极易打满）；CI 打包用 --publish never，实际发布由 workflow 的 release job 承担
-publish:
-  provider: generic
-  url: https://github.com/fanxuankai/Kiro-account-manager/releases/latest/download
 directories:
   buildResources: build
 files:
@@ -90,8 +84,9 @@ snap:
     provider: generic
     url: https://example.com/auto-updates
 npmRebuild: false
-# 应用内自动更新源：必须指向本 fork 仓库，否则 autoUpdater 会把用户升级到 upstream 版本
+# 应用内自动更新源：generic 静态地址指向本 fork 仓库 latest release 的下载入口——
+# github provider 的更新检查会走 api.github.com（匿名 60 次/小时·按 IP，办公网共享
+# 出口极易打满）；静态地址同样锁定本 fork，且更新检查/差分下载全程不触 API
 publish:
-  provider: github
-  owner: fanxuankai
-  repo: Kiro-account-manager
+  provider: generic
+  url: https://github.com/fanxuankai/Kiro-account-manager/releases/latest/download
