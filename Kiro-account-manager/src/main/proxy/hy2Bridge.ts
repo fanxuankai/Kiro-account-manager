@@ -11,9 +11,10 @@
 // (scripts/fetch-singbox.mjs 下载)。
 
 import { app } from 'electron'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, execSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import net from 'node:net'
+import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 
@@ -80,13 +81,14 @@ function parseHy2Url(url: string): Hy2Params | null {
 }
 
 /** 生成 sing-box 配置:唯一 mixed 入站(127.0.0.1:port)+ hysteria2 出站 */
-export function buildSingboxConfig(p: Hy2Params, listenPort: number): string {
+export function buildSingboxConfig(p: Hy2Params, listenPort: number, bindInterface?: string): string {
   const hy2Out: Record<string, unknown> = {
     type: 'hysteria2',
     tag: 'hy2-out',
     server: p.server,
     server_port: p.serverPort
   }
+  if (bindInterface) hy2Out.bind_interface = bindInterface
   if (p.password) hy2Out.password = p.password
   if (p.serverPorts) {
     hy2Out.server_ports = p.serverPorts
@@ -118,6 +120,8 @@ interface Hy2Instance {
   proc: ChildProcess
   port: number
   configPath: string
+  /** 出站绑定的物理接口(见 detectDefaultInterface;undefined=未绑定) */
+  bindInterface?: string
   /** 本地 socks5 URL(resolve 的返回值) */
   localUrl: string
   /** 最近 stderr 尾巴,起不来时给用户看原因 */
@@ -187,10 +191,55 @@ function waitPortReady(port: number, timeoutMs: number): Promise<void> {
   })
 }
 
+/**
+ * 探测默认路由的出网接口(sing-box 出站 bind_interface 用)。
+ * 本机若同时跑着 TUN 模式的代理客户端(Clash/sing-box/公司 VPN 等),其对端 IP 的
+ * 规则路由会把 hy2 的 UDP 粘进 fake-ip 段(源地址 198.18.x.x → no route to host,
+ * 2026-09 实测);绑定默认物理接口可绕开劫持。探测失败返回 undefined(不绑定,
+ * 行为与旧版一致)。
+ */
+function detectDefaultInterface(): string | undefined {
+  try {
+    if (process.platform === 'darwin') {
+      const out = execSync('route -n get default', { timeout: 2000 }).toString()
+      return out.match(/interface:\s*(\S+)/)?.[1]
+    }
+    if (process.platform === 'win32') {
+      const out = execSync(
+        'powershell -NoProfile -Command "(Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias"',
+        { timeout: 5000 }
+      )
+        .toString()
+        .trim()
+      return out || undefined
+    }
+    const out = execSync('ip route show default', { timeout: 2000 }).toString()
+    return out.match(/dev\s+(\S+)/)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+/** 绑定的接口是否仍存在(网络切换自愈:WiFi↔有线后旧接口失活则重建实例) */
+function interfaceStillExists(name?: string): boolean {
+  if (!name) return true
+  return !!os.networkInterfaces()[name]
+}
+
 /** 启动(或复用)一个 hy2 URL 对应的本地 socks5 桥 */
 async function ensureInstance(hy2Url: string): Promise<string> {
   const existing = instances.get(hy2Url)
-  if (existing && !existing.proc.killed) return existing.localUrl
+  // 绑定接口失活(换网)时旧实例出站必然失败:杀掉重建,顺手自愈
+  if (existing && !existing.proc.killed && interfaceStillExists(existing.bindInterface)) {
+    return existing.localUrl
+  }
+  if (existing) {
+    existing.stopping = true
+    try {
+      existing.proc.kill()
+    } catch { /* ignore */ }
+    instances.delete(hy2Url)
+  }
 
   const inflight = starting.get(hy2Url)
   if (inflight) return inflight
@@ -207,11 +256,12 @@ async function ensureInstance(hy2Url: string): Promise<string> {
     }
 
     const port = await findFreePort()
+    const bindInterface = detectDefaultInterface()
     const configPath = path.join(
       configDir(),
       `${crypto.createHash('sha1').update(hy2Url).digest('hex').slice(0, 12)}.json`
     )
-    fs.writeFileSync(configPath, buildSingboxConfig(params, port))
+    fs.writeFileSync(configPath, buildSingboxConfig(params, port, bindInterface))
 
     const proc = spawn(bin, ['run', '-c', configPath], {
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -221,6 +271,7 @@ async function ensureInstance(hy2Url: string): Promise<string> {
       proc,
       port,
       configPath,
+      bindInterface,
       localUrl: `socks5://127.0.0.1:${port}`,
       lastError: '',
       stopping: false,
