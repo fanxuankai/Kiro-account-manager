@@ -17,6 +17,9 @@ import path from 'path'
 import os from 'os'
 
 const GITHUB_REPO = 'fanxuankai/Kiro-account-manager'
+// 更新检查/下载一律走 GitHub 静态下载地址（CDN 重定向，不消耗 api.github.com 的
+// 匿名 60 次/小时·按 IP 限额——办公网共享出口下极易打满）
+const RELEASE_DOWNLOAD_BASE = `https://github.com/${GITHUB_REPO}/releases/latest/download`
 
 export interface MacUpdateFile {
   name: string
@@ -69,18 +72,8 @@ function parseLatestMacYml(text: string): { version: string; files: Array<{ name
 /** 检查 mac 更新：读 GitHub Releases 的 latest-mac.yml，按当前架构选 zip */
 export async function checkMacUpdate(): Promise<{ hasUpdate: boolean; version?: string; error?: string }> {
   try {
-    const releaseRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
-      headers: { 'User-Agent': 'kiro-account-manager-updater', Accept: 'application/vnd.github+json' }
-    })
-    if (!releaseRes.ok) return { hasUpdate: false, error: `GitHub API ${releaseRes.status}` }
-    const release = (await releaseRes.json()) as {
-      tag_name?: string
-      assets?: Array<{ name: string; browser_download_url: string }>
-    }
-    const ymlAsset = release.assets?.find((a) => a.name === 'latest-mac.yml')
-    if (!ymlAsset) return { hasUpdate: false, error: 'latest-mac.yml not found in latest release' }
-
-    const ymlRes = await fetch(ymlAsset.browser_download_url, {
+    // 静态下载地址直取 latest-mac.yml，不经 API（见 RELEASE_DOWNLOAD_BASE 注释）
+    const ymlRes = await fetch(`${RELEASE_DOWNLOAD_BASE}/latest-mac.yml`, {
       headers: { 'User-Agent': 'kiro-account-manager-updater' }
     })
     if (!ymlRes.ok) return { hasUpdate: false, error: `latest-mac.yml ${ymlRes.status}` }
@@ -94,12 +87,17 @@ export async function checkMacUpdate(): Promise<{ hasUpdate: boolean; version?: 
     // 按当前架构匹配 zip（electron-builder 命名 ...-{arch}-mac.zip）
     const arch = process.arch === 'arm64' ? 'arm64' : 'x64'
     const match = parsed.files.find((f) => f.name.includes(`-${arch}-mac.zip`))
-    const zipAsset = match
-      ? release.assets?.find((a) => a.name === match.name)
-      : undefined
-    if (!match || !zipAsset) return { hasUpdate: false, error: `no ${arch} zip asset in release ${parsed.version}` }
+    if (!match) return { hasUpdate: false, error: `no ${arch} zip asset in release ${parsed.version}` }
 
-    pendingUpdate = { version: parsed.version, file: { name: match.name, url: zipAsset.browser_download_url, sha512: match.sha512, size: match.size } }
+    pendingUpdate = {
+      version: parsed.version,
+      file: {
+        name: match.name,
+        url: `${RELEASE_DOWNLOAD_BASE}/${match.name}`,
+        sha512: match.sha512,
+        size: match.size
+      }
+    }
     console.log(`[MacSelfUpdate] Update available: ${current} -> ${parsed.version} (${match.name})`)
     return { hasUpdate: true, version: parsed.version }
   } catch (err) {

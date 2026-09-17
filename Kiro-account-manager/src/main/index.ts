@@ -3119,46 +3119,42 @@ app.whenReady().then(async () => {
     return { success: true }
   })
 
-  // IPC: 手动检查更新（使用 GitHub API，用于 AboutPage）
-  // 注意指向本 fork 仓库——否则会把用户引导到上游版本
+  // IPC: 手动检查更新（走 GitHub 静态下载地址，不消耗 api.github.com 匿名配额——
+  // 匿名限额 60 次/小时且按 IP 计，办公网共享出口下极易打满，更新检查一律绕开 API）
   const GITHUB_REPO = 'fanxuankai/Kiro-account-manager'
-  const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
+  const RELEASE_DOWNLOAD_BASE = `https://github.com/${GITHUB_REPO}/releases/latest/download`
+
+  /** 解析 electron-builder 的 latest*.yml：version + files（url/sha512/size） */
+  function parseLatestYml(text: string): {
+    version: string
+    files: Array<{ name: string; sha512: string; size: number }>
+  } {
+    const version = /^version:\s*(\S+)/m.exec(text)?.[1] ?? ''
+    const files: Array<{ name: string; sha512: string; size: number }> = []
+    for (const block of text.split(/^- /m).slice(1)) {
+      const name = /^url:\s*(\S+)/m.exec(block)?.[1] ?? ''
+      const sha512 = /sha512:\s*(\S+)/.exec(block)?.[1] ?? ''
+      const size = Number(/size:\s*(\d+)/.exec(block)?.[1] ?? 0) || 0
+      if (name && sha512) files.push({ name, sha512, size })
+    }
+    return { version, files }
+  }
 
   ipcMain.handle('check-for-updates-manual', async () => {
     try {
-      console.log('[Update] Manual check via GitHub API...')
+      console.log('[Update] Manual check via GitHub static download...')
       const currentVersion = app.getVersion()
 
-      const response = await fetchWithAppProxy(GITHUB_API_URL, {
-        headers: {
-          Accept: 'application/vnd.github.v3+json',
-          'User-Agent': 'Kiro-Account-Manager'
-        }
+      const ymlName = process.platform === 'darwin' ? 'latest-mac.yml' : 'latest.yml'
+      const ymlRes = await fetchWithAppProxy(`${RELEASE_DOWNLOAD_BASE}/${ymlName}`, {
+        headers: { 'User-Agent': 'Kiro-Account-Manager' }
       })
-
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('GitHub API 请求次数超限，请稍后再试')
-        } else if (response.status === 404) {
-          throw new Error('未找到发布版本')
-        }
-        throw new Error(`GitHub API 错误: ${response.status}`)
+      if (!ymlRes.ok) {
+        if (ymlRes.status === 404) throw new Error('未找到发布版本（更新元数据缺失）')
+        throw new Error(`GitHub 下载错误: ${ymlRes.status}`)
       }
-
-      const release = (await response.json()) as {
-        tag_name: string
-        name: string
-        body: string
-        html_url: string
-        published_at: string
-        assets: Array<{
-          name: string
-          browser_download_url: string
-          size: number
-        }>
-      }
-
-      const latestVersion = release.tag_name.replace(/^v/, '')
+      const { version: latestVersion, files } = parseLatestYml(await ymlRes.text())
+      if (!latestVersion) throw new Error('更新元数据解析失败')
 
       // 比较版本号
       const compareVersions = (v1: string, v2: string): number => {
@@ -3183,14 +3179,14 @@ app.whenReady().then(async () => {
         hasUpdate,
         currentVersion,
         latestVersion,
-        releaseNotes: release.body || '',
-        releaseName: release.name || `v${latestVersion}`,
-        releaseUrl: release.html_url,
-        publishedAt: release.published_at,
-        assets: release.assets.map((a) => ({
-          name: a.name,
-          downloadUrl: a.browser_download_url,
-          size: a.size
+        releaseNotes: '',
+        releaseName: `v${latestVersion}`,
+        releaseUrl: `https://github.com/${GITHUB_REPO}/releases/tag/v${latestVersion}`,
+        publishedAt: '',
+        assets: files.map((f) => ({
+          name: f.name,
+          downloadUrl: `${RELEASE_DOWNLOAD_BASE}/${f.name}`,
+          size: f.size
         }))
       }
     } catch (error) {
