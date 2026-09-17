@@ -146,11 +146,14 @@ export function formatCardTooltip(sub?: CardInfo, isEn = false): string {
 // ============ 待付款判定（发过升级支付链接且账号仍为 Free） ============
 
 // 参数用结构子集：Account / 闲置账号 / 筛选面板的部分视图均可传入。
-// 升级成功（订阅不再是 Free）即视为已付款，标记自动不再命中——paymentLinkAt 保留作历史
+// 升级成功（订阅不再是 Free）即视为已付款，标记自动不再命中——paymentLinkAt 保留作历史。
+// wasPaid（曾是付费订阅、后主动降级而来的 Free）不算待付款：其 paymentLinkAt 是历史残留，
+// 付过款又降级的账号不该再挂"待付款"催付标记
 export function isPendingPayment(
-  a: { subscription?: { type?: string; title?: string; paymentLinkAt?: number } } | null | undefined
+  a: { subscription?: { type?: string; title?: string; paymentLinkAt?: number; wasPaid?: boolean } } | null | undefined
 ): boolean {
   if (!a?.subscription?.paymentLinkAt) return false
+  if (a.subscription.wasPaid) return false
   const type = (a.subscription.type || '').toUpperCase()
   const title = (a.subscription.title || '').toUpperCase()
   return type.includes('FREE') || title.includes('FREE') || (!type && !title)

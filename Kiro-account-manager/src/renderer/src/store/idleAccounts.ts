@@ -559,10 +559,11 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
       result = result.filter((a) => isBannedAccountError(a.lastError))
     }
 
-    // 待付款筛选：发过升级支付链接且账号仍为 Free（与主库同口径）
+    // 待付款筛选：发过升级支付链接且账号仍为 Free（wasPaid 曾付费后降级的不算，与主库同口径）
     if (filter.pendingPaymentOnly) {
       result = result.filter((a) => {
         if (!a.subscription?.paymentLinkAt) return false
+        if (a.subscription.wasPaid) return false
         const type = (a.subscription.type || '').toUpperCase()
         const title = (a.subscription.title || '').toUpperCase()
         return type.includes('FREE') || title.includes('FREE') || (!type && !title)

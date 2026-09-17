@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button, Card, CardContent, CardHeader, CardTitle, Badge, Input, Label } from '../ui'
 import {
   Play, Pause, Plus, RotateCcw, Ban, ExternalLink, CheckCircle2, Clock, Loader2,
-  KeyRound, EyeOff, Eye, Search, ChevronRight, Terminal, Trash2, Undo2, X
+  KeyRound, EyeOff, Eye, Search, ChevronRight, Terminal, Trash2, Undo2, X, ClipboardCopy
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
@@ -22,6 +22,10 @@ interface PoolEntryView {
   step: number
   failReason?: string
   kiroEmail?: string
+  /** 本次尝试实际使用的出口 IP（空 = 直连） */
+  exitIp?: string
+  /** 本次尝试的出口来源：api=提链 / pool=静态代理池 / direct=直连 */
+  proxyMode?: 'api' | 'pool' | 'direct'
   addedAt: number
   takenAt?: number
   doneAt?: number
@@ -78,6 +82,17 @@ export function LoginPagePool(): React.ReactNode {
       return !v
     })
   }
+  // 导出未用：复制为「账号----密码----2FA密钥」文本（与入池格式同构，可回贴）；
+  // 顺序即执行顺序（entries 里 unused 按入池先后排）
+  const [exportedCount, setExportedCount] = useState(0)
+  const unusedEntries = entries.filter((e) => e.state === 'unused')
+  const handleExportUnused = useCallback((): void => {
+    if (!unusedEntries.length) return
+    const text = unusedEntries.map((e) => `${e.username}----${e.password}----${e.secret}`).join('\n')
+    navigator.clipboard.writeText(text)
+    setExportedCount(unusedEntries.length)
+    setTimeout(() => setExportedCount(0), 1500)
+  }, [unusedEntries])
 
   // 批次选项（开始/继续时读一次；持久化 localStorage，重启不丢）
   // 固定形态：程序填表/2FA/点 Sign in；Verify/Authorize/继续链接由人点，不再提供开关
@@ -445,6 +460,16 @@ export function LoginPagePool(): React.ReactNode {
         >
           {showSecrets ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           {showSecrets ? '明文' : '打码'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 text-xs"
+          title="把全部未用账号复制为 账号----密码----2FA密钥 文本，可直接粘贴回入池弹窗或插件账号池"
+          disabled={!unusedEntries.length}
+          onClick={handleExportUnused}
+        >
+          <ClipboardCopy className="h-3.5 w-3.5" /> {exportedCount ? `已复制 ${exportedCount}` : `导出未用（${unusedEntries.length}）`}
         </Button>
         <Button size="sm" variant="ghost" className="h-8 text-xs" title="把已入库的条目移出列表（账号保留在账号管理）" onClick={() => { void window.api.loginPoolClearFinished().then(() => refreshList()) }}>
           <Trash2 className="h-3.5 w-3.5" /> 清除已入库
