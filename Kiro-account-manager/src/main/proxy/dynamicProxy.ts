@@ -19,6 +19,7 @@ import { app } from 'electron'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { ChainProxyRelay } from '../registration/chainProxy'
 import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
+import { resolveProxyUrl } from './hy2Bridge'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from './proxyTools'
 
 const API_RESPONSE_LIMIT = 4096
@@ -153,8 +154,12 @@ export class DynamicProxySource {
   private async fetchBatch(): Promise<void> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS)
-    const dispatcher = this.cfg.viaProxy ? safeCreateProxyAgent(this.cfg.viaProxy) : undefined
-    if (this.cfg.viaProxy && !dispatcher) throw new Error('本地中转代理协议不支持')
+    // 提链中转可能是 hy2:先转本地 socks5(桥接失败返回 null,走下方统一报错)
+    const viaProxy = this.cfg.viaProxy
+      ? await resolveProxyUrl(this.cfg.viaProxy).catch(() => null)
+      : undefined
+    const dispatcher = viaProxy ? safeCreateProxyAgent(viaProxy) : undefined
+    if (this.cfg.viaProxy && !dispatcher) throw new Error('本地中转代理协议不支持或 hy2 桥接失败')
     try {
       const url = new URL(this.cfg.url)
       url.searchParams.set('num', String(this.cfg.batchSize))
@@ -382,6 +387,8 @@ export async function acquireDynamicExit(
   const upstream = viaProxy.trim()
   const exhaustedExits = new Set<string>()
   let lastError = ''
+  // 上游中转可能是 hy2:统一转本地 socks5
+  const upstreamResolved = (await resolveProxyUrl(upstream)) || upstream
   for (let attempt = 1; attempt <= EXIT_MAX_ATTEMPTS; attempt++) {
     let targetUrl: string
     try {
@@ -390,13 +397,20 @@ export async function acquireDynamicExit(
       // 提链接口本身不可用（内部已重试过），换端点无意义
       throw new Error(err instanceof Error ? err.message : String(err))
     }
+    // 端点代理同样可能是 hy2
+    try {
+      targetUrl = (await resolveProxyUrl(targetUrl)) || targetUrl
+    } catch (err) {
+      log('warn', `提链端点 hy2 桥接失败：${err instanceof Error ? err.message : String(err)}`)
+      continue
+    }
     // 端点必须经本地中转两跳（白名单按来源鉴权 + 直连不通）；无中转则按直连端点处理
     let relay: ChainProxyRelay | null = null
     let proxyRules = targetUrl
-    if (upstream || proxyUrlHasCredentials(targetUrl)) {
+    if (upstreamResolved || proxyUrlHasCredentials(targetUrl)) {
       try {
         // 无中转时把端点自身当 upstream（退化为直连端点 + CONNECT 认证）
-        relay = new ChainProxyRelay(upstream || targetUrl, targetUrl, (m) => log('warn', m))
+        relay = new ChainProxyRelay(upstreamResolved || targetUrl, targetUrl, (m) => log('warn', m))
         proxyRules = await relay.start()
       } catch (err) {
         log('warn', `本地代理中继启动失败：${err instanceof Error ? err.message : String(err)}`)

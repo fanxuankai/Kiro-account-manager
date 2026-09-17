@@ -18,6 +18,9 @@ asarUnpack:
 extraResources:
   - from: "resources/tls-client-xgo-1.14.0-windows-amd64.dll"
     to: "tls-client-xgo-1.14.0-windows-amd64.dll"
+  # hy2(Hysteria2)代理桥内核:CI/开发时 scripts/fetch-singbox.mjs 下载到 resources/bin/
+  - from: "resources/bin"
+    to: "bin"
 protocols:
   name: Kiro Auth
   schemes:

@@ -68,6 +68,7 @@ import {
 import { openAccountPortal } from './kiroPortal'
 import { openaiToKiro } from './proxy/translator'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
+import { resolveProxyUrl, shutdownHy2Bridge } from './proxy/hy2Bridge'
 import { acquireDynamicExit, getSharedDynamicSource, resolveViaProxy } from './proxy/dynamicProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
@@ -237,9 +238,10 @@ async function fetchWithAppProxy(
   options: RequestInit,
   overrideProxyUrl?: string
 ): Promise<Response> {
-  // 优先尝试账号绑定代理
+  // 优先尝试账号绑定代理(hy2 代理先转本地 socks5,桥接失败回退全局逻辑)
   if (overrideProxyUrl) {
-    const accountAgent = safeCreateProxyAgent(overrideProxyUrl)
+    const resolvedOverride = await resolveProxyUrl(overrideProxyUrl).catch(() => undefined)
+    const accountAgent = safeCreateProxyAgent(resolvedOverride || overrideProxyUrl)
     if (accountAgent) {
       return (await undiciFetch(url, {
         ...options,
@@ -3219,7 +3221,11 @@ app.whenReady().then(async () => {
       }
     ) => {
       const { proxyUrl, targets } = params || {}
-      const agent = proxyUrl ? safeCreateProxyAgent(proxyUrl) : undefined
+      // hy2 代理先转本地 socks5(桥接失败按无代理处理,各 target 会报连接失败)
+      const resolvedProxy = proxyUrl
+        ? await resolveProxyUrl(proxyUrl).catch(() => undefined)
+        : undefined
+      const agent = resolvedProxy ? safeCreateProxyAgent(resolvedProxy) : undefined
 
       const results = await Promise.all(
         (targets || []).map(async (t) => {
@@ -8818,6 +8824,9 @@ app.on('window-all-closed', () => {
 app.on('will-quit', async (event) => {
   // 防止重复处理
   if (isQuitting) return
+
+  // 回收全部 hy2 桥 sing-box 子进程(同步 kill,不阻塞退出)
+  shutdownHy2Bridge()
 
   // 停止主进程池 token 刷新调度器
   stopMainPoolTokenRefresh()

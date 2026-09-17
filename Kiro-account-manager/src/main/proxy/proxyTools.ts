@@ -3,6 +3,7 @@
 
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { safeCreateProxyAgent } from './systemProxy'
+import { resolveProxyUrl } from './hy2Bridge'
 
 /** 代理 URL 是否带用户名密码（Chromium proxyRules 挂不了凭据，这类必须走本地中继） */
 export function proxyUrlHasCredentials(url: string): boolean {
@@ -26,9 +27,16 @@ export interface ExitIpProbe {
   error?: string
 }
 
-/** 经指定代理探测真实出口 IP（ipify）。探测失败即代理不可用，由调用方换下一个。 */
+/** 经指定代理探测真实出口 IP（ipify）。探测失败即代理不可用，由调用方换下一个。
+ *  hy2(Hysteria2)代理在此统一转成本地 socks5(按需起 sing-box)。 */
 export async function probeExitIp(proxyUrl: string, timeoutMs = 12_000): Promise<ExitIpProbe> {
-  const agent = safeCreateProxyAgent(proxyUrl)
+  let resolved = proxyUrl
+  try {
+    resolved = (await resolveProxyUrl(proxyUrl)) || proxyUrl
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+  const agent = safeCreateProxyAgent(resolved)
   if (!agent) return { ok: false, error: '代理协议不支持' }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)

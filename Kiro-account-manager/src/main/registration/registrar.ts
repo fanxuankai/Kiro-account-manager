@@ -18,6 +18,7 @@ import {
 } from './email-service'
 import { CfMailService } from './cf-mail-service'
 import { getSystemProxy, safeCreateProxyAgent } from '../proxy/systemProxy'
+import { isHy2Url, resolveProxyUrl } from '../proxy/hy2Bridge'
 import { redactString } from '../utils/redact'
 
 export type LogFn = (message: string) => void
@@ -143,6 +144,30 @@ export class Registrar {
    * 并把 cfg.proxy 指向本地中继，使后续所有请求自动走链路。
    */
   private async setupProxyChain(): Promise<void> {
+    // hy2(Hysteria2)代理先转本地 socks5——后续 tls-client/undici/代理链都只认 TCP 代理。
+    // 在 early-return 之前做:只有目标代理、没有上游中转时同样需要桥接。
+    if (isHy2Url(this.cfg.proxy)) {
+      try {
+        this.cfg.proxy = (await resolveProxyUrl(this.cfg.proxy)) || this.cfg.proxy
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        // 严格代理模式下桥接失败必须中止,防止回退裸奔真实 IP
+        if (this.cfg.strictProxy) throw new Error(`[ProxyChain] hy2 桥接失败，严格代理模式已中止: ${msg}`)
+        this.log(`[ProxyChain] hy2 桥接失败，回退环境/系统代理: ${msg}`)
+        this.cfg.proxy = ''
+        return
+      }
+    }
+    if (isHy2Url(this.cfg.upstreamProxy)) {
+      try {
+        this.cfg.upstreamProxy = (await resolveProxyUrl(this.cfg.upstreamProxy)) || this.cfg.upstreamProxy
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (this.cfg.strictProxy) throw new Error(`[ProxyChain] hy2 上游桥接失败，严格代理模式已中止: ${msg}`)
+        this.log(`[ProxyChain] hy2 上游桥接失败，忽略上游中转: ${msg}`)
+        this.cfg.upstreamProxy = ''
+      }
+    }
     const target = (this.cfg.proxy || '').trim()
     const upstream = (this.cfg.upstreamProxy || '').trim()
     if (!target || !upstream) return

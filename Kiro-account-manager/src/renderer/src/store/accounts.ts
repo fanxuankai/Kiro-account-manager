@@ -3723,7 +3723,9 @@ function parseProxyUrl(raw: string): ParsedProxy | null {
         port,
         username: u.username ? decodeURIComponent(u.username) : undefined,
         password: u.password ? decodeURIComponent(u.password) : undefined,
-        normalized: buildProxyUrl(protocol, u.hostname, port, u.username, u.password)
+        // hy2 的 sni/insecure/obfs/mport 等关键参数全在 query 里,必须原样保留原始链接,
+        // 不能走 buildProxyUrl 重建(会丢 query);其余协议照旧重建做规范化
+        normalized: protocol === 'hy2' ? trimmed : buildProxyUrl(protocol, u.hostname, port, u.username, u.password)
       }
     } catch {
       return null
@@ -3778,8 +3780,10 @@ function parseProxyUrl(raw: string): ParsedProxy | null {
 
 function normalizeProtocol(raw: string): ProxyProtocol | null {
   const p = raw.toLowerCase()
-  if (p === 'http' || p === 'https' || p === 'socks5' || p === 'socks4') return p
+  if (p === 'http' || p === 'https' || p === 'socks5' || p === 'socks4' || p === 'hy2') return p
   if (p === 'socks') return 'socks5'
+  // Hysteria2 的两种 URI scheme 同义
+  if (p === 'hysteria2') return 'hy2'
   return null
 }
 
@@ -3787,6 +3791,7 @@ function defaultPort(protocol: ProxyProtocol): number {
   switch (protocol) {
     case 'http': return 8080
     case 'https': return 443
+    case 'hy2': return 443
     case 'socks5':
     case 'socks4': return 1080
   }

@@ -36,6 +36,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # hy2(Hysteria2)代理桥内核:按平台下载进 extraResources 一起打包
+      - name: Fetch sing-box kernel
+        run: node scripts/fetch-singbox.mjs
+
       # 只打包不发布:发布统一由 release job 做,避免多 job 各建 Release 互相分裂
       - name: Build (Windows)
         run: npm run build:win -- --publish never
@@ -68,6 +72,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Fetch sing-box kernel
+        run: node scripts/fetch-singbox.mjs
 
       - name: Build (macOS)
         run: npm run build:mac -- --publish never

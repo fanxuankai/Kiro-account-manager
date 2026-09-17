@@ -5,7 +5,7 @@
  * 与 `proxy/kproxy` 不同——那两个是"反代/客户端代理"，这里是"出口代理池"。
  */
 
-export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks4'
+export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks4' | 'hy2'
 
 export type ProxyStatus =
   | 'untested'   // 未测试

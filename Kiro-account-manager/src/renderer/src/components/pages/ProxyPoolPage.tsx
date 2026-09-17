@@ -870,8 +870,8 @@ export function ProxyPoolPage(): React.ReactNode {
               onChange={(e) => setSingleInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddSingle()}
               placeholder={isEn
-                ? 'http://user:pass@host:port  or  host:port  or  socks5://...'
-                : 'http://user:pass@host:port 或 host:port 或 socks5://...'
+                ? 'http://user:pass@host:port or socks5://... or hy2://auth@host:443/?sni=..&insecure=1'
+                : 'http://user:pass@host:port 或 socks5://... 或 hy2://auth@host:443/?sni=..&insecure=1'
               }
               className="font-mono text-xs"
             />
@@ -890,8 +890,8 @@ export function ProxyPoolPage(): React.ReactNode {
             <div className="space-y-2 p-3 bg-muted/30 rounded-lg border border-dashed">
               <Label className="text-xs">
                 {isEn
-                  ? 'One proxy per line. Supports: http(s)://host:port, user:pass@host:port, host:port:user:pass, socks5://...'
-                  : '每行一个代理。支持格式: http(s)://host:port、user:pass@host:port、host:port:user:pass、socks5://...'
+                  ? 'One proxy per line. Supports: http(s)://host:port, user:pass@host:port, host:port:user:pass, socks5://..., hy2://auth@host:443/?sni=..&insecure=1'
+                  : '每行一个代理。支持格式: http(s)://host:port、user:pass@host:port、host:port:user:pass、socks5://...、hy2://auth@host:443/?sni=..&insecure=1'
                 }
               </Label>
               <textarea
@@ -899,7 +899,7 @@ export function ProxyPoolPage(): React.ReactNode {
                 onChange={(e) => setBulkInput(e.target.value)}
                 rows={5}
                 className="w-full px-3 py-2 bg-background border rounded-lg text-xs font-mono resize-none"
-                placeholder={'http://127.0.0.1:7890\nuser:pass@1.2.3.4:8080\nsocks5://example.com:1080'}
+                placeholder={'http://127.0.0.1:7890\nuser:pass@1.2.3.4:8080\nsocks5://example.com:1080\nhy2://auth@hy2.example.com:443/?sni=cdn.example.com&insecure=1'}
               />
               <div className="flex gap-2 justify-end">
                 <Button variant="ghost" size="sm" onClick={() => { setBulkInput(''); setBulkOpen(false) }}>
@@ -1063,6 +1063,7 @@ export function ProxyPoolPage(): React.ReactNode {
                   <option value="https">HTTPS</option>
                   <option value="socks5">SOCKS5</option>
                   <option value="socks4">SOCKS4</option>
+                  <option value="hy2">HY2</option>
                 </select>
               </div>
 

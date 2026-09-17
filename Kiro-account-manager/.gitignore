@@ -10,3 +10,6 @@ out
 
 # 编辑器/插件工作区配置
 .cursor/
+
+# sing-box 内核(hy2 代理桥):CI/开发时 scripts/fetch-singbox.mjs 下载,不入库
+resources/bin/

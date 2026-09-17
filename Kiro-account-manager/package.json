@@ -21,6 +21,7 @@
     "build:mac": "electron-vite build && electron-builder --mac",
     "build:linux": "electron-vite build && electron-builder --linux",
     "test:e2e": "node test/e2e-fullsuite/run.mjs",
+    "fetch:singbox": "node scripts/fetch-singbox.mjs",
     "test:e2e:only": "node test/e2e-fullsuite/run.mjs --only"
   },
   "dependencies": {

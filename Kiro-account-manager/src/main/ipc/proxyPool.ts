@@ -6,11 +6,12 @@
 import { ipcMain } from 'electron'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { safeCreateProxyAgent } from '../proxy/systemProxy'
+import { resolveProxyUrl } from '../proxy/hy2Bridge'
 import { ChainProxyRelay } from '../registration/chainProxy'
 
 /**
  * 通过指定代理 URL 请求测试地址，返回延迟与出口 IP。
- * 支持 http/https/socks4/socks5 协议代理（由 safeCreateProxyAgent 统一创建）。
+ * 支持 http/https/socks4/socks5/hy2 协议代理（hy2 由 hy2Bridge 转成本地 socks5）。
  * 若给了 upstreamProxy，验活也走代理链（与注册流程一致），避免目标代理因来源 IP 不符被误标 dead。
  */
 function registerValidateHandler(): void {
@@ -25,9 +26,15 @@ function registerValidateHandler(): void {
 
     let chainRelay: ChainProxyRelay | null = null
     let proxyForAgent = url
+    try {
+      proxyForAgent = (await resolveProxyUrl(url)) || url
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
     if (upstreamProxy && upstreamProxy.trim()) {
       try {
-        chainRelay = new ChainProxyRelay(upstreamProxy.trim(), url)
+        const upstream = (await resolveProxyUrl(upstreamProxy.trim())) || upstreamProxy.trim()
+        chainRelay = new ChainProxyRelay(upstream, proxyForAgent)
         proxyForAgent = await chainRelay.start()
       } catch (err) {
         return { success: false, error: `代理链启动失败: ${err instanceof Error ? err.message : String(err)}` }
@@ -37,7 +44,7 @@ function registerValidateHandler(): void {
     const agent = safeCreateProxyAgent(proxyForAgent)
     if (!agent) {
       if (chainRelay) await chainRelay.stop()
-      return { success: false, error: '代理协议不支持（仅支持 http/https/socks4/socks5）或 URL 无效' }
+      return { success: false, error: '代理协议不支持（仅支持 http/https/socks4/socks5/hy2）或 URL 无效' }
     }
 
     const controller = new AbortController()
@@ -109,7 +116,10 @@ function registerDiagnoseChainHandler(): void {
     if (!targetUrl) return { success: false, error: 'Missing target proxy URL' }
     if (!upstreamProxy) return { success: false, error: 'Missing upstream proxy URL' }
     try {
-      const relay = new ChainProxyRelay(upstreamProxy, targetUrl)
+      const relay = new ChainProxyRelay(
+        (await resolveProxyUrl(upstreamProxy.trim())) || upstreamProxy.trim(),
+        (await resolveProxyUrl(targetUrl)) || targetUrl
+      )
       const diag = await relay.diagnose(testHost, testPort)
       return { success: true, diagnose: diag }
     } catch (err) {

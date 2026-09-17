@@ -18,6 +18,7 @@ import type {
 import { proxyLogger } from './logger'
 import { getKProxyService } from '../kproxy'
 import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
+import { resolveProxyUrl } from './hy2Bridge'
 import {
   countTokens,
   getModelContextLength,
@@ -136,12 +137,23 @@ function getNetworkAgent(account?: ProxyAccount): Dispatcher | undefined {
  */
 // 走账号代理发请求（无代理配置时退化为全局 fetch）；stripePortal 等模块共用
 export async function fetchWithProxy(url: string, options: RequestInit, account?: ProxyAccount): Promise<Response> {
-  const agent = getNetworkAgent(account)
+  const agent = await getNetworkAgentAsync(account)
   if (agent) {
     proxyLogger.debug('KiroAPI', `Using proxy agent: ${agent.constructor.name}`)
     return await undiciFetch(url, { ...options, dispatcher: agent } as UndiciRequestInit) as unknown as Response
   }
   return await fetch(url, options)
+}
+
+/** getNetworkAgent 的 hy2 感知版:账号绑定的 hy2 代理先转本地 socks5(桥接失败回退全局逻辑) */
+async function getNetworkAgentAsync(account?: ProxyAccount): Promise<Dispatcher | undefined> {
+  if (account?.proxyUrl) {
+    const resolved = await resolveProxyUrl(account.proxyUrl).catch(() => undefined)
+    if (resolved && resolved !== account.proxyUrl) {
+      return getNetworkAgent({ ...account, proxyUrl: resolved })
+    }
+  }
+  return getNetworkAgent(account)
 }
 
 // Kiro API 端点配置
@@ -1299,7 +1311,7 @@ export async function callKiroApiStream(
       console.log(`[KiroAPI]   - Agent mode: ${headers['x-amzn-kiro-agent-mode']}`)
       console.log(`[KiroAPI]   - Payload size: ${payloadStr.length} bytes`)
       
-      const agent = getNetworkAgent(account)
+      const agent = await getNetworkAgentAsync(account)
       if (agent) proxyLogger.debug('KiroAPI', `Stream request via proxy to ${endpoint.name}`)
       const response = agent
         ? await undiciFetch(endpoint.url, { method: 'POST', headers, body: payloadStr, signal, dispatcher: agent } as UndiciRequestInit) as unknown as Response
@@ -1372,7 +1384,7 @@ export async function callKiroApiStream(
           applyPayloadOrigin(retryPayload, endpoint.origin)
           const retryStr = JSON.stringify(retryPayload)
           const retryHeaders = getAuthHeaders(account, endpoint)
-          const retryAgent = getNetworkAgent(account)
+          const retryAgent = await getNetworkAgentAsync(account)
           const retryResponse = retryAgent
             ? await undiciFetch(endpoint.url, { method: 'POST', headers: retryHeaders, body: retryStr, signal, dispatcher: retryAgent } as UndiciRequestInit) as unknown as Response
             : await fetch(endpoint.url, { method: 'POST', headers: retryHeaders, body: retryStr, signal })

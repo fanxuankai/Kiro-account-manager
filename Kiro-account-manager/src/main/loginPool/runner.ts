@@ -27,6 +27,7 @@ import {
   resolveViaProxy
 } from '../proxy/dynamicProxy'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
+import { resolveProxyUrl } from '../proxy/hy2Bridge'
 import { injectProxySession } from './proxySession'
 import {
   applyWindowFingerprint,
@@ -496,14 +497,26 @@ export class LoginPoolRunner {
       const candidate = this.pickProxyCandidate(cfg, remaining)
       if (!candidate) break
       remaining = remaining.filter((c) => c !== candidate)
-      const targetUrl = injectProxySession(candidate.url)
+      // hy2(Hysteria2)代理先转本地 socks5;起不来(内核缺失/节点坏)按"本条不可用"换下一条
+      let targetUrl = injectProxySession(candidate.url)
+      try {
+        targetUrl = (await resolveProxyUrl(targetUrl)) || targetUrl
+      } catch (err) {
+        this.log(
+          'warn',
+          `${entry.username} hy2 代理桥启动失败（${maskProxyUrl(candidate.url)}）：${err instanceof Error ? err.message : String(err)}`
+        )
+        continue
+      }
       // 带凭据或配了上游中转 → 本地中继；无凭据无上游的代理直接作为 proxyRules，零额外跳
       let relay: ChainProxyRelay | null = null
       let proxyRules = targetUrl
       if (upstream || proxyUrlHasCredentials(targetUrl)) {
         try {
+          let upstreamResolved = upstream
+          if (upstream) upstreamResolved = (await resolveProxyUrl(upstream)) || upstream
           // 无上游时把目标代理自身当 upstream（退化为直连代理 + CONNECT 认证）
-          relay = new ChainProxyRelay(upstream || targetUrl, targetUrl, (m) => this.log('warn', m))
+          relay = new ChainProxyRelay(upstreamResolved || targetUrl, targetUrl, (m) => this.log('warn', m))
           proxyRules = await relay.start()
         } catch (err) {
           this.log(
