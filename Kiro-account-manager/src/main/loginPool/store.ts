@@ -21,6 +21,10 @@ export interface PoolEntry {
   failReason?: string
   /** 激活成功后写入的 Kiro 账号邮箱（渲染进程入库回填） */
   kiroEmail?: string
+  /** 本次尝试实际使用的出口 IP（未启用出口代理时为空 = 直连）；换出口重试时覆盖 */
+  exitIp?: string
+  /** 本次尝试的出口来源：api=提链接口 / pool=静态代理池 / direct=直连 */
+  proxyMode?: 'api' | 'pool' | 'direct'
   addedAt: number
   takenAt?: number
   doneAt?: number
@@ -135,7 +139,10 @@ export class LoginPoolStore {
     return next
   }
 
-  patch(id: string, patch: Partial<Pick<PoolEntry, 'state' | 'step' | 'failReason' | 'kiroEmail'>>): void {
+  patch(
+    id: string,
+    patch: Partial<Pick<PoolEntry, 'state' | 'step' | 'failReason' | 'kiroEmail' | 'exitIp' | 'proxyMode'>>
+  ): void {
     const e = this.get(id)
     if (!e) return
     Object.assign(e, patch)

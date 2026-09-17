@@ -305,6 +305,14 @@ function recordExitUse(exitIp: string): void {
   writeJson(dataFile('dynamic-proxy-usage.json'), uses)
 }
 
+/** 出口风控惩罚：给出口 IP 追加一次使用计数。
+ *  用于「出口已确认被目标站点拉黑」的场景（如 GitHub 登录被反滥用拒绝）——
+ *  正常 acquire 时已计 1 次，这里再计 1 次即达 MAX_USES_PER_IP 上限，
+ *  该出口 24h 内不会再被分配，避免下一个号继续撞同一个脏 IP。 */
+export function penalizeExitUse(exitIp: string): void {
+  recordExitUse(exitIp)
+}
+
 // ── 全局共享单例（全应用一份队列 + 一份记忆；配置变化自动重建并继承历史） ──
 
 /** 提链池事件订阅：号池 runner 等消费方把提链动态转发进自己的 UI 日志 */

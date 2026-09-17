@@ -23,6 +23,7 @@ import {
   acquireDynamicExit,
   getSharedDynamicSource,
   onDynamicSourceLog,
+  penalizeExitUse,
   resolveViaProxy
 } from '../proxy/dynamicProxy'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
@@ -114,6 +115,9 @@ export type EntryProxySetup =
       proxyRules: string
       exitIp: string
       latencyMs: number
+      /** 出口来源标识（api=提链端点 URL / pool=代理池条目 URL），风控惩罚定位用 */
+      sourceKey: string
+      mode: 'api' | 'pool'
       /** 释放本地中继等资源；窗口关闭时调用 */
       release: () => Promise<void>
     }
@@ -287,6 +291,12 @@ export class LoginPoolRunner {
   /** 出口代理轮换游标（round_robin / least_used / fastest 按序消费；random 不用） */
   private proxyCursor = 0
 
+  /** 被风控拉黑的静态池代理（URL → 解禁时间戳）：GitHub 登录被拒时短期避让，不再轮到它 */
+  private blockedProxies = new Map<string, number>()
+
+  /** 本批次内已因反滥用失败重试过的条目（每号最多重试一次，防无限循环） */
+  private abuseRetried = new Set<string>()
+
   constructor(store: LoginPoolStore, deps: LoginPoolDeps, events: LoginPoolEvents) {
     this.store = store
     this.deps = deps
@@ -376,7 +386,7 @@ export class LoginPoolRunner {
     this.running = true
     this.emitBatch()
     void (async () => {
-      await this.runEntry(fresh)
+      await this.runEntryWithAbuseRetry(fresh)
       this.running = false
       this.emitBatch()
     })()
@@ -417,7 +427,7 @@ export class LoginPoolRunner {
       if (!entry) break
       this.emitEntry(entry)
       this.log('info', `${entry.username} 开始执行`)
-      await this.runEntry(entry)
+      await this.runEntryWithAbuseRetry(entry)
       if (!this.running) break
       if (this.paused) break
       // 号间冷却（防风控）：期间可暂停/继续，取消则直接结束
@@ -473,9 +483,12 @@ export class LoginPoolRunner {
     const cfg = this.opts.proxy
     if (!cfg?.enabled) return { kind: 'off' }
     if (cfg.mode === 'api') return this.setupEntryProxyFromApi(entry, cfg)
-    let remaining = cfg.entries.filter((c) => !!c.url)
+    let remaining = cfg.entries.filter((c) => !!c.url && !this.isProxyBlocked(c.url))
     if (!remaining.length) {
-      return { kind: 'failed', error: '代理池无可用代理（需启用且验活为可用）' }
+      return {
+        kind: 'failed',
+        error: '代理池无可用代理（需启用且验活为可用；或已被风控拉黑，稍后自动解禁）'
+      }
     }
     const upstream = (cfg.upstreamProxy || '').trim()
     let lastError = ''
@@ -511,6 +524,8 @@ export class LoginPoolRunner {
           proxyRules,
           exitIp: probe.ip,
           latencyMs: probe.ms,
+          sourceKey: candidate.url,
+          mode: 'pool',
           release: async () => {
             if (relay) await relay.stop()
           }
@@ -554,6 +569,8 @@ export class LoginPoolRunner {
         proxyRules: route.proxyRules,
         exitIp: route.exitIp,
         latencyMs: route.latencyMs,
+        sourceKey: route.endpointUrl,
+        mode: 'api',
         release: route.release
       }
     } catch (err) {
@@ -562,6 +579,69 @@ export class LoginPoolRunner {
         error: `${err instanceof Error ? err.message : String(err)}，该号已跳过，未直连`
       }
     }
+  }
+
+  // ── 出口风控止损 ──
+
+  /** 静态池代理是否在风控拉黑期内（过期条目顺手清理） */
+  private isProxyBlocked(url: string): boolean {
+    const until = this.blockedProxies.get(url) || 0
+    if (until <= Date.now()) {
+      if (until) this.blockedProxies.delete(url)
+      return false
+    }
+    return true
+  }
+
+  /** GitHub 反滥用拒绝（"You can't perform that action at this time."）后的出口止损：
+   *  api 出口补计一次 24h 用量（立即用满，本轮不再分配给任何号）；
+   *  pool 条目拉黑 30 分钟；直连无出口可换，由重试前的冷却等待缓解。 */
+  private penalizeEgress(proxy: EntryProxySetup): void {
+    if (proxy.kind !== 'ok') return
+    if (proxy.mode === 'api') {
+      penalizeExitUse(proxy.exitIp)
+      this.log('warn', `出口 ${proxy.exitIp} 被 GitHub 风控拒绝，已计满 24h 用量，本轮不再分配`)
+    } else {
+      this.blockedProxies.set(proxy.sourceKey, Date.now() + 30 * 60_000)
+      this.log(
+        'warn',
+        `代理 ${maskProxyUrl(proxy.sourceKey)}（出口 ${proxy.exitIp}）被 GitHub 风控拒绝，拉黑 30 分钟`
+      )
+    }
+  }
+
+  /** 判定条目是否因 GitHub 反滥用被拒（可换出口重试的失败形态） */
+  private isAbuseBlocked(entryId: string): boolean {
+    const e = this.store.get(entryId)
+    return !!e && e.state === 'failed' && /perform that action/i.test(e.failReason || '')
+  }
+
+  /** 反滥用失败的换出口重试：每号每批次最多一次；等待期可暂停/停止。
+   *  该错误是 IP 级风控（账号本身不受影响），换出口重跑的成功率远高于直接标死。 */
+  private async runEntryWithAbuseRetry(entry: PoolEntry): Promise<void> {
+    await this.runEntry(entry)
+    if (!this.running || this.paused) return
+    if (this.abuseRetried.has(entry.id) || !this.isAbuseBlocked(entry.id)) return
+    this.abuseRetried.add(entry.id)
+    const direct = !this.store.get(entry.id)?.exitIp
+    const waitSec = direct ? 180 : 60 + randInt(0, 30)
+    this.log(
+      'info',
+      `${entry.username} 出口 IP 被 GitHub 风控拒绝（账号未受影响），${waitSec}s 后换出口重试`
+    )
+    for (let left = waitSec; left > 0 && this.running && !this.paused; left--) {
+      this.emitBatch(left)
+      await sleep(1000)
+    }
+    if (!this.running || this.paused) {
+      this.log('info', '重试等待被中断，条目保持失败态（可手动恢复未用再跑）')
+      return
+    }
+    this.store.patch(entry.id, { state: 'running', step: 0, failReason: undefined })
+    this.emitEntry(this.store.get(entry.id)!)
+    this.log('info', `${entry.username} 换出口重试开始`)
+    await this.runEntry(entry)
+    if (this.store.get(entry.id)?.state === 'used') this.abuseRetried.delete(entry.id)
   }
 
   // ── 单号执行：窗口 + 状态机 ──
@@ -579,6 +659,11 @@ export class LoginPoolRunner {
     let releaseProxy: (() => Promise<void>) | null = null
     let entrySession: Session | null = null
     if (proxy.kind === 'ok') releaseProxy = proxy.release
+    // 出口归属落盘：此后这个号无论成败，都能一眼看出走的是哪个出口 IP/来源
+    this.store.patch(entry.id, {
+      exitIp: proxy.kind === 'ok' ? proxy.exitIp : undefined,
+      proxyMode: proxy.kind === 'ok' ? proxy.mode : 'direct'
+    })
 
     let callbackResolve!: (v: { code?: string; error?: string }) => void
     const callbackPromise = new Promise<{ code?: string; error?: string }>((resolve) => {
@@ -727,6 +812,8 @@ export class LoginPoolRunner {
 
     // 各阶段动作去重标记（同页重复探测不重复填/点；半自动时只提醒一次）
     const filled = { credentials: false, otp: false }
+    /** Sign in 只点一次（提交后表单在慢代理下仍会滞留数秒，重复点击徒增风控特征） */
+    let signinClicked = false
     /** cookie 收割结果（KiroLuker 同款路径：授权后凭证种在 app.kiro.dev cookie，不依赖回调跳转） */
     let cookieCred: { accessToken: string; refreshToken: string; profileArn?: string } | null = null
     const notified = { signin: false, verify: false, authorize: false, safeLink: false }
@@ -820,18 +907,26 @@ export class LoginPoolRunner {
             }
           }
           if (detect.error) {
-            this.fail(entry, 'login-failed', `登录被拒：${detect.error}`)
+            const via = proxy.kind === 'ok' ? `（出口 ${proxy.exitIp}）` : '（直连）'
+            this.fail(entry, 'login-failed', `登录被拒：${detect.error}${via}`)
+            this.penalizeEgress(proxy)
             aborted = true
             break
           }
-          // 固定形态：Sign in 由程序点（trusted 事件，实测 GitHub 接受）
-          const clicked = await this.click(win, SIGNIN_SELECTORS)
-          if (clicked) {
-            this.store.patch(entry.id, { step: 3 })
-            this.emitEntry(this.store.get(entry.id)!)
+          // 固定形态：Sign in 由程序点（trusted 事件，实测 GitHub 接受）；
+          // 每个登录页只点一次，点前留一段拟人停顿（输完密码到移鼠标的间隙）
+          if (!signinClicked) {
+            await sleep(randInt(800, 2000))
+            const clicked = await this.click(win, SIGNIN_SELECTORS)
+            if (clicked) {
+              signinClicked = true
+              this.store.patch(entry.id, { step: 3 })
+              this.emitEntry(this.store.get(entry.id)!)
+            }
           }
           continue
         }
+        signinClicked = false // 登录表单不在了（已跳转/换页），下个登录页可重新点
 
         // 2FA 页：本地算 TOTP（窗口尾部等下周期）→ 填 → 点 Verify
         if (detect.otp) {

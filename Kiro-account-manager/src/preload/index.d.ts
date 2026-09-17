@@ -503,6 +503,8 @@ interface KiroApi {
       step: number
       failReason?: string
       kiroEmail?: string
+      exitIp?: string
+      proxyMode?: 'api' | 'pool' | 'direct'
       addedAt: number
       takenAt?: number
       doneAt?: number
@@ -559,6 +561,8 @@ interface KiroApi {
       step: number
       failReason?: string
       kiroEmail?: string
+      exitIp?: string
+      proxyMode?: 'api' | 'pool' | 'direct'
       addedAt: number
       takenAt?: number
       doneAt?: number
