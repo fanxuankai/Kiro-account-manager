@@ -655,37 +655,10 @@ body {
   scrollbar-color: rgba(255, 255, 255, 0.20) transparent;
 }
 
-/* 流光边框动画 */
-@keyframes border-flow {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-@property --angle {
-  syntax: '<angle>';
-  initial-value: 0deg;
-  inherits: false;
-}
-
-@keyframes rotate-gradient {
-  0% {
-    --angle: 0deg;
-  }
-  100% {
-    --angle: 360deg;
-  }
-}
-
 /* 流光边框 - 用 CSS mask 技术，只在 2px 边框圈上显示 conic 渐变
  * 卡片本体（content-box）完全保持 glass-card 的半透明磨砂效果
- * 不再污染卡片内部 */
+ * 不再污染卡片内部
+ * 注：原为 --angle 旋转动画，每帧强制整卡重绘（烧 GPU），已改为静态渐变 */
 .active-glow-border {
   position: relative;
   border-color: transparent !important; /* 覆盖 glass-card 的 1px 边框 */
@@ -698,7 +671,7 @@ body {
   padding: 2px; /* 这就是边框宽度 */
   border-radius: inherit; /* 跟随卡片圆角 (rounded-2xl = 24px) */
   background: conic-gradient(
-    from var(--angle),
+    from 140deg,
     var(--color-primary),
     #f472b6,
     #c084fc,
@@ -716,7 +689,6 @@ body {
     linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  animation: rotate-gradient 3s linear infinite;
   pointer-events: none;
   z-index: 1; /* 浮在玻璃背景上方，确保始终可见 */
 }
@@ -877,18 +849,8 @@ body {
 }
 
 /* ==================== Ambient light 背景（主壳呼吸感） ==================== */
-
-@keyframes ambient-float-a {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(40px, -30px) scale(1.1); }
-  66%      { transform: translate(-30px, 40px) scale(0.95); }
-}
-
-@keyframes ambient-float-b {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33%      { transform: translate(-50px, 30px) scale(1.05); }
-  66%      { transform: translate(30px, -40px) scale(0.9); }
-}
+/* 注：原为光斑无限漂浮动画（22s/26s infinite），大面积 blur 层持续移动重采样
+ * 是 GPU 发热/耗电主因，已改为静态光斑（静态模糊只栅格化一次，无持续开销） */
 
 .ambient-bg {
   position: relative;
@@ -911,7 +873,6 @@ body {
   background: radial-gradient(circle, color-mix(in srgb, var(--gradient-from) 38%, transparent) 0%, transparent 70%);
   top: -240px;
   left: -160px;
-  animation: ambient-float-a 22s ease-in-out infinite;
 }
 .ambient-bg::after {
   width: 560px;
@@ -920,8 +881,6 @@ body {
   background: radial-gradient(circle, color-mix(in srgb, var(--gradient-to) 34%, transparent) 0%, transparent 70%);
   bottom: -240px;
   right: -160px;
-  animation: ambient-float-b 26s ease-in-out infinite;
-  animation-delay: -8s;
 }
 .dark .ambient-bg::before,
 .dark .ambient-bg::after {
@@ -935,16 +894,9 @@ body {
 }
 
 /* ==================== 呼吸辉光（用于强调元素） ==================== */
-@keyframes breathe-glow {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(91, 140, 255, 0);
-  }
-  50% {
-    box-shadow: 0 0 0 6px rgba(91, 140, 255, 0.15), 0 0 24px rgba(91, 140, 255, 0.25);
-  }
-}
+/* 注：原为 box-shadow 呼吸动画（每帧重绘烧 GPU），已改为静态辉光 */
 .breathe-glow {
-  animation: breathe-glow 3s ease-in-out infinite;
+  box-shadow: 0 0 0 6px rgba(91, 140, 255, 0.15), 0 0 24px rgba(91, 140, 255, 0.25);
 }
 
 /* ==================== Page Hero（统一的页面顶部视觉容器） ==================== */
