@@ -1,7 +1,7 @@
 # 打包 Windows(NSIS) + macOS(dmg/zip 双架构),产物统一由 release job 汇总建草稿
 # 触发:Actions → Build App → Run workflow,或 gh workflow run build-app.yml
 # 草稿标签取 package.json 版本(v{version});确认后手动 Publish,在线更新依赖正式 Release
-name: Build App
+name: Build & Release
 
 on:
   workflow_dispatch:
