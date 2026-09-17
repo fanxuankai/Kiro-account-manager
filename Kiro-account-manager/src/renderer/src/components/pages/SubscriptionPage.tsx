@@ -4,11 +4,12 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import QRCode from 'qrcode'
 import { useAccountsStore } from '@/store/accounts'
 import { Button, Card, CardContent, Switch } from '../ui'
-import { switchAccountToFree } from '../accounts/_helpers'
+import { switchAccountToFree, formatPaymentLinkText, isPendingPayment } from '../accounts/_helpers'
 import {
   CreditCard,
   ExternalLink,
   Copy,
+  CopyPlus,
   Download,
   Loader2,
   CheckCircle,
@@ -29,6 +30,7 @@ import {
   QrCode as QrCodeIcon
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { Account } from '@/types/account'
 import { useTranslation } from '@/hooks/useTranslation'
 
 /** 批量操作中账号之间的随机间隔（100–150ms），降低对 Kiro/Stripe 的请求密度 */
@@ -252,6 +254,31 @@ export function SubscriptionPage() {
     return () => { _linksNotify = null }
   }, [])
 
+  // 启动恢复：链接列表是会话内存态，重启即丢；把库中仍为 Free 且带 paymentLink 的账号
+  // 回填进列表（超 15 分钟直接标"过期"，可手动重生成）。已在列表中的账号不重复添加
+  useEffect(() => {
+    setLinks((prev) => {
+      const existing = new Set(prev.map((l) => l.accountId))
+      const restored: SubscriptionLink[] = []
+      for (const acc of useAccountsStore.getState().accounts.values()) {
+        const sub = acc.subscription
+        if (!sub?.paymentLink || existing.has(acc.id) || !isPendingPayment(acc)) continue
+        const stale = sub.paymentLinkAt !== undefined && Date.now() - sub.paymentLinkAt > 15 * 60 * 1000
+        restored.push({
+          accountId: acc.id,
+          email: acc.email || acc.id,
+          status: stale ? 'expired' : 'success',
+          url: sub.paymentLink,
+          generatedAt: sub.paymentLinkAt,
+          planName: sub.paymentLinkPlan
+        })
+      }
+      return restored.length ? [...prev, ...restored] : prev
+    })
+    // 仅挂载时执行一次；setLinks 是组件内稳定包装
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // 超额列表自动滚动到底部
   useEffect(() => {
     const el = overageListRef.current
@@ -468,8 +495,15 @@ export function SubscriptionPage() {
                 : link
             )
           )
-          // 回写"待付款"标记：账号管理页徽章与筛选据此点亮（升级成功后订阅变 Pro 自动熄灭）
-          updateAccount(acc.id, { subscription: { ...acc.subscription, paymentLinkAt: Date.now() } })
+          // 回写"待付款"标记：链接 URL 与套餐名一并落库（弹窗展示/复制、重启后恢复列表都靠它）
+          updateAccount(acc.id, {
+            subscription: {
+              ...acc.subscription,
+              paymentLinkAt: Date.now(),
+              paymentLink: tokenResult.url,
+              paymentLinkPlan: planLabel
+            }
+          })
         } else {
           setLinks(prev => prev.map((link) =>
             link.accountId === acc.id ? { ...link, status: 'error', error: tokenResult.error || 'Failed to get URL' } : link
@@ -567,28 +601,61 @@ export function SubscriptionPage() {
     setQuickPickCursor(start + picked.length)
   }
 
-  // 批量导入外部链接：解析后以 success 状态追加进列表（按 url 去重），即可与现有链接一样多选/打开/导出
+  // 批量导入外部链接：解析后以 success 状态追加进列表（按 url 去重）；
+  // 邮箱能对上库内账号的链接会绑回真实账号并回写 paymentLink（徽章点亮 + 重启可恢复）
   const handleImportLinks = (text: string): number => {
     const parsed = parseImportedLinks(text)
     if (parsed.length === 0) return 0
     const existingUrls = new Set(links.map(l => l.url).filter(Boolean) as string[])
     const now = Date.now()
+    // 邮箱（小写）→ 账号 映射
+    const byEmail = new Map<string, Account>()
+    for (const acc of accounts.values()) {
+      if (acc.email) byEmail.set(acc.email.toLowerCase(), acc)
+    }
     const added: SubscriptionLink[] = []
     let seq = links.length
     for (const { email, url } of parsed) {
       if (existingUrls.has(url)) continue
       existingUrls.add(url)
-      seq++
-      added.push({
-        accountId: `import-${crypto.randomUUID()}`,
-        email: email || (isEn ? `(Imported #${seq})` : `(导入 #${seq})`),
-        status: 'success',
-        url,
-        generatedAt: now,
-        validated: false
+      const acc = email ? byEmail.get(email.toLowerCase()) : undefined
+      if (acc) {
+        // 回写落库：同账号再导入 = 换新链接，paymentLink 覆盖为最新
+        updateAccount(acc.id, {
+          subscription: { ...acc.subscription, paymentLink: url, paymentLinkAt: now }
+        })
+        added.push({
+          accountId: acc.id,
+          email: acc.email || email,
+          status: 'success',
+          url,
+          generatedAt: now,
+          validated: false
+        })
+      } else {
+        seq++
+        added.push({
+          accountId: `import-${crypto.randomUUID()}`,
+          email: email || (isEn ? `(Imported #${seq})` : `(导入 #${seq})`),
+          status: 'success',
+          url,
+          generatedAt: now,
+          validated: false
+        })
+      }
+    }
+    if (added.length > 0) {
+      setLinks(prev => {
+        const next = [...prev]
+        for (const row of added) {
+          const i = next.findIndex(l => l.accountId === row.accountId)
+          // 同账号已有一行时整行替换（换新链接），否则追加
+          if (i >= 0) next[i] = row
+          else next.push(row)
+        }
+        return next
       })
     }
-    if (added.length > 0) setLinks(prev => [...prev, ...added])
     return added.length
   }
 
@@ -678,9 +745,16 @@ export function SubscriptionPage() {
         acc.credentials?.authMethod,
         acc.id
       )
-      // 刷新成功 = 仍在待付款流程，更新账号管理的"待付款"标记时间
+      // 刷新成功 = 仍在待付款流程，链接 URL 与套餐名一并落库
       if (r.success && r.url) {
-        updateAccount(accountId, { subscription: { ...acc.subscription, paymentLinkAt: Date.now() } })
+        updateAccount(accountId, {
+          subscription: {
+            ...acc.subscription,
+            paymentLinkAt: Date.now(),
+            paymentLink: r.url,
+            paymentLinkPlan: planLabel
+          }
+        })
       }
       setLinks((prev) =>
         prev.map((l) =>
@@ -781,26 +855,30 @@ export function SubscriptionPage() {
     )
   }
 
-  // 组装复制文本：邮箱 + 说明 + 链接一起复制，方便日后按邮箱检索发出去的聊天记录
-  const formatLinkText = (link: SubscriptionLink): string => {
-    const plan = link.planName || 'Kiro'
-    const note = isEn
-      ? `${plan} subscription upgrade link, valid for 15 minutes, please complete payment soon`
-      : `${plan} 订阅升级链接，15 分钟内有效，请尽快完成支付`
-    return isEn
-      ? `Email: ${link.email}\nNote: ${note}\nLink: ${link.url}`
-      : `邮箱：${link.email}\n说明：${note}\n链接：${link.url}`
+  // 组装复制文本：邮箱 + 说明 + 链接一起复制（与账号管理"待付款"弹窗共用格式）
+  const formatLinkText = (link: SubscriptionLink): string =>
+    formatPaymentLinkText(link.email, link.url || '', link.planName, isEn)
+
+  // 复制单个链接（仅 URL）
+  const handleCopyUrl = async (url: string): Promise<void> => {
+    await navigator.clipboard.writeText(url)
   }
 
-  // 复制单个链接（连同邮箱与说明）
+  // 复制单个链接的完整信息（邮箱 + 说明 + 链接）
   const handleCopyLink = async (link: SubscriptionLink): Promise<void> => {
     await navigator.clipboard.writeText(formatLinkText(link))
   }
 
-  // 导出链接（批量复制同样带邮箱与说明，条目间空行分隔）
+  // 导出链接（批量复制纯 URL，每行一条）
   const handleExport = async (mode: 'selected' | 'all'): Promise<void> => {
     const targetLinks = getTargetLinks(mode)
-    const text = targetLinks.map(formatLinkText).join('\n\n')
+    const text = targetLinks.map((l) => l.url).join('\n')
+    await navigator.clipboard.writeText(text)
+  }
+
+  // 带说明批量导出：全部成功链接的「邮箱+说明+链接」三行文本，条目间空行分隔
+  const handleExportFull = async (): Promise<void> => {
+    const text = getTargetLinks('all').map(formatLinkText).join('\n\n')
     await navigator.clipboard.writeText(text)
   }
 
@@ -1824,11 +1902,7 @@ export function SubscriptionPage() {
                     size="sm"
                     onClick={() => handleExport('selected')}
                     disabled={selectedCount === 0}
-                    title={
-                      isEn
-                        ? 'Copy selected links with email and note'
-                        : '复制选中链接（带邮箱与说明）'
-                    }
+                    title={isEn ? 'Copy selected links (URL only)' : '复制选中链接（仅 URL）'}
                   >
                     <Copy className="h-4 w-4 mr-1" />
                     {isEn ? `Export Selected (${selectedCount})` : `导出选中 (${selectedCount})`}
@@ -1838,14 +1912,24 @@ export function SubscriptionPage() {
                     variant="outline"
                     size="sm"
                     onClick={() => handleExport('all')}
-                    title={
-                      isEn
-                        ? 'Copy all links with email and note'
-                        : '复制全部链接（带邮箱与说明）'
-                    }
+                    title={isEn ? 'Copy all links (URL only)' : '复制全部链接（仅 URL）'}
                   >
                     <Download className="h-4 w-4 mr-1" />
                     {isEn ? `Export All (${successCount})` : `全部导出 (${successCount})`}
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleExportFull()}
+                    title={
+                      isEn
+                        ? 'Copy all links with email and note (three-line format)'
+                        : '复制全部链接的「邮箱+说明+链接」三行文本，便于按邮箱检索聊天记录'
+                    }
+                  >
+                    <CopyPlus className="h-4 w-4 mr-1" />
+                    {isEn ? `Export All + Note (${successCount})` : `全部导出（带说明）`}
                   </Button>
                 </>
               )}
@@ -1984,11 +2068,18 @@ export function SubscriptionPage() {
                               <QrCodeIcon className="h-3.5 w-3.5" />
                             </button>
                             <button
+                              onClick={() => handleCopyUrl(link.url!)}
+                              className="p-1 rounded hover:bg-muted"
+                              title={isEn ? 'Copy link only' : '复制链接（仅 URL）'}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                            <button
                               onClick={() => handleCopyLink(link)}
                               className="p-1 rounded hover:bg-muted"
                               title={isEn ? 'Copy email + note + link' : '复制邮箱+说明+链接'}
                             >
-                              <Copy className="h-3.5 w-3.5" />
+                              <CopyPlus className="h-3.5 w-3.5" />
                             </button>
                           </>
                         )}

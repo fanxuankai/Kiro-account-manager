@@ -42,6 +42,7 @@ import {
   formatCardTooltip,
   isPendingPayment
 } from './_helpers'
+import { PaymentLinkDialog } from './PaymentLinkDialog'
 
 interface AccountListRowProps {
   account: Account
@@ -93,6 +94,8 @@ function AccountListRowComponent({
   const [isOpeningPortal, setIsOpeningPortal] = useState(false)
   const [isOpeningPortalSite, setIsOpeningPortalSite] = useState(false)
   const [emailCopied, setEmailCopied] = useState(false)
+  // 待付款支付链接弹窗（徽章点开）
+  const [showPayLinkDialog, setShowPayLinkDialog] = useState(false)
 
   // 封禁判定
   const isUnauthorized = isBannedError(account.lastError)
@@ -345,6 +348,7 @@ function AccountListRowComponent({
   // ============ 渲染 ============
 
   return (
+    <>
     <div
       className={cn(
         'group relative flex items-center gap-3 pl-3 pr-3 py-2.5 rounded-xl border bg-solid-card transition-all duration-300 cursor-pointer overflow-hidden',
@@ -489,14 +493,20 @@ function AccountListRowComponent({
           {account.idp}
         </Badge>
 
-        {/* 待付款：已获取升级支付链接但账号仍为 Free（升级成功自动消失） */}
+        {/* 待付款：已获取升级支付链接但账号仍为 Free（升级成功自动消失）；点击查看链接弹窗 */}
         {isPendingPayment(account) && (
           <Badge
             variant="outline"
-            className="text-[10px] h-5 px-1.5 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 min-w-[64px] flex items-center justify-center gap-1"
-            title={isEn
-              ? `Payment link fetched at ${new Date(account.subscription.paymentLinkAt!).toLocaleString()} but still on Free plan`
-              : `支付链接获取于 ${new Date(account.subscription.paymentLinkAt!).toLocaleString()}，账号仍为 Free（未升级 = 未付款）`}
+            className={cn(
+              'text-[10px] h-5 px-1.5 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 min-w-[64px] flex items-center justify-center gap-1 cursor-pointer transition-all hover:opacity-80 hover:scale-105',
+              account.subscription.paymentLink && 'hover:border-amber-500/70'
+            )}
+            onClick={(e) => { e.stopPropagation(); setShowPayLinkDialog(true) }}
+            title={account.subscription.paymentLink
+              ? (isEn ? 'Click to view payment link' : '点击查看支付链接（二维码/复制）')
+              : (isEn
+                ? `Payment link fetched at ${new Date(account.subscription.paymentLinkAt!).toLocaleString()} but still on Free plan`
+                : `支付链接获取于 ${new Date(account.subscription.paymentLinkAt!).toLocaleString()}，账号仍为 Free（未升级 = 未付款）`)}
           >
             <Wallet className="w-3 h-3 shrink-0" />
             {isEn ? 'Pending' : '待付款'}
@@ -808,6 +818,11 @@ function AccountListRowComponent({
         <div className="banned-badge" title={isEn ? 'Banned' : '已封禁'} />
       )}
     </div>
+    {/* 待付款支付链接弹窗（徽章点开；二维码/三行复制/无痕打开/编辑/清空） */}
+    {showPayLinkDialog && (
+      <PaymentLinkDialog account={account} onClose={() => setShowPayLinkDialog(false)} isEn={isEn} />
+    )}
+    </>
   )
 }
 

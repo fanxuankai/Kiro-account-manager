@@ -156,6 +156,26 @@ export function isPendingPayment(
   return type.includes('FREE') || title.includes('FREE') || (!type && !title)
 }
 
+// ============ 支付链接复制文本（邮箱 + 说明 + 链接三行） ============
+
+// 订阅页单条/批量复制与账号管理"待付款"弹窗共用：
+// 把邮箱、说明（套餐名 + 15 分钟有效期提示）、链接拼成三行文本，
+// 方便日后按邮箱检索发出去的聊天记录
+export function formatPaymentLinkText(
+  email: string,
+  url: string,
+  planName: string | undefined,
+  isEn: boolean
+): string {
+  const plan = planName || 'Kiro'
+  const note = isEn
+    ? `${plan} subscription upgrade link, valid for 15 minutes, please complete payment soon`
+    : `${plan} 订阅升级链接，15 分钟内有效，请尽快完成支付`
+  return isEn
+    ? `Email: ${email}\nNote: ${note}\nLink: ${url}`
+    : `邮箱：${email}\n说明：${note}\n链接：${url}`
+}
+
 // ============ 状态文本 ============
 
 export const StatusLabelsZh: Record<string, string> = {

@@ -90,6 +90,8 @@ export interface AccountSubscription {
   latestInvoiceAt?: number // 最近一张发票时间
   latestInvoiceUrl?: string // 最近一张发票的官方收据页链接（可直接打开）
   paymentLinkAt?: number // 最近一次获取升级支付链接的时间（"待付款"标记；升级成功后保留作历史，显示/筛选只在账号仍为 Free 时命中）
+  paymentLink?: string // 最近一次获取的升级支付链接 URL（升级成功后清空；仅 Free 期间有意义）
+  paymentLinkPlan?: string // 提链时所选套餐的友好名（复制链接时作为"说明"带出）
 }
 
 /**

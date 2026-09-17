@@ -49,6 +49,17 @@ function tokenRefreshLeadMs(intervalMin: number): number {
   return Math.max(intervalMin * 2 * 60 * 1000, TOKEN_REFRESH_MIN_LEAD_MS)
 }
 
+/** 升级成功（订阅不再是 Free，判定口径与 _helpers.isPendingPayment 相反）即视为已付款：
+ *  清掉支付链接与提链套餐名，避免残留过期脏数据；paymentLinkAt 保留作历史标记。
+ *  三条订阅回写路径（单检/后台刷新/后台检查）统一走这里。 */
+function clearPaymentLinkIfPaid<T extends AccountSubscription>(sub: T): T {
+  if (!sub.paymentLink) return sub
+  const type = (sub.type || '').toUpperCase()
+  const title = (sub.title || '').toUpperCase()
+  const stillFree = type.includes('FREE') || title.includes('FREE') || (!type && !title)
+  return stillFree ? sub : { ...sub, paymentLink: undefined, paymentLinkPlan: undefined }
+}
+
 // 持久化防抖：合并连续 mutation 为单次写盘，避免后台刷新风暴时 IPC + IO 风暴
 const SAVE_DEBOUNCE_MS = 500
 /** 防抖最大延迟：连续 mutation 时也最迟在此时间内落盘一次，防止风暴下数据长时间不入磁盘 */
@@ -1628,10 +1639,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
             // 合并订阅信息
             const apiSub = result.data!.subscription
-            const mergedSubscription = apiSub ? {
-              ...acc.subscription,
-              ...apiSub
-            } : acc.subscription
+            const mergedSubscription = clearPaymentLinkIfPaid(
+              (apiSub ? { ...acc.subscription, ...apiSub } : acc.subscription) as AccountSubscription
+            )
 
             // 转换 IDP 类型（保持原值优先，只有明确匹配时才更新）
             const apiIdp = result.data!.idp
@@ -2824,7 +2834,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             lastUpdated: now
           }
         })() : account.usage,
-        subscription: refreshData?.subscription ? {
+        subscription: refreshData?.subscription ? clearPaymentLinkIfPaid({
           ...account.subscription,
           type: (refreshData.subscription.type as SubscriptionType) || account.subscription.type,
           title: refreshData.subscription.title || account.subscription.title,
@@ -2833,7 +2843,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           overageCapability: refreshData.subscription.overageCapability ?? account.subscription.overageCapability,
           upgradeCapability: refreshData.subscription.upgradeCapability ?? account.subscription.upgradeCapability,
           managementTarget: refreshData.subscription.subscriptionManagementTarget ?? account.subscription.managementTarget
-        } : account.subscription,
+        }) : account.subscription,
         email: refreshData?.userInfo?.email || account.email,
         userId: refreshData?.userInfo?.userId || account.userId,
         status: newStatus,
@@ -2933,7 +2943,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             lastUpdated: now
           }
         })() : account.usage,
-        subscription: checkData?.subscription ? {
+        subscription: checkData?.subscription ? clearPaymentLinkIfPaid({
           ...account.subscription,
           type: (checkData.subscription.type as SubscriptionType) ?? account.subscription.type,
           title: checkData.subscription.title ?? account.subscription.title,
@@ -2942,7 +2952,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           overageCapability: checkData.subscription.overageCapability ?? account.subscription.overageCapability,
           upgradeCapability: checkData.subscription.upgradeCapability ?? account.subscription.upgradeCapability,
           managementTarget: checkData.subscription.subscriptionManagementTarget ?? account.subscription.managementTarget
-        } : account.subscription,
+        }) : account.subscription,
         email: checkData?.userInfo?.email || account.email,
         userId: checkData?.userInfo?.userId || account.userId,
         status: newStatus,

@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { switchAccountToFree, isFreeTierAccount, formatCardLabel, formatCardTooltip, isPendingPayment } from './_helpers'
+import { PaymentLinkDialog } from './PaymentLinkDialog'
 
 // 解析 ARGB 颜色转换为 CSS rgba
 function toRgba(argbColor: string): string {
@@ -470,6 +471,8 @@ export const AccountCard = memo(function AccountCard({
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null)
   // 订阅成功提示
   const [subscriptionSuccess, setSubscriptionSuccess] = useState<string | null>(null)
+  // 待付款支付链接弹窗（徽章点开）
+  const [showPayLinkDialog, setShowPayLinkDialog] = useState(false)
 
   // 点击订阅标签打开订阅管理
   const handleSubscriptionClick = async (e: React.MouseEvent): Promise<void> => {
@@ -507,6 +510,16 @@ export const AccountCard = memo(function AccountCard({
     try {
       const result = await window.api.accountGetSubscriptionUrl(account.credentials.accessToken, planName, account.credentials?.region, account.profileArn, account.machineId, account.credentials?.provider || account.idp, account.credentials?.authMethod, account.id)
       if (result.success && result.url) {
+        // 链接落库：账号管理"待付款"弹窗展示、订阅页重启恢复都靠这三个字段
+        const planLabel = subscriptionPlans.find(p => p.qSubscriptionType === planName)?.description?.title || planName
+        updateAccount(account.id, {
+          subscription: {
+            ...account.subscription,
+            paymentLinkAt: Date.now(),
+            paymentLink: result.url,
+            paymentLinkPlan: planLabel
+          }
+        })
         // 自动复制链接到剪贴板
         await navigator.clipboard.writeText(result.url)
         // 显示复制成功提示
@@ -704,14 +717,20 @@ export const AccountCard = memo(function AccountCard({
             <Badge variant="outline" className="text-[10px] h-5 px-2 text-muted-foreground font-normal border-muted-foreground/30 bg-muted/30">
                 {account.idp}
             </Badge>
-            {/* 待付款：已获取升级支付链接但账号仍为 Free（升级成功自动消失） */}
+            {/* 待付款：已获取升级支付链接但账号仍为 Free（升级成功自动消失）；点击查看链接弹窗 */}
             {isPendingPayment(account) && (
               <Badge
                 variant="outline"
-                className="text-[10px] h-5 px-2 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 flex items-center gap-1"
-                title={isEn
-                  ? `Payment link fetched at ${new Date(account.subscription.paymentLinkAt!).toLocaleString()} but still on Free plan`
-                  : `支付链接获取于 ${new Date(account.subscription.paymentLinkAt!).toLocaleString()}，账号仍为 Free（未升级 = 未付款）`}
+                className={cn(
+                  'text-[10px] h-5 px-2 font-medium border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 flex items-center gap-1 cursor-pointer transition-all hover:opacity-80 hover:scale-105',
+                  account.subscription.paymentLink && 'hover:border-amber-500/70'
+                )}
+                onClick={(e) => { e.stopPropagation(); setShowPayLinkDialog(true) }}
+                title={account.subscription.paymentLink
+                  ? (isEn ? 'Click to view payment link' : '点击查看支付链接（二维码/复制）')
+                  : (isEn
+                    ? `Payment link fetched at ${new Date(account.subscription.paymentLinkAt!).toLocaleString()} but still on Free plan`
+                    : `支付链接获取于 ${new Date(account.subscription.paymentLinkAt!).toLocaleString()}，账号仍为 Free（未升级 = 未付款）`)}
               >
                 <Wallet className="w-3 h-3" />
                 {isEn ? 'Pending Pay' : '待付款'}
@@ -1218,6 +1237,12 @@ export const AccountCard = memo(function AccountCard({
             </div>
           </div>
         </div>,
+        document.body
+      )}
+
+      {/* 待付款支付链接弹窗（徽章点开；二维码/三行复制/无痕打开/编辑/清空） */}
+      {showPayLinkDialog && createPortal(
+        <PaymentLinkDialog account={account} onClose={() => setShowPayLinkDialog(false)} isEn={isEn} />,
         document.body
       )}
     </Card>
