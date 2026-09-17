@@ -27,6 +27,12 @@ import {
 } from '../proxy/dynamicProxy'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
 import { injectProxySession } from './proxySession'
+import {
+  applyWindowFingerprint,
+  describeFingerprint,
+  hardenSessionHeaders,
+  resolveFingerprintEnv
+} from './fingerprint'
 
 /** 页面探测结果（PROBE_JS 的返回结构） */
 interface PageDetect {
@@ -51,7 +57,13 @@ export interface LoginPoolDeps {
     code: string,
     codeVerifier: string
   ) => Promise<
-    | { success: true; accessToken: string; refreshToken: string; profileArn?: string; expiresIn?: number }
+    | {
+        success: true
+        accessToken: string
+        refreshToken: string
+        profileArn?: string
+        expiresIn?: number
+      }
     | { success: false; error: string }
   >
 }
@@ -119,7 +131,12 @@ export interface ResultPayload {
 export interface LoginPoolEvents {
   onEntry: (entry: PoolEntryView) => void
   onLog: (line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }) => void
-  onBatch: (state: { running: boolean; paused: boolean; cooldownSec: number; unused: number }) => void
+  onBatch: (state: {
+    running: boolean
+    paused: boolean
+    cooldownSec: number
+    unused: number
+  }) => void
   onResult: (payload: ResultPayload) => void
 }
 
@@ -229,11 +246,6 @@ const CLICK_RECT_JS = `((rulesJson) => {
 
 const SIGNIN_SELECTORS = ['input[name="commit"]', 'button[type="submit"]']
 
-const CHROME_MAJOR = process.versions.chrome.split('.')[0] || '134'
-const CHROME_UA =
-  `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) ` +
-  `Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`
-
 const PROBE_INTERVAL_MS = 1000
 const STEP_TIMEOUT_MS = 180_000
 /** 单号最多连试几个出口代理后放弃（每次尝试都经 ipify 真实探测，失败即弃） */
@@ -253,7 +265,9 @@ function randInt(a: number, b: number): number {
 }
 function nowTime(): string {
   const d = new Date()
-  return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, '0')).join(':')
+  return [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map((n) => String(n).padStart(2, '0'))
+    .join(':')
 }
 
 // ─── 执行器 ──────────────────────────────────────────────────────────
@@ -284,7 +298,9 @@ export class LoginPoolRunner {
     protocol.handle('kiro', (request) => {
       const run = this.activeRun
       if (run) run.dispatch(request.url)
-      return new Response(KIRO_LANDING_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+      return new Response(KIRO_LANDING_HTML, {
+        headers: { 'content-type': 'text/html; charset=utf-8' }
+      })
     })
     // 全局提链池（与订阅取链接共用一份队列与记忆）的动态转发进号池 UI 日志
     onDynamicSourceLog((m) => this.log('info', `[提链] ${m}`))
@@ -418,7 +434,10 @@ export class LoginPoolRunner {
       }
     }
     if (this.store.countUnused() === 0 && !this.paused) {
-      this.log('ok', `批次完成：池内无未用账号（成功 ${this.store.listViews().filter((e) => e.state === 'used').length} · 失败 ${this.store.listViews().filter((e) => e.state === 'failed').length}）`)
+      this.log(
+        'ok',
+        `批次完成：池内无未用账号（成功 ${this.store.listViews().filter((e) => e.state === 'used').length} · 失败 ${this.store.listViews().filter((e) => e.state === 'failed').length}）`
+      )
     }
     this.running = false
     this.emitBatch()
@@ -594,9 +613,14 @@ export class LoginPoolRunner {
       }
     }
 
+    // 指纹环境先于开窗解析：时区/语言要跟出口 IP 的归属地一致（直连则用本机值）。
+    // geo 查询最坏 5s×2 服务，相对整号数分钟的耗时可以接受
+    const fp = await resolveFingerprintEnv(proxy.kind === 'ok' ? proxy.exitIp : null)
+
     // 先显式建会话再开窗：setProxy 必须在 loadURL 之前完成，保证 GitHub 页面
-    // 第一个请求就走池出口；partition → session 对象对 BrowserWindow 等价
-    const ses = session.fromPartition(partition)
+    // 第一个请求就走池出口；partition 名不带 persist: 前缀 = 内存会话不落盘，
+    // 再显式禁 HTTP 缓存双保险（与 KiroLuker 的 browser-web partition 一致）
+    const ses = session.fromPartition(partition, { cache: false })
     entrySession = ses
     if (proxy.kind === 'ok') {
       await ses.setProxy({
@@ -605,6 +629,8 @@ export class LoginPoolRunner {
         proxyBypassRules: '<-loopback>'
       })
     }
+    // 请求头级指纹兜底（子资源、popup 请求同样生效），须在 loadURL 之前挂好
+    hardenSessionHeaders(ses, fp)
 
     const win = new BrowserWindow({
       width: 1080,
@@ -619,7 +645,14 @@ export class LoginPoolRunner {
       }
     })
     this.win = win
-    win.webContents.setUserAgent(CHROME_UA)
+    // 页面级指纹对齐（CDP：navigator.language、Intl 时区、client hints、WebRTC）。
+    // 失败不阻断登录，退回请求头级的旧行为
+    const fpApplied = await applyWindowFingerprint(win, fp)
+    if (fpApplied.ok) {
+      this.log('info', `${entry.username} 指纹已对齐：${describeFingerprint(fp)}`)
+    } else {
+      this.log('warn', `${entry.username} 页面级指纹对齐未生效（${fpApplied.error}），退回请求头级`)
+    }
 
     const handleCallbackUrl = (url: string, from: string): void => {
       if (callbackSeen) return
@@ -686,7 +719,10 @@ export class LoginPoolRunner {
       // 等不到回调再按超时处理
     })
     win.webContents.on('render-process-gone', (_e, details) => {
-      this.log('err', `页面渲染进程异常退出：${details.reason}${details.exitCode !== undefined ? ` (code ${details.exitCode})` : ''}`)
+      this.log(
+        'err',
+        `页面渲染进程异常退出：${details.reason}${details.exitCode !== undefined ? ` (code ${details.exitCode})` : ''}`
+      )
     })
 
     // 各阶段动作去重标记（同页重复探测不重复填/点；半自动时只提醒一次）
@@ -756,7 +792,10 @@ export class LoginPoolRunner {
           // wait：窗口前置等人工，等待期不计时
           if (!attentionNotified) {
             attentionNotified = true
-            this.log('warn', `${entry.username} 触发人工验证，窗口已前置，处理完成后自动继续（等待不计时）`)
+            this.log(
+              'warn',
+              `${entry.username} 触发人工验证，窗口已前置，处理完成后自动继续（等待不计时）`
+            )
             this.focusWindow()
           }
           deadline = Date.now() + STEP_TIMEOUT_MS
@@ -818,7 +857,10 @@ export class LoginPoolRunner {
               otpAttempts += 1
               this.store.patch(entry.id, { step: 4 })
               this.emitEntry(this.store.get(entry.id)!)
-              this.log('info', `${entry.username} 2FA 码已填（${t.code}，剩 ${Math.ceil(t.remainMs / 1000)}s）`)
+              this.log(
+                'info',
+                `${entry.username} 2FA 码已填（${t.code}，剩 ${Math.ceil(t.remainMs / 1000)}s）`
+              )
             } else {
               this.log('warn', `${entry.username} 2FA 填入失败，下轮重试`)
             }
@@ -843,12 +885,18 @@ export class LoginPoolRunner {
             // "visit this setup page" 链接完成跳转
             if (!notified.safeLink) {
               notified.safeLink = true
-              this.log('info', `${entry.username} 授权已批准，请在窗口中点击 "visit this setup page" 链接完成跳转`)
+              this.log(
+                'info',
+                `${entry.username} 授权已批准，请在窗口中点击 "visit this setup page" 链接完成跳转`
+              )
               this.focusWindow()
             }
           } else if (!notified.authorize) {
             notified.authorize = true
-            this.log('info', `${entry.username} 请在窗口中手动点 Authorize（若页面自动跳转则无需操作）`)
+            this.log(
+              'info',
+              `${entry.username} 请在窗口中手动点 Authorize（若页面自动跳转则无需操作）`
+            )
             this.focusWindow()
           }
           continue
@@ -881,7 +929,9 @@ export class LoginPoolRunner {
         this.fail(
           entry,
           'timeout',
-          windowClosed ? '窗口已关闭且 15s 内未收到授权回调（若人工关闭属正常取消）' : '等待授权回调超时'
+          windowClosed
+            ? '窗口已关闭且 15s 内未收到授权回调（若人工关闭属正常取消）'
+            : '等待授权回调超时'
         )
         return
       }
@@ -941,7 +991,11 @@ export class LoginPoolRunner {
     return win.webContents.executeJavaScript(PROBE_JS, true)
   }
 
-  private async fillCredentials(win: BrowserWindow, username: string, password: string): Promise<boolean> {
+  private async fillCredentials(
+    win: BrowserWindow,
+    username: string,
+    password: string
+  ): Promise<boolean> {
     const res = (await win.webContents.executeJavaScript(
       `(${HUMAN_TYPE_JS})(${JSON.stringify({ kind: 'credentials', username, password })})`,
       true
@@ -959,7 +1013,10 @@ export class LoginPoolRunner {
 
   /** trusted 点击：拿元素视口坐标 → sendInputEvent 鼠标事件（OS 输入管线）。
    *  规则数组元素：字符串 = CSS 选择器；{ text } = 按按钮文本匹配 */
-  private async click(win: BrowserWindow, selectors: Array<string | { text: string }>): Promise<boolean> {
+  private async click(
+    win: BrowserWindow,
+    selectors: Array<string | { text: string }>
+  ): Promise<boolean> {
     const rect = (await win.webContents.executeJavaScript(
       `(${CLICK_RECT_JS})(${JSON.stringify(JSON.stringify(selectors))})`,
       true
