@@ -8,15 +8,22 @@
 //   - 请求头层（session）：UA / Accept-Language / sec-ch-ua 三件套 + 清 Electron 残留头
 //   - 页面层（CDP Emulation）：navigator.language（setUserAgent 改不了 JS 侧）、
 //     Intl 时区、client hints 元数据（品牌/完整版本/平台/CPU 架构）
+//   - 权限形状：通知权限对齐真无痕 Chrome 的 denied（Electron 默认 granted）
+//   - window.chrome：空对象补齐为真 Chrome 的 app/csi/loadTimes 形状
 //   - WebRTC：禁非代理 UDP，防枚举真实 IP
-// CDP 只用 Emulation 域，不 enable Runtime/Debugger——那类域会改 console
-// 行为，留下可被页面检测的痕迹。
+// CDP 只用 Emulation/Page 的初始化脚本注入，不 enable Runtime/Debugger——那类域
+// 会改 console 行为，留下可被页面检测的痕迹。
 
 import { app, type BrowserWindow, type Session } from 'electron'
+import { totalmem } from 'node:os'
 import { fetch as undiciFetch } from 'undici'
 
 /** UA 主版本取内置 Chromium 而不是写死：UA 声称的版本与引擎能力对不上本身就是破绽 */
 const CHROME_MAJOR = process.versions.chrome.split('.')[0] || '134'
+
+/** sec-ch-ua 的 GREASE 占位品牌随 Chromium 大版本轮换，必须与引擎真实值一致——
+ *  Electron 38(Chromium 140)原生 userAgentData 报 "Not=A?Brand"（实测），升级 Electron 时需对照更新 */
+const CHROME_GREASE = 'Not=A?Brand'
 
 /** UA 平台段与 sec-ch-ua-platform 必须同源（process.platform），跨平台跑不穿帮 */
 function platformToken(): string {
@@ -35,7 +42,7 @@ export const CHROME_UA =
   `Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`
 
 /** 客户端提示要与 UA 对齐，两者矛盾反而更容易被判异常 */
-const SEC_CH_UA = `"Chromium";v="${CHROME_MAJOR}", "Not(A:Brand";v="24", "Google Chrome";v="${CHROME_MAJOR}"`
+const SEC_CH_UA = `"Chromium";v="${CHROME_MAJOR}", "${CHROME_GREASE}";v="24", "Google Chrome";v="${CHROME_MAJOR}"`
 
 export interface FingerprintEnv {
   /** BCP 47 语言标签（页面 locale 与 navigator.language 用） */
@@ -60,6 +67,13 @@ function localTimezone(): string {
 
 function acceptLanguageFor(locale: string): string {
   return locale === 'zh-CN' ? 'zh-CN,zh;q=0.9,en;q=0.8' : 'en-US,en;q=0.9'
+}
+
+/** navigator.language(s) 必须是纯 BCP 47 标签——真 Chrome 是 ['zh-CN','zh']，
+ *  带 q 值的 Accept-Language 串（zh;q=0.9）喂给 CDP/setUserAgent 会污染
+ *  navigator.languages，是实测对齐时发现的破绽；q 值只留在 HTTP 头里 */
+function navigatorLanguageFor(locale: string): string {
+  return locale === 'zh-CN' ? 'zh-CN,zh' : 'en-US,en'
 }
 
 function localeForCountry(country: string): string {
@@ -165,7 +179,18 @@ export function describeFingerprint(env: FingerprintEnv): string {
 /** session 层请求头兜底：任何子资源、popup 请求都带一致的 UA / 语言 / 客户端提示 */
 export function hardenSessionHeaders(ses: Session, env: FingerprintEnv): void {
   const acceptLanguage = acceptLanguageFor(env.locale)
-  ses.setUserAgent(CHROME_UA, acceptLanguage)
+  // setUserAgent 第二参走 navigator.language(s)，用纯标签；q 值由下方拦截器写头
+  ses.setUserAgent(CHROME_UA, navigatorLanguageFor(env.locale))
+  // 真无痕 Chrome 的通知权限是 denied，Electron 默认 granted——实测差异，拉齐
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    if (permission === 'notifications') return callback(false)
+    callback(true)
+  })
+  try {
+    ses.setPermissionCheckHandler((_wc, _mediaType, permission) => permission !== 'notifications')
+  } catch {
+    /* 老版本 Electron 无此 API 时只影响 permissions.query 的同步回显 */
+  }
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers: Record<string, string> = { ...details.requestHeaders }
     headers['User-Agent'] = CHROME_UA
@@ -191,6 +216,75 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ])
 }
 
+/** navigator.deviceMemory：真 Chrome 按物理内存向下取 2 的幂（36GB 机器实测报 32），
+ *  Electron 写死 8——按同一算法用真机内存补齐 */
+function deviceMemoryGB(): number {
+  const gb = Math.floor(totalmem() / 1024 ** 3)
+  return 2 ** Math.floor(Math.log2(Math.max(1, gb)))
+}
+
+/** 主世界初始化脚本（每个新文档的页面脚本之前执行）：补齐 UAO 之后暴露的
+ *  Electron 痕迹——window.chrome 被 UAO 清空、deviceMemory 写死 8、
+ *  getHighEntropyValues 不走覆盖元数据、Notification.permission 恒 granted。 */
+function buildInitScript(fullVersion: string): string {
+  const fullVersionList = [
+    `{ brand: 'Chromium', version: '${fullVersion}' }`,
+    `{ brand: '${CHROME_GREASE}', version: '24.0.0.0' }`,
+    `{ brand: 'Google Chrome', version: '${fullVersion}' }`
+  ].join(', ')
+  return `;(function () {
+  var FULL_VERSION_LIST = [${fullVersionList}]
+  // 1) window.chrome：UAO 会清掉 Electron 原生的 app/csi/loadTimes 注入，补回真 Chrome 形状
+  try {
+    if (window.chrome && !window.chrome.app) {
+      window.chrome.app = {
+        isInstalled: false,
+        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+        getDetails: function () { return null },
+        getIsInstalled: function () { return false },
+        installState: function () { return 'not_installed' },
+        runningState: function () { return 'running' }
+      }
+      window.chrome.csi = function () { return {} }
+      window.chrome.loadTimes = function () { return {} }
+    }
+  } catch (e) { /* 页面环境异常时静默 */ }
+  // 2) deviceMemory：按真机内存对齐（Electron 写死 8）
+  try {
+    Object.defineProperty(navigator, 'deviceMemory', {
+      get: function () { return ${deviceMemoryGB()} }, configurable: true, enumerable: true
+    })
+  } catch (e) { /* 已被页面改写则不动 */ }
+  // 3) getHighEntropyValues：Chromium 实现不走 UAO 的 userAgentMetadata（实测
+  //    fullVersionList 仍报原生品牌表，与声称的 Google Chrome 矛盾），读取侧归一
+  try {
+    if (navigator.userAgentData && navigator.userAgentData.getHighEntropyValues) {
+      var uad = navigator.userAgentData
+      var orig = uad.getHighEntropyValues.bind(uad)
+      uad.getHighEntropyValues = function (hints) {
+        return orig(hints).then(function (out) {
+          if (out && typeof out === 'object' && Array.isArray(hints)) {
+            if (hints.indexOf('fullVersionList') >= 0) out.fullVersionList = FULL_VERSION_LIST.slice()
+            if (hints.indexOf('brands') >= 0) out.brands = FULL_VERSION_LIST.slice()
+          }
+          return out
+        })
+      }
+    }
+  } catch (e) { /* 不支持则保持原样 */ }
+  // 4) Notification.permission：Electron 恒 granted，真无痕 Chrome 是 default
+  //    （permissions.query 的服务端状态无法在页面侧改写，属已知残余）
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      Object.defineProperty(Notification, 'permission', {
+        get: function () { return 'default' }, configurable: true
+      })
+    }
+  } catch (e) { /* 忽略 */ }
+})()`
+}
+
 /**
  * 窗口级指纹对齐（在 loadURL 业务页之前调用，保证第一个请求就带新指纹）。
  * 失败不抛错：返回 ok=false 及原因，退回 setUserAgent 的旧水平由调用方记日志。
@@ -200,7 +294,6 @@ export async function applyWindowFingerprint(
   env: FingerprintEnv
 ): Promise<{ ok: boolean; error?: string }> {
   const contents = win.webContents
-  const acceptLanguage = acceptLanguageFor(env.locale)
   try {
     // WebRTC 关非代理 UDP：防页面枚举出代理背后的本机 IP
     contents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')
@@ -216,11 +309,12 @@ export async function applyWindowFingerprint(
         contents.debugger.attach('1.3')
         await contents.debugger.sendCommand('Emulation.setUserAgentOverride', {
           userAgent: CHROME_UA,
-          acceptLanguage,
+          // 这里同样只给纯标签：q 值会污染 navigator.languages（HTTP 头由 session 层改写）
+          acceptLanguage: navigatorLanguageFor(env.locale),
           userAgentMetadata: {
             brands: [
               { brand: 'Chromium', version: CHROME_MAJOR },
-              { brand: 'Not(A:Brand', version: '24' },
+              { brand: CHROME_GREASE, version: '24' },
               { brand: 'Google Chrome', version: CHROME_MAJOR }
             ],
             fullVersion: process.versions.chrome,
@@ -230,6 +324,11 @@ export async function applyWindowFingerprint(
             model: '',
             mobile: false
           }
+        })
+        // 主世界初始化脚本：必须先 Page.enable，否则命令被接受但不执行（实测）
+        await contents.debugger.sendCommand('Page.enable')
+        await contents.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
+          source: buildInitScript(process.versions.chrome)
         })
         await contents.debugger.sendCommand('Emulation.setLocaleOverride', { locale: env.locale })
         await contents.debugger.sendCommand('Emulation.setTimezoneOverride', {
