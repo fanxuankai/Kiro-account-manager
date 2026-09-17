@@ -1,6 +1,6 @@
-# 打包并发布到 GitHub Releases(草稿):Windows(NSIS)+ macOS(dmg/zip 双架构)
+# 打包 Windows(NSIS) + macOS(dmg/zip 双架构),产物统一由 release job 汇总建草稿
 # 触发:Actions → Build App → Run workflow,或 gh workflow run build-app.yml
-# 发布的 Release 标签取 package.json 版本(v{version}),为草稿状态,确认后手动发布
+# 草稿标签取 package.json 版本(v{version});确认后手动 Publish,在线更新依赖正式 Release
 name: Build App
 
 on:
@@ -36,24 +36,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build & publish (Windows)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build:win -- --publish always
+      # 只打包不发布:发布统一由 release job 做,避免多 job 各建 Release 互相分裂
+      - name: Build (Windows)
+        run: npm run build:win -- --publish never
 
-      - name: Upload artifacts (backup)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-x64-setup
+          name: dist-windows
           path: |
             Kiro-account-manager/dist/*-setup.exe
+            Kiro-account-manager/dist/*-setup.exe.blockmap
             Kiro-account-manager/dist/latest.yml
-          if-no-files-found: warn
+          if-no-files-found: error
 
   build-macos:
     name: macOS (dmg/zip x64+arm64)
-    # 串行发布:与 Windows 共写同一个 Release(v{version}),避免并发建 Release 冲突
-    needs: build-windows
     runs-on: macos-14
     timeout-minutes: 45
     defaults:
@@ -71,17 +69,43 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build & publish (macOS)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build:mac -- --publish always
+      - name: Build (macOS)
+        run: npm run build:mac -- --publish never
 
-      - name: Upload artifacts (backup)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-artifacts
+          name: dist-macos
           path: |
             Kiro-account-manager/dist/*.dmg
+            Kiro-account-manager/dist/*.dmg.blockmap
             Kiro-account-manager/dist/*-mac.zip
+            Kiro-account-manager/dist/*-mac.zip.blockmap
             Kiro-account-manager/dist/latest-mac.yml
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  # 唯一的发布入口:汇总两个平台的产物,一次性建草稿 Release(无并发分裂)
+  release:
+    name: Draft Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=$(jq -r .version Kiro-account-manager/package.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.ver.outputs.version }}" artifacts/* \
+            --draft --generate-notes \
+            --title "v${{ steps.ver.outputs.version }}"
