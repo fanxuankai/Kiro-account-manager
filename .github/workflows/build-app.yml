@@ -14,6 +14,9 @@ jobs:
     name: Windows (NSIS x64)
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      # 帮 node-gyp 定位 runner 上的 VS2022 C++ 工具链（better-sqlite3 源码重编译用）
+      GYP_MSVS_VERSION: "2022"
     defaults:
       run:
         working-directory: Kiro-account-manager
@@ -22,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: Kiro-account-manager/package-lock.json
 
@@ -53,7 +56,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: Kiro-account-manager/package-lock.json
 
