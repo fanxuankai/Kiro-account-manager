@@ -5,6 +5,10 @@ name: Build App
 on:
   workflow_dispatch:
 
+env:
+  # 只产出 artifact，不发布 GitHub Releases（eb26 在 CI 检测到仓库时会默认尝试发布）
+  EP_PUBLISH: never
+
 concurrency:
   group: build-app-${{ github.ref }}
   cancel-in-progress: true
