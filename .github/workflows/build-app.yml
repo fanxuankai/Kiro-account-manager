@@ -37,7 +37,7 @@ jobs:
         run: npm ci
 
       - name: Build & package (Windows)
-        run: npm run build:win
+        run: npm run build:win -- --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -68,7 +68,7 @@ jobs:
         run: npm ci
 
       - name: Build & package (macOS)
-        run: npm run build:mac
+        run: npm run build:mac -- --publish never
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
