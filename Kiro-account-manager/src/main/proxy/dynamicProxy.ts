@@ -62,6 +62,13 @@ interface QueuedEndpoint {
   fetchedAt: number
 }
 
+/** 已用端点记忆：端口背后的会话按 time 参数轮换（同端口过期后 = 新出口，可安全复用），
+ *  记忆只活一个时效窗口；跨窗口的同出口防撞由「出口 IP 24h 计次」兜底 */
+interface UsedEndpoint {
+  key: string
+  at: number
+}
+
 export interface DynamicProxySourceConfig {
   /** 提链接口地址（num 参数会被批量值覆盖） */
   url: string
@@ -73,15 +80,15 @@ export interface DynamicProxySourceConfig {
 
 export interface DynamicProxySourceOptions {
   /** 历史里已用过的端点（磁盘恢复），新实例继承 */
-  initialUsed?: readonly string[]
+  initialUsed?: readonly UsedEndpoint[]
   /** 每消费一个新端点后回调（磁盘持久化用），参数为最近优先的完整历史 */
-  onUsedChange?: (used: readonly string[]) => void
+  onUsedChange?: (used: readonly UsedEndpoint[]) => void
 }
 
 export class DynamicProxySource {
   private readonly queue: QueuedEndpoint[] = []
-  /** 已用端点历史（最近优先，绝不复用：同端点 = 同出口 IP） */
-  private readonly used: string[] = []
+  /** 已用端点历史（最近优先；条目按端点时效自动过期，过期端口 = 新会话新出口） */
+  private readonly used: UsedEndpoint[] = []
   private fetchChain: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -95,14 +102,25 @@ export class DynamicProxySource {
     this.onUsedChange = options.onUsedChange
   }
 
-  private readonly onUsedChange?: (used: readonly string[]) => void
+  private readonly onUsedChange?: (used: readonly UsedEndpoint[]) => void
 
+  /** 端点是否在有效记忆内被用过（过期条目视为未用过，顺手清理） */
   private hasUsed(key: string): boolean {
-    return this.used.includes(key)
+    const ttl = this.ttlMs()
+    const now = Date.now()
+    let changed = false
+    for (let i = this.used.length - 1; i >= 0; i--) {
+      if (now - this.used[i].at >= ttl) {
+        this.used.splice(i, 1)
+        changed = true
+      }
+    }
+    if (changed) this.onUsedChange?.(this.used)
+    return this.used.some((u) => u.key === key)
   }
 
   private addUsed(key: string): void {
-    this.used.unshift(key)
+    this.used.unshift({ key, at: Date.now() })
     if (this.used.length > USED_HISTORY_MAX) this.used.length = USED_HISTORY_MAX
     this.onUsedChange?.(this.used)
   }
@@ -235,13 +253,26 @@ function writeJson(path: string, data: unknown): void {
   }
 }
 
-/** 已用端点历史（最近优先） */
-function loadUsedHistory(): string[] {
+/** 已用端点历史（最近优先；旧版纯字符串格式无时间戳，视为过期丢弃） */
+function loadUsedHistory(): UsedEndpoint[] {
   const raw = readJson<{ used?: unknown }>(dataFile('dynamic-proxy-history.json'), {})
-  return Array.isArray(raw.used) ? raw.used.filter((k): k is string => typeof k === 'string') : []
+  if (!Array.isArray(raw.used)) return []
+  const out: UsedEndpoint[] = []
+  for (const item of raw.used) {
+    if (
+      item &&
+      typeof item === 'object' &&
+      typeof (item as UsedEndpoint).key === 'string' &&
+      typeof (item as UsedEndpoint).at === 'number' &&
+      Number.isFinite((item as UsedEndpoint).at)
+    ) {
+      out.push({ key: (item as UsedEndpoint).key, at: (item as UsedEndpoint).at })
+    }
+  }
+  return out.slice(0, USED_HISTORY_MAX)
 }
 
-function saveUsedHistory(used: readonly string[]): void {
+function saveUsedHistory(used: readonly UsedEndpoint[]): void {
   writeJson(dataFile('dynamic-proxy-history.json'), { used: used.slice(0, USED_HISTORY_MAX) })
 }
 

@@ -69,12 +69,15 @@ export class LoginPoolStore {
     }
   }
 
-  /** 按执行优先级排序的视图（running 最前，其后未用，再按结果态） */
+  /** 按执行优先级排序的视图：running 最前、未用次之（入池顺序 = 执行顺序），
+   *  结果态（已入库/失败/作废）按完成时间倒序——最近失败的排最上 */
   listViews(): PoolEntryView[] {
     const views = this.entries.map((e) => this.toView(e))
     views.sort((a, b) => {
       const d = STATE_ORDER.indexOf(a.state) - STATE_ORDER.indexOf(b.state)
-      return d !== 0 ? d : a.id.localeCompare(b.id)
+      if (d !== 0) return d
+      if (a.state === 'unused') return a.addedAt - b.addedAt
+      return (b.doneAt ?? b.takenAt ?? b.addedAt) - (a.doneAt ?? a.takenAt ?? a.addedAt)
     })
     return views
   }
@@ -136,7 +139,9 @@ export class LoginPoolStore {
     const e = this.get(id)
     if (!e) return
     Object.assign(e, patch)
-    if (patch.state === 'used' || patch.state === 'failed') e.doneAt = Date.now()
+    if (patch.state === 'used' || patch.state === 'failed' || patch.state === 'wasted') {
+      e.doneAt = Date.now()
+    }
     this.save()
   }
 
