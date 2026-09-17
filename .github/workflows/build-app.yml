@@ -1,0 +1,74 @@
+# 手动打包：仅 Windows(NSIS 安装包)与 macOS(dmg/zip,x64+arm64)
+# 触发方式:Actions → Build App → Run workflow,或 gh workflow run build-app.yml
+name: Build App
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    name: Windows (NSIS x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: Kiro-account-manager
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Kiro-account-manager/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & package (Windows)
+        run: npm run build:win
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-setup
+          path: |
+            Kiro-account-manager/dist/*-setup.exe
+            Kiro-account-manager/dist/latest.yml
+          if-no-files-found: error
+
+  build-macos:
+    name: macOS (dmg/zip x64+arm64)
+    runs-on: macos-14
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: Kiro-account-manager
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: Kiro-account-manager/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build & package (macOS)
+        run: npm run build:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            Kiro-account-manager/dist/*.dmg
+            Kiro-account-manager/dist/*-mac.zip
+            Kiro-account-manager/dist/latest-mac.yml
+          if-no-files-found: error
