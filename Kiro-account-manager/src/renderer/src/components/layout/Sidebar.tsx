@@ -17,7 +17,6 @@ interface SidebarProps {
 
 const menuItemsConfig: { id: PageType; labelKey: string; icon: React.ElementType }[] = [
   { id: 'home', labelKey: 'nav.home', icon: Home },
-  { id: 'loginPool', labelKey: 'nav.loginPool', icon: KeyRound },
   { id: 'accounts', labelKey: 'nav.accounts', icon: Users },
   { id: 'idleAccounts', labelKey: 'nav.idleAccounts', icon: Warehouse },
   { id: 'machineId', labelKey: 'nav.machineId', icon: Fingerprint },
@@ -26,6 +25,7 @@ const menuItemsConfig: { id: PageType; labelKey: string; icon: React.ElementType
   { id: 'kproxy', labelKey: 'nav.kproxy', icon: Shield },
   { id: 'proxyPool', labelKey: 'nav.proxyPool', icon: Network },
   { id: 'register', labelKey: 'nav.register', icon: UserPlus },
+  { id: 'loginPool', labelKey: 'nav.loginPool', icon: KeyRound },
   { id: 'subscription', labelKey: 'nav.subscription', icon: CreditCard },
   { id: 'billing', labelKey: 'nav.billing', icon: Receipt },
   { id: 'webhooks', labelKey: 'nav.webhooks', icon: Bell },
