@@ -44,6 +44,8 @@ export interface LoginPoolEntryView {
 export interface LoginPoolBatchOptions {
   intervalSec: number | 'rand'
   manualPolicy: 'wait' | 'skip'
+  /** 授权自动化实验（默认关）：Authorize 先程序攻两次（轨迹点击/requestSubmit），失败回退人工 */
+  autoAuthorize?: boolean
   /** 出口代理（代理池快照或提链 API 配置，批次/单跑时传入；主进程逐号消费，只读不回写） */
   proxy?: {
     enabled: boolean

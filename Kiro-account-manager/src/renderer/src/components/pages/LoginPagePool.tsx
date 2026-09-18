@@ -100,6 +100,15 @@ export function LoginPagePool(): React.ReactNode {
   const [manualPolicy, setManualPolicy] = useState<'wait' | 'skip'>(() =>
     localStorage.getItem('loginpool_manual') === 'skip' ? 'skip' : 'wait'
   )
+  // 授权自动化实验（默认关）：Authorize 先程序攻两招（带轨迹点击/requestSubmit），失败回退人工；
+  // 实验失败可能加重该号授权风控——只用不心疼的号开
+  const [autoAuthorize, setAutoAuthorize] = useState<boolean>(() =>
+    localStorage.getItem('loginpool_auto_authorize') === 'true'
+  )
+  const updateAutoAuthorize = (v: boolean): void => {
+    setAutoAuthorize(v)
+    localStorage.setItem('loginpool_auto_authorize', String(v))
+  }
   const updateIntervalSec = (v: string): void => {
     setIntervalSec(v)
     localStorage.setItem('loginpool_interval', v)
@@ -304,9 +313,10 @@ export function LoginPagePool(): React.ReactNode {
     () => ({
       intervalSec: intervalSec === 'rand' ? ('rand' as const) : Number(intervalSec),
       manualPolicy,
+      autoAuthorize,
       proxy: buildProxyOpts()
     }),
-    [intervalSec, manualPolicy, buildProxyOpts]
+    [intervalSec, manualPolicy, autoAuthorize, buildProxyOpts]
   )
 
   const startOrResume = useCallback(() => {
@@ -402,6 +412,21 @@ export function LoginPagePool(): React.ReactNode {
               <option value="api">
                 提链 API{!(proxyPoolConfig.dynamicApiUrl || '').trim() ? '（未配置）' : ''}
               </option>
+            </select>
+          </div>
+          <div
+            className="flex items-center gap-1.5"
+            title="实验：Authorize 按钮先程序攻两招（①拟人轨迹点击 ②表单层 requestSubmit），安全页继续链接也程序点；都没推动自动回退人工。失败可能加重该号的授权风控——只用不心疼的号开"
+          >
+            <Label className="text-xs text-muted-foreground whitespace-nowrap">授权自动化</Label>
+            <select
+              value={autoAuthorize ? 'on' : 'off'}
+              onChange={(e) => updateAutoAuthorize(e.target.value === 'on')}
+              disabled={batchRunningActive}
+              className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
+            >
+              <option value="off">关闭（人工点）</option>
+              <option value="on">实验（程序先攻）</option>
             </select>
           </div>
         </div>

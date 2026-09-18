@@ -75,6 +75,12 @@ export interface BatchOptions {
   intervalSec: number | 'rand'
   /** 触发人机/设备验证：wait 等人工处理 / skip 标失败跳过 */
   manualPolicy: 'wait' | 'skip'
+  /**
+   * 授权自动化实验（默认关）：Authorize 按钮先程序攻两次——
+   * 第 1 次完整输入仿真（预轨迹+按压序列），第 2 次 form.requestSubmit（表单层与真人一致）；
+   * 两次都没过自动回退人工点击，不影响原流程。失败可能加重该号的授权风控，用不心疼的号试。
+   */
+  autoAuthorize?: boolean
   /** 出口代理（代理池快照，批次启动时由渲染层传入；主进程逐号消费，只读不回写） */
   proxy?: LoginPoolProxyOptions
 }
@@ -250,6 +256,15 @@ const CLICK_RECT_JS = `((rulesJson) => {
 })`
 
 const SIGNIN_SELECTORS = ['input[name="commit"]', 'button[type="submit"]']
+
+/** OAuth 授权页的确认按钮（GitHub 两种历史形态 + 兜底文本匹配，与探测 JS 同口径） */
+const AUTHORIZE_SELECTORS = [
+  '#js-oauth-authorize-btn',
+  'button[name="authorize"]',
+  'input[name="authorize"]',
+  'button[type="submit"]',
+  { text: 'Authorize' }
+]
 
 const PROBE_INTERVAL_MS = 1000
 const STEP_TIMEOUT_MS = 180_000
@@ -830,6 +845,14 @@ export class LoginPoolRunner {
     /** cookie 收割结果（KiroLuker 同款路径：授权后凭证种在 app.kiro.dev cookie，不依赖回调跳转） */
     let cookieCred: { accessToken: string; refreshToken: string; profileArn?: string } | null = null
     const notified = { signin: false, verify: false, authorize: false, safeLink: false }
+    /** 授权实验：本号已用掉的程序攻招数（0=未攻, 2=已用完回退人工） */
+    let authorizeAttempts = 0
+    /** 上次授权动作时间戳（两招之间留冷却观察窗口） */
+    let lastAuthorizeAt = 0
+    /** 上次点安全页继续链接的时间戳（实验限频） */
+    let lastSafeLinkAt = 0
+    /** 安全页继续链接已程序点击次数（超限回退人工） */
+    let safeLinkAttempts = 0
     let aborted = false
     let otpAttempts = 0
 
@@ -983,15 +1006,23 @@ export class LoginPoolRunner {
           continue
         }
 
-        // OAuth 授权环节：最终形态 = 一切点击都由人完成（Authorize 按钮与
+        // OAuth 授权环节：默认一切点击都由人完成（Authorize 按钮与
         // 安全页的「继续」链接），程序只提示并等待——等待期间不计时，
-        // 绝不超时关窗；人点完后 cookie 收割 / 回调拦截通道自动接管完成
+        // 绝不超时关窗；人点完后 cookie 收割 / 回调拦截通道自动接管完成。
+        // 授权自动化实验开启时（autoAuthorize）：程序先攻两次（轨迹点击→requestSubmit），
+        // 都没推动再回退人工提示
         if (detect.authorize) {
           deadline = Date.now() + STEP_TIMEOUT_MS
           if (detect.continueLink) {
-            // GitHub「正在重定向」安全页：授权已批准，等人在窗口里点
-            // "visit this setup page" 链接完成跳转
-            if (!notified.safeLink) {
+            // GitHub「正在重定向」安全页：授权已批准。
+            // 实验开启时程序带轨迹点"visit this setup page"链接（v1.7.38 实测 trusted
+            // 点击此链接可行；若链接本身带 access_denied 则点了也无害,冷却后回退人工）
+            if (this.opts.autoAuthorize && safeLinkAttempts < 2 && Date.now() - lastSafeLinkAt > 6000) {
+              lastSafeLinkAt = Date.now()
+              safeLinkAttempts++
+              this.log('info', `${entry.username} 授权实验：带轨迹点击安全页继续链接`)
+              await this.clickWithTrail(win, [{ text: 'setup page' }, { text: 'continue' }])
+            } else if (!notified.safeLink) {
               notified.safeLink = true
               this.log(
                 'info',
@@ -999,11 +1030,31 @@ export class LoginPoolRunner {
               )
               this.focusWindow()
             }
-          } else if (!notified.authorize) {
+          } else if (
+            this.opts.autoAuthorize &&
+            authorizeAttempts < 2 &&
+            Date.now() - lastAuthorizeAt > 6000
+          ) {
+            // 实验：第 1 招完整输入仿真（带鼠标移动历史），第 2 招表单层 requestSubmit；
+            // 每招之间留 6s 冷却观察页面是否已被推动（探测循环 1s 一轮自然会看到）
+            authorizeAttempts++
+            lastAuthorizeAt = Date.now()
+            if (authorizeAttempts === 1) {
+              this.log('info', `${entry.username} 授权实验①：拟人停顿后带轨迹点击 Authorize`)
+              await sleep(randInt(900, 2200))
+              const clicked = await this.clickWithTrail(win, AUTHORIZE_SELECTORS)
+              if (!clicked) this.log('warn', `${entry.username} 授权按钮未找到（页面形态变化？）`)
+            } else {
+              this.log('info', `${entry.username} 授权实验②：requestSubmit 表单层提交`)
+              const submitted = await this.requestSubmitAuthorize(win)
+              if (!submitted) this.log('warn', `${entry.username} 授权表单未找到/提交失败`)
+            }
+          } else if (!notified.authorize && (!this.opts.autoAuthorize || authorizeAttempts >= 2)) {
             notified.authorize = true
+            const via = this.opts.autoAuthorize ? '（实验两招未推动，回退人工）' : ''
             this.log(
               'info',
-              `${entry.username} 请在窗口中手动点 Authorize（若页面自动跳转则无需操作）`
+              `${entry.username} 请在窗口中手动点 Authorize${via}（若页面自动跳转则无需操作）`
             )
             this.focusWindow()
           }
@@ -1138,5 +1189,70 @@ export class LoginPoolRunner {
     await sleep(randInt(60, 140))
     win.webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
     return true
+  }
+
+  /**
+   * 完整输入仿真点击（授权实验用）：比 click 多一段鼠标移动历史——
+   * 从窗口随机位置到目标按钮的贝塞尔轨迹（15~24 个点），再按压。
+   * GitHub 对 authorize 的行为校验比登录严，孤零零一次 click 缺的正是这些上下文。
+   */
+  private async clickWithTrail(
+    win: BrowserWindow,
+    selectors: Array<string | { text: string }>
+  ): Promise<boolean> {
+    const size = win.getContentSize()
+    const rect = (await win.webContents.executeJavaScript(
+      `(${CLICK_RECT_JS})(${JSON.stringify(JSON.stringify(selectors))})`,
+      true
+    )) as { x: number; y: number } | null
+    if (!rect) return false
+
+    // 目标点（按钮内随机偏移,避免每次都点正中心）
+    const tx = rect.x + (Math.random() * 10 - 5)
+    const ty = rect.y + (Math.random() * 10 - 5)
+    // 轨迹起点：窗口内随机位置（避开边缘）
+    const sx = randInt(40, Math.max(60, size[0] - 40))
+    const sy = randInt(40, Math.max(60, size[1] - 40))
+    // 二次贝塞尔控制点：起终点中点附近大偏移,轨迹带弧度不走直线
+    const cx = (sx + tx) / 2 + (Math.random() * 200 - 100)
+    const cy = (sy + ty) / 2 + (Math.random() * 160 - 80)
+
+    const steps = randInt(15, 24)
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps
+      // ease-out:先快后慢(人移向目标时的减速)
+      const e = 1 - (1 - t) * (1 - t)
+      const px = Math.round((1 - e) * (1 - e) * sx + 2 * (1 - e) * e * cx + e * e * tx + (Math.random() * 2 - 1))
+      const py = Math.round((1 - e) * (1 - e) * sy + 2 * (1 - e) * e * cy + e * e * ty + (Math.random() * 2 - 1))
+      win.webContents.sendInputEvent({ type: 'mouseMove', x: px, y: py })
+      await sleep(randInt(12, 38))
+    }
+    // 移到位后的小停顿,再按压(人的节奏)
+    await sleep(randInt(90, 260))
+    win.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(tx), y: Math.round(ty), button: 'left', clickCount: 1 })
+    await sleep(randInt(70, 150))
+    win.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(tx), y: Math.round(ty), button: 'left', clickCount: 1 })
+    return true
+  }
+
+  /**
+   * 表单层直攻（授权实验第 2 招）：form.requestSubmit(submit 按钮)——
+   * 与真人点按钮在表单层面完全一致（submit 事件 + submitter 的 name/value 进 POST），
+   * 完全跳过鼠标事件层。若 GitHub 检测的是鼠标行为而非表单来源，此路可通。
+   */
+  private async requestSubmitAuthorize(win: BrowserWindow): Promise<boolean> {
+    return (await win.webContents.executeJavaScript(
+      `(() => {
+        const btn = document.querySelector('#js-oauth-authorize-btn')
+          || document.querySelector('button[name="authorize"]')
+          || document.querySelector('input[name="authorize"]')
+          || document.querySelector('button[type="submit"]')
+          || document.querySelector('input[type="submit"]')
+        const form = btn && btn.closest('form')
+        if (!form) return false
+        try { form.requestSubmit(btn || undefined); return true } catch { return false }
+      })()`,
+      true
+    )) as boolean
   }
 }

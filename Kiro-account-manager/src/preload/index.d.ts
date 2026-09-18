@@ -525,6 +525,8 @@ interface KiroApi {
   loginPoolStart: (opts: {
     intervalSec: number | 'rand'
     manualPolicy: 'wait' | 'skip'
+    /** 授权自动化实验（默认关）：Authorize 先程序攻两次（轨迹点击/requestSubmit），失败回退人工 */
+    autoAuthorize?: boolean
     /** 出口代理（代理池快照或提链源配置，主进程逐号消费，只读不回写） */
     proxy?: {
       enabled: boolean
@@ -539,6 +541,8 @@ interface KiroApi {
   loginPoolRunOne: (id: string, opts?: {
     intervalSec: number | 'rand'
     manualPolicy: 'wait' | 'skip'
+    /** 授权自动化实验（默认关）：Authorize 先程序攻两次（轨迹点击/requestSubmit），失败回退人工 */
+    autoAuthorize?: boolean
     /** 出口代理（代理池快照或提链源配置，主进程逐号消费，只读不回写） */
     proxy?: {
       enabled: boolean
