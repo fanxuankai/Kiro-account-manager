@@ -378,6 +378,8 @@ export function LoginPagePool(): React.ReactNode {
               title="相邻两个号之间的冷却，防风控"
               className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
             >
+              <option value="5">5s</option>
+              <option value="15">15s</option>
               <option value="30">30s</option>
               <option value="60">60s</option>
               <option value="120">120s</option>
