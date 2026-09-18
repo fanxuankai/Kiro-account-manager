@@ -257,14 +257,25 @@ const CLICK_RECT_JS = `((rulesJson) => {
 
 const SIGNIN_SELECTORS = ['input[name="commit"]', 'button[type="submit"]']
 
-/** OAuth 授权页的确认按钮（GitHub 两种历史形态 + 兜底文本匹配，与探测 JS 同口径） */
+/** OAuth 授权页的确认按钮。注意:不要加 button[type=submit] 之类宽兜底——
+ *  Cancel 也是 submit 型按钮,2026-09-18 实测曾兜到它,GitHub 回 access_denied
+ *  ("The user has denied your application access")。只允许 id/name/文本精确命中。 */
 const AUTHORIZE_SELECTORS = [
   '#js-oauth-authorize-btn',
   'button[name="authorize"]',
   'input[name="authorize"]',
-  'button[type="submit"]',
   { text: 'Authorize' }
 ]
+
+/** 点击前取目标元素快照(实验判读用):命中了哪个按钮、页面上有哪些候选 */
+const AUTHORIZE_SNAPSHOT_JS = `(() => {
+  const sels = ['#js-oauth-authorize-btn', 'button[name="authorize"]', 'input[name="authorize"]']
+  const hit = sels.map((s) => document.querySelector(s)).find(Boolean)
+  const buttons = [...document.querySelectorAll('button, input[type="submit"]')]
+    .filter((b) => b.offsetParent !== null)
+    .map((b) => ((b.tagName) + (b.name ? '[' + b.name + ']' : '') + ':' + ((b.textContent || b.value || '').trim().slice(0, 20))))
+  return { hit: hit ? (hit.tagName + (hit.name ? '[' + hit.name + ']' : '') + ':' + (hit.textContent || hit.value || '').trim().slice(0, 30)) : null, buttons }
+})()`
 
 const PROBE_INTERVAL_MS = 1000
 const STEP_TIMEOUT_MS = 180_000
@@ -1044,6 +1055,15 @@ export class LoginPoolRunner {
             authorizeAttempts++
             lastAuthorizeAt = Date.now()
             if (authorizeAttempts === 1) {
+              // 点击前抓页面按钮快照:确认命中的是 Authorize 而不是 Cancel
+              const snap = (await win.webContents.executeJavaScript(
+                `(${AUTHORIZE_SNAPSHOT_JS})()`,
+                true
+              )) as { hit: string | null; buttons: string[] } | null
+              this.log(
+                'info',
+                `${entry.username} 授权页按钮快照：命中=${snap?.hit || '无'} | 候选=${JSON.stringify(snap?.buttons || [])}`
+              )
               this.log('info', `${entry.username} 授权实验①：阅读停顿+滚动浏览后带轨迹点击 Authorize`)
               await sleep(randInt(2500, 5000))
               // 模拟人读授权页:一两次小幅滚动(看页面下方内容)再回位
@@ -1262,11 +1282,12 @@ export class LoginPoolRunner {
   private async requestSubmitAuthorize(win: BrowserWindow): Promise<boolean> {
     return (await win.webContents.executeJavaScript(
       `(() => {
+        // 只精确命中授权按钮,不用 submit 泛匹配(可能抓到 Cancel,见 AUTHORIZE_SELECTORS 注释)
         const btn = document.querySelector('#js-oauth-authorize-btn')
           || document.querySelector('button[name="authorize"]')
           || document.querySelector('input[name="authorize"]')
-          || document.querySelector('button[type="submit"]')
-          || document.querySelector('input[type="submit"]')
+          || [...document.querySelectorAll('button, input[type="submit"]')].find((b) =>
+              b.offsetParent !== null && /^authorize/i.test(((b.textContent || b.value || '') + '').trim()))
         const form = btn && btn.closest('form')
         if (!form) return false
         try { form.requestSubmit(btn || undefined); return true } catch { return false }
