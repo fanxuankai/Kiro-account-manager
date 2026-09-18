@@ -264,14 +264,12 @@ const SIGNIN_SELECTORS = ['input[name="commit"]', 'button[type="submit"]']
 const AUTHORIZE_SELECTORS = [
   { text: 'Authorize kirodotdev' },
   '#js-oauth-authorize-btn',
-  'button[name="authorize"]',
-  'input[name="authorize"]',
   { text: 'Authorize' }
 ]
 
 /** 点击前取目标元素快照(实验判读用):命中了哪个按钮、页面上有哪些候选 */
 const AUTHORIZE_SNAPSHOT_JS = `(() => {
-  const sels = ['#js-oauth-authorize-btn', 'button[name="authorize"]', 'input[name="authorize"]']
+  const sels = ['#js-oauth-authorize-btn']
   const hit = sels.map((s) => document.querySelector(s)).find(Boolean)
   const buttons = [...document.querySelectorAll('button, input[type="submit"]')]
     .filter((b) => b.offsetParent !== null)
@@ -1371,8 +1369,6 @@ export class LoginPoolRunner {
       `(() => {
         // 只精确命中授权按钮,不用 submit 泛匹配(可能抓到 Cancel,见 AUTHORIZE_SELECTORS 注释)
         const btn = document.querySelector('#js-oauth-authorize-btn')
-          || document.querySelector('button[name="authorize"]')
-          || document.querySelector('input[name="authorize"]')
           || [...document.querySelectorAll('button, input[type="submit"]')].find((b) =>
               b.offsetParent !== null && /^authorize/i.test(((b.textContent || b.value || '') + '').trim()))
         const form = btn && btn.closest('form')
