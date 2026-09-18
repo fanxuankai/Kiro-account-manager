@@ -7804,6 +7804,8 @@ app.whenReady().then(async () => {
     ) => {
       // 提链出口路由（可选）：探测确认后返回，用完释放本地中继
       let releaseExit: (() => Promise<void>) | null = null
+      // 本条链接实际使用的提链出口 IP（回传给订阅页展示；直连/账号代理时为空）
+      let exitIp: string | undefined
       try {
         const account = {
           id: accountId || 'subscription-request',
@@ -7826,18 +7828,20 @@ app.whenReady().then(async () => {
             (level, msg) => console.log(`[订阅提链 ${level}] ${msg}`)
           )
           releaseExit = route.release
+          exitIp = route.exitIp
           // getNetworkAgent 的第一优先级就是 account.proxyUrl，挂上本地中继即整条请求走提链出口
           account.proxyUrl = route.proxyRules
         }
         const result = await fetchSubscriptionToken(account, subscriptionType)
         if (result.encodedVerificationUrl) {
-          return { success: true, url: result.encodedVerificationUrl, status: result.status }
+          return { success: true, url: result.encodedVerificationUrl, status: result.status, exitIp }
         }
-        return { success: false, error: result.message || 'No subscription URL returned' }
+        return { success: false, error: result.message || 'No subscription URL returned', exitIp }
       } catch (error) {
         return {
           success: false,
-          error: error instanceof Error ? error.message : 'Failed to get subscription URL'
+          error: error instanceof Error ? error.message : 'Failed to get subscription URL',
+          exitIp
         }
       } finally {
         if (releaseExit) await releaseExit().catch(() => undefined)

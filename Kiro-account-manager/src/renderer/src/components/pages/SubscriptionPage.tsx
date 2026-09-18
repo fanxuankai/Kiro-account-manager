@@ -128,6 +128,8 @@ interface SubscriptionLink {
   validated?: boolean
   /** 生成链接时所选套餐的友好名（复制时作为说明一起带出） */
   planName?: string
+  /** 生成链接实际使用的提链出口 IP（未开提链出口时为空 = 直连/账号代理） */
+  exitIp?: string
 }
 
 interface OverageItem {
@@ -509,7 +511,8 @@ export function SubscriptionPage() {
                     url: tokenResult.url,
                     generatedAt: Date.now(),
                     validated: false,
-                    planName: planLabel
+                    planName: planLabel,
+                    exitIp: tokenResult.exitIp
                   }
                 : link
             )
@@ -786,9 +789,10 @@ export function SubscriptionPage() {
                   error: undefined,
                   generatedAt: Date.now(),
                   validated: false,
-                  planName: planLabel
+                  planName: planLabel,
+                  exitIp: r.exitIp
                 }
-              : { ...l, status: 'error', error: r.error || 'Failed' }
+              : { ...l, status: 'error', error: r.error || 'Failed', exitIp: r.exitIp }
             : l
         )
       )
@@ -2053,6 +2057,16 @@ export function SubscriptionPage() {
                       {/* 邮箱 */}
                       <span className="flex-1 text-sm truncate" title={link.email}>
                         {link.email}
+                      </span>
+
+                      {/* 提链出口 IP（生成该链接时的实际出口；空 = 直连/账号代理） */}
+                      <span
+                        className="w-24 text-right text-[10px] text-muted-foreground tabular-nums truncate"
+                        title={link.exitIp
+                          ? (isEn ? 'Dynamic exit IP used for this link' : '本条链接使用的提链出口 IP')
+                          : (isEn ? 'No dynamic exit (direct / account proxy)' : '未走提链出口（直连/账号代理）')}
+                      >
+                        {link.exitIp || ''}
                       </span>
 
                       {/* 状态 */}
