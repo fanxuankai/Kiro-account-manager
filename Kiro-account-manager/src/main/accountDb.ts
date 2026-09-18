@@ -103,14 +103,31 @@ export class AccountDb {
     return row.n > 0
   }
 
-  /** 首次迁移：把旧 accountData（electron-store JSON 或加密备份恢复出的数据）整库导入 */
+  /** 首次迁移：把旧 accountData（electron-store JSON 或加密备份恢复出的数据）整库导入。
+   *  只执行一次（meta 落 _legacyMigrated 标记）：用户清空主库（如移入闲置库）后库变空，
+   *  旧 JSON 化石（迁移后不再更新，仍保有历史账号）不得再次回灌——"空库"不再等于"待迁移"。 */
   migrateFrom(legacy: unknown): void {
-    if (this.hasAccounts()) return
+    const done = this.db.prepare("SELECT value FROM meta WHERE key = '_legacyMigrated'").get()
+    if (done) return
+    // 库非空:迁移早已发生(或用户已在正常使用),补落标记,保证将来清空主库也不会回灌
+    if (this.hasAccounts()) {
+      this.markLegacyMigrated()
+      return
+    }
     if (!legacy || typeof legacy !== 'object') return
     const data = legacy as Rec
     if (!data.accounts || typeof data.accounts !== 'object') return
     const stat = this.saveAll(data)
+    this.markLegacyMigrated()
     console.log(`[AccountDb] 迁移完成: accounts=${Object.keys(data.accounts).length} 行，写入 changed=${stat.changed} deleted=${stat.deleted} 耗时 ${stat.ms}ms`)
+  }
+
+  /** 落迁移完成标记(库内 meta + diff 缓存同步) */
+  private markLegacyMigrated(): void {
+    this.db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('_legacyMigrated', 'true') ON CONFLICT(key) DO UPDATE SET value = 'true'"
+    ).run()
+    this.rowText.get('meta')!.set('_legacyMigrated', '"true"')
   }
 
   /** 全量加载并缓存。之后重复调用返回同一对象（零开销） */
