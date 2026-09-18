@@ -183,7 +183,7 @@ function parseImportedLinks(text: string): Array<{ email: string; url: string }>
 }
 
 export function SubscriptionPage() {
-  const { accounts, selectedIds, updateAccount, removeAccount, proxyPoolConfig } = useAccountsStore()
+  const { accounts, selectedIds, updateAccount, removeAccount, proxyPoolConfig, proxyPool } = useAccountsStore()
   const { actualLanguage } = useTranslation()
   const isEn = actualLanguage === 'en'
 
@@ -450,6 +450,22 @@ export function SubscriptionPage() {
         }
       : undefined
 
+  // 静态出口(可选):不开提链时,取链接统一走代理池里选中的一条(支持 hy2);
+  // localStorage 记忆选择;开提链出口时忽略(提链优先,逐链接独立出口)
+  const [exitProxyId, setExitProxyId] = useState(
+    (): string => localStorage.getItem('sublink_exit_proxy') || ''
+  )
+  const exitProxyUrl = useMemo(() => {
+    if (dynamicProxyCfg) return undefined
+    if (!exitProxyId) return undefined
+    const entry = Array.from(proxyPool.values()).find((p) => p.id === exitProxyId)
+    return entry?.enabled ? entry.url : undefined
+  }, [dynamicProxyCfg, exitProxyId, proxyPool])
+  const changeExitProxy = (id: string): void => {
+    setExitProxyId(id)
+    localStorage.setItem('sublink_exit_proxy', id)
+  }
+
   // 批量并发获取订阅链接（已获取过链接的账号不参与；结果与已有链接合并而非整表替换）
   const handleBatchFetch = async () => {
     const allUpgradeable = getPendingFetchAccounts()
@@ -498,7 +514,8 @@ export function SubscriptionPage() {
           acc.credentials?.provider || acc.idp,
           acc.credentials?.authMethod,
           acc.id,
-          dynamicProxyCfg
+          dynamicProxyCfg,
+          exitProxyUrl
         )
 
         if (tokenResult.success && tokenResult.url) {
@@ -765,7 +782,9 @@ export function SubscriptionPage() {
         acc.machineId,
         acc.credentials?.provider || acc.idp,
         acc.credentials?.authMethod,
-        acc.id
+        acc.id,
+        undefined,
+        exitProxyUrl
       )
       // 刷新成功 = 仍在待付款流程，链接 URL 与套餐名一并落库
       if (r.success && r.url) {
@@ -1729,6 +1748,38 @@ export function SubscriptionPage() {
                 <span className="text-xs text-muted-foreground select-none">
                   {isEn ? 'Dynamic exit' : '提链出口'}
                 </span>
+              </div>
+
+              {/* 静态出口：不开提链时取链接统一走代理池选中条目（支持 hy2）；开提链时禁用（提链优先） */}
+              <div
+                className="flex items-center gap-1.5"
+                title={
+                  dynamicProxyCfg
+                    ? (isEn ? 'Dynamic exit is on — per-link endpoints take priority' : '提链出口已开启，逐链接端点优先，静态出口被忽略')
+                    : (isEn
+                        ? 'Fetch all links through one selected proxy pool entry (hy2 supported). Empty = direct.'
+                        : '全部取链接统一走代理池选中的一条代理（支持 hy2）；不选 = 直连')
+                }
+              >
+                <span className="text-xs text-muted-foreground select-none">
+                  {isEn ? 'Exit:' : '出口:'}
+                </span>
+                <select
+                  value={exitProxyId}
+                  onChange={(e) => changeExitProxy(e.target.value)}
+                  disabled={isFetching || !!dynamicProxyCfg}
+                  className="h-7 px-2 rounded-md border bg-background text-xs max-w-52"
+                >
+                  <option value="">{isEn ? 'Direct' : '直连'}</option>
+                  {Array.from(proxyPool.values())
+                    .filter((p) => p.enabled)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label || `${p.protocol}://${p.host}:${p.port}`}
+                        {p.status === 'alive' ? '' : (isEn ? ' (untested/dead)' : '（未验活/不可用）')}
+                      </option>
+                    ))}
+                </select>
               </div>
 
               <Button

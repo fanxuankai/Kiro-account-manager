@@ -69,6 +69,7 @@ import { openAccountPortal } from './kiroPortal'
 import { openaiToKiro } from './proxy/translator'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
 import { resolveProxyUrl, shutdownHy2Bridge } from './proxy/hy2Bridge'
+import { probeExitIp } from './proxy/proxyTools'
 import { acquireDynamicExit, getSharedDynamicSource, resolveViaProxy } from './proxy/dynamicProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
@@ -7800,7 +7801,8 @@ app.whenReady().then(async () => {
       provider?: string,
       authMethod?: string,
       accountId?: string,
-      dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }
+      dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number },
+      exitProxyUrl?: string
     ) => {
       // 提链出口路由（可选）：探测确认后返回，用完释放本地中继
       let releaseExit: (() => Promise<void>) | null = null
@@ -7831,6 +7833,14 @@ app.whenReady().then(async () => {
           exitIp = route.exitIp
           // getNetworkAgent 的第一优先级就是 account.proxyUrl，挂上本地中继即整条请求走提链出口
           account.proxyUrl = route.proxyRules
+        } else if (exitProxyUrl && exitProxyUrl.trim()) {
+          // 静态出口（订阅页下拉选的代理池条目，支持 hy2）：解析失败直接报错——
+          // 用户显式指定的出口不该静默回退直连裸奔
+          const resolvedExit = (await resolveProxyUrl(exitProxyUrl.trim())) || exitProxyUrl.trim()
+          account.proxyUrl = resolvedExit
+          // 探一次出口 IP 供列表展示（失败不阻断取链接，仅无 IP 列）
+          const probe = await probeExitIp(resolvedExit).catch(() => undefined)
+          exitIp = probe?.ip
         }
         const result = await fetchSubscriptionToken(account, subscriptionType)
         if (result.encodedVerificationUrl) {

@@ -895,8 +895,8 @@ const api = {
   },
 
   // 获取订阅管理/支付链接（dynamicProxy 传入时该请求经提链出口发出，见代理池页「动态提链源」）
-  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }): Promise<{ success: boolean; error?: string; url?: string; status?: string; exitIp?: string }> => {
-    return ipcRenderer.invoke('account-get-subscription-url', accessToken, subscriptionType, region, profileArn, machineId, provider, authMethod, accountId, dynamicProxy)
+  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }, exitProxyUrl?: string): Promise<{ success: boolean; error?: string; url?: string; status?: string; exitIp?: string }> => {
+    return ipcRenderer.invoke('account-get-subscription-url', accessToken, subscriptionType, region, profileArn, machineId, provider, authMethod, accountId, dynamicProxy, exitProxyUrl)
   },
 
   // 设置用户超额偏好
