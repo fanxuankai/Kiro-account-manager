@@ -14,7 +14,7 @@
 // - 人工验证策略：触发 DataDome/邮箱设备验证时，wait=窗口前置等人工过验证后
 //   继续（等待期间重置超时）；skip=标记失败跳下一号。
 
-import { BrowserWindow, protocol, session, type Session } from 'electron'
+import { BrowserWindow, protocol, screen, session, type Session } from 'electron'
 import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import type { LoginPoolStore, PoolEntry, PoolEntryView } from './store'
@@ -1242,9 +1242,20 @@ export class LoginPoolRunner {
   }
 
   /**
-   * 辅助功能权限探测（系统级真鼠标生效前提；批次启动时探一次缓存结果）
+   * 辅助功能权限探测（系统级真鼠标生效前提；批次启动时探一次缓存结果）。
+   * mac=System Events 需辅助功能授权；win=PowerShell 调 Win32 原生可用，仅探进程可执行。
    */
   private probeRealMouse(): boolean {
+    if (process.platform === 'win32') {
+      try {
+        execFileSync('powershell', ['-NoProfile', '-Command', 'Write-Output ok'], {
+          timeout: 8000, stdio: 'ignore', windowsHide: true
+        })
+        return true
+      } catch {
+        return false
+      }
+    }
     if (process.platform !== 'darwin') return false
     try {
       execFileSync(
@@ -1262,22 +1273,44 @@ export class LoginPoolRunner {
   private realMouseOk = false
 
   /**
-   * 系统级真鼠标点击（macOS）：System Events 在屏幕坐标派发 AX click——不经过
-   * Chromium 输入管线，浏览器侧与真人点击同源。需应用已获「辅助功能」权限；
-   * 失败（未授权/非 mac）返回 false，调用方回退 sendInputEvent。
+   * 系统级真鼠标点击：不经过 Chromium 输入管线，浏览器侧与真人点击同源。
+   *   mac  = System Events 屏幕坐标 AX click（需「辅助功能」授权；坐标为 points=DIP 直加）
+   *   win  = PowerShell 调 user32 SetCursorPos+mouse_event（无需特权；坐标需 DIP×缩放比转物理像素）
+   * 失败返回 false，调用方回退 sendInputEvent。
    */
   private async realMouseClick(win: BrowserWindow, pageX: number, pageY: number): Promise<boolean> {
-    if (process.platform !== 'darwin' || !this.realMouseOk) return false
+    if (!this.realMouseOk) return false
     try {
       const b = win.getContentBounds()
-      const gx = Math.round(b.x + pageX)
-      const gy = Math.round(b.y + pageY)
-      execFileSync(
-        'osascript',
-        ['-e', `tell application "System Events" to click at {${gx}, ${gy}}`],
-        { timeout: 3000, stdio: 'ignore' }
-      )
-      return true
+      if (process.platform === 'win32') {
+        const sf = screen.getDisplayMatching(win.getBounds()).scaleFactor
+        const gx = Math.round((b.x + pageX) * sf)
+        const gy = Math.round((b.y + pageY) * sf)
+        // mouse_event: LEFTDOWN=0x2, LEFTUP=0x4;间隔拟人按压节奏
+        const ps = [
+          "Add-Type -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x, int y); [DllImport(\"user32.dll\")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, System.UIntPtr e);' -Name M -Namespace W",
+          `[W.M]::SetCursorPos(${gx}, ${gy})`,
+          'Start-Sleep -Milliseconds 90',
+          '[W.M]::mouse_event(2,0,0,0,0)',
+          'Start-Sleep -Milliseconds 100',
+          '[W.M]::mouse_event(4,0,0,0,0)'
+        ].join('; ')
+        execFileSync('powershell', ['-NoProfile', '-Command', ps], {
+          timeout: 8000, stdio: 'ignore', windowsHide: true
+        })
+        return true
+      }
+      if (process.platform === 'darwin') {
+        const gx = Math.round(b.x + pageX)
+        const gy = Math.round(b.y + pageY)
+        execFileSync(
+          'osascript',
+          ['-e', `tell application "System Events" to click at {${gx}, ${gy}}`],
+          { timeout: 3000, stdio: 'ignore' }
+        )
+        return true
+      }
+      return false
     } catch {
       return false
     }
