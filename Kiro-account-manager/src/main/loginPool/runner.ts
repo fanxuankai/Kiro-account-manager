@@ -1015,18 +1015,22 @@ export class LoginPoolRunner {
           deadline = Date.now() + STEP_TIMEOUT_MS
           if (detect.continueLink) {
             // GitHub「正在重定向」安全页：授权已批准。
-            // 实验开启时程序带轨迹点"visit this setup page"链接（v1.7.38 实测 trusted
-            // 点击此链接可行；若链接本身带 access_denied 则点了也无害,冷却后回退人工）
+            // 链接 href 是判读关键：带 code= 说明授权成功只差跳转（点了就该过）；
+            // 带 error=access_denied 说明服务端拒了这次授权，点死也无用——直接回退人工/标失败
             if (this.opts.autoAuthorize && safeLinkAttempts < 2 && Date.now() - lastSafeLinkAt > 6000) {
               lastSafeLinkAt = Date.now()
               safeLinkAttempts++
-              this.log('info', `${entry.username} 授权实验：带轨迹点击安全页继续链接`)
+              const denied = /error=|access_denied/i.test(detect.continueLink)
+              this.log(
+                'info',
+                `${entry.username} 授权实验：带轨迹点击安全页继续链接${denied ? '（链接带 access_denied，服务端已拒，多半点了也白点）' : ''}`
+              )
               await this.clickWithTrail(win, [{ text: 'setup page' }, { text: 'continue' }])
-            } else if (!notified.safeLink) {
+            } else if (!notified.safeLink && (!this.opts.autoAuthorize || safeLinkAttempts >= 2)) {
               notified.safeLink = true
               this.log(
                 'info',
-                `${entry.username} 授权已批准，请在窗口中点击 "visit this setup page" 链接完成跳转`
+                `${entry.username} 授权已批准，请在窗口中点击 "visit this setup page" 链接完成跳转（链接：${detect.continueLink.slice(0, 120)}）`
               )
               this.focusWindow()
             }
