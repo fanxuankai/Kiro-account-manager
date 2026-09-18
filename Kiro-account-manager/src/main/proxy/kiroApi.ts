@@ -18,7 +18,7 @@ import type {
 import { proxyLogger } from './logger'
 import { getKProxyService } from '../kproxy'
 import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
-import { resolveProxyUrl } from './hy2Bridge'
+import { resolveProxyUrl } from './proxyBridge'
 import {
   countTokens,
   getModelContextLength,

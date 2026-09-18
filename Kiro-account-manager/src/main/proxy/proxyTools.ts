@@ -3,7 +3,7 @@
 
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { safeCreateProxyAgent } from './systemProxy'
-import { resolveProxyUrl } from './hy2Bridge'
+import { resolveProxyUrl } from './proxyBridge'
 
 /** 代理 URL 是否带用户名密码（Chromium proxyRules 挂不了凭据，这类必须走本地中继） */
 export function proxyUrlHasCredentials(url: string): boolean {

@@ -6,12 +6,12 @@
 import { ipcMain } from 'electron'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { safeCreateProxyAgent } from '../proxy/systemProxy'
-import { resolveProxyUrl } from '../proxy/hy2Bridge'
+import { resolveProxyUrl } from '../proxy/proxyBridge'
 import { ChainProxyRelay } from '../registration/chainProxy'
 
 /**
  * 通过指定代理 URL 请求测试地址，返回延迟与出口 IP。
- * 支持 http/https/socks4/socks5/hy2 协议代理（hy2 由 hy2Bridge 转成本地 socks5）。
+ * 支持 http/https/socks4/socks5/hy2 协议代理（hy2 由 proxyBridge 转成本地 socks5）。
  * 若给了 upstreamProxy，验活也走代理链（与注册流程一致），避免目标代理因来源 IP 不符被误标 dead。
  */
 function registerValidateHandler(): void {

@@ -56,7 +56,7 @@ export interface VlessParams {
 }
 
 /** 需要桥接的代理 URL(hy2/hysteria2/hysteria + vless) */
-export function isHy2Url(url: string | null | undefined): boolean {
+export function isBridgeableUrl(url: string | null | undefined): boolean {
   if (!url) return false
   const m = url.match(/^\s*([a-zA-Z][\w+.-]*):/)
   if (!m) return false
@@ -251,7 +251,7 @@ export function buildSingboxConfig(
 }
 
 /** 一个 hy2 URL 对应的 sing-box 实例 */
-interface Hy2Instance {
+interface BridgeInstance {
   proc: ChildProcess
   port: number
   configPath: string
@@ -266,7 +266,7 @@ interface Hy2Instance {
   restarts: number[]
 }
 
-const instances = new Map<string, Hy2Instance>()
+const instances = new Map<string, BridgeInstance>()
 /** 进行中的启动 promise:并发 resolve 同一 URL 只起一个进程 */
 const starting = new Map<string, Promise<string>>()
 
@@ -403,7 +403,7 @@ async function ensureInstance(hy2Url: string): Promise<string> {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true
     })
-    const inst: Hy2Instance = {
+    const inst: BridgeInstance = {
       proc,
       port,
       configPath,
@@ -470,12 +470,12 @@ export async function resolveProxyUrl(
 ): Promise<string | null | undefined> {
   if (!url) return url
   const trimmed = url.trim()
-  if (!isHy2Url(trimmed)) return url
+  if (!isBridgeableUrl(trimmed)) return url
   return ensureInstance(trimmed)
 }
 
 /** app 退出前回收全部 sing-box 子进程(will-quit 钩子调用) */
-export function shutdownHy2Bridge(): void {
+export function shutdownProxyBridge(): void {
   for (const [key, inst] of instances) {
     inst.stopping = true
     try {

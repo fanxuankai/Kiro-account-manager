@@ -19,7 +19,7 @@ import { app } from 'electron'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { ChainProxyRelay } from '../registration/chainProxy'
 import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
-import { resolveProxyUrl } from './hy2Bridge'
+import { resolveProxyUrl } from './proxyBridge'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from './proxyTools'
 
 const API_RESPONSE_LIMIT = 4096

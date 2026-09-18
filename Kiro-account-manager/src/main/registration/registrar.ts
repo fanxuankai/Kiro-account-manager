@@ -18,7 +18,7 @@ import {
 } from './email-service'
 import { CfMailService } from './cf-mail-service'
 import { getSystemProxy, safeCreateProxyAgent } from '../proxy/systemProxy'
-import { isHy2Url, resolveProxyUrl } from '../proxy/hy2Bridge'
+import { isBridgeableUrl, resolveProxyUrl } from '../proxy/proxyBridge'
 import { redactString } from '../utils/redact'
 
 export type LogFn = (message: string) => void
@@ -146,7 +146,7 @@ export class Registrar {
   private async setupProxyChain(): Promise<void> {
     // hy2(Hysteria2)代理先转本地 socks5——后续 tls-client/undici/代理链都只认 TCP 代理。
     // 在 early-return 之前做:只有目标代理、没有上游中转时同样需要桥接。
-    if (isHy2Url(this.cfg.proxy)) {
+    if (isBridgeableUrl(this.cfg.proxy)) {
       try {
         this.cfg.proxy = (await resolveProxyUrl(this.cfg.proxy)) || this.cfg.proxy
       } catch (err) {
@@ -158,7 +158,7 @@ export class Registrar {
         return
       }
     }
-    if (isHy2Url(this.cfg.upstreamProxy)) {
+    if (isBridgeableUrl(this.cfg.upstreamProxy)) {
       try {
         this.cfg.upstreamProxy = (await resolveProxyUrl(this.cfg.upstreamProxy)) || this.cfg.upstreamProxy
       } catch (err) {

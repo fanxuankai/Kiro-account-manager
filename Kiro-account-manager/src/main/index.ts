@@ -68,7 +68,7 @@ import {
 import { openAccountPortal } from './kiroPortal'
 import { openaiToKiro } from './proxy/translator'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
-import { resolveProxyUrl, shutdownHy2Bridge } from './proxy/hy2Bridge'
+import { resolveProxyUrl, shutdownProxyBridge } from './proxy/proxyBridge'
 import { probeExitIp } from './proxy/proxyTools'
 import { acquireDynamicExit, getSharedDynamicSource, resolveViaProxy } from './proxy/dynamicProxy'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
@@ -8840,7 +8840,7 @@ app.on('will-quit', async (event) => {
   if (isQuitting) return
 
   // 回收全部 hy2 桥 sing-box 子进程(同步 kill,不阻塞退出)
-  shutdownHy2Bridge()
+  shutdownProxyBridge()
 
   // 停止主进程池 token 刷新调度器
   stopMainPoolTokenRefresh()

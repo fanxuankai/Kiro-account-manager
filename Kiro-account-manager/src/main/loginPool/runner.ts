@@ -28,7 +28,7 @@ import {
   resolveViaProxy
 } from '../proxy/dynamicProxy'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
-import { resolveProxyUrl } from '../proxy/hy2Bridge'
+import { resolveProxyUrl } from '../proxy/proxyBridge'
 import { injectProxySession } from './proxySession'
 import {
   applyWindowFingerprint,
