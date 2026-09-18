@@ -56,7 +56,9 @@ jobs:
 
   build-macos:
     name: macOS (dmg/zip x64+arm64)
-    runs-on: macos-14
+    # macos-14 ARM runner 打 x64 dmg 时 hdiutil 偶发/连续 "Device not configured"
+    # (2026-09-18 起稳定复现,同配置本地与 macos-15 正常);换 macos-15 镜像规避
+    runs-on: macos-15
     timeout-minutes: 45
     defaults:
       run:
