@@ -5,7 +5,7 @@
 
 import { ipcMain } from 'electron'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
-import { safeCreateProxyAgent } from '../proxy/systemProxy'
+import { safeCreateProxyAgent, destroyCachedProxyAgent } from '../proxy/systemProxy'
 import { resolveProxyUrl, resetProxyBridge, isBridgeableUrl } from '../proxy/proxyBridge'
 import { ChainProxyRelay } from '../registration/chainProxy'
 
@@ -93,8 +93,8 @@ function registerValidateHandler(): void {
       }
     } finally {
       clearTimeout(timer)
-      // 释放 agent 连接池：批量验活时不关闭会累积大量空闲连接/句柄直到 GC
-      try { await agent.close() } catch { /* ignore */ }
+      // 释放连接池并同步摘除缓存条目(只 close 不摘会毒化缓存:下次同 URL 命中死实例必败)
+      try { await destroyCachedProxyAgent(proxyForAgent) } catch { /* ignore */ }
       if (chainRelay) await chainRelay.stop()
     }
   })

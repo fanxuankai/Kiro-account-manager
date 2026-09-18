@@ -147,6 +147,18 @@ function cachedAgent(proxyUrl: string, create: () => Dispatcher): Dispatcher {
 }
 
 /**
+ * 释放并摘除缓存的 agent(验活等一次性场景专用)。
+ * 只 close 不删缓存条目会把"已关闭的 agent"留在缓存里——下次同 URL 命中缓存
+ * 拿到死实例,请求必失败(实测:连续点第二次测试必败、重启才恢复的根因)。
+ */
+export async function destroyCachedProxyAgent(proxyUrl: string): Promise<void> {
+  const hit = _agentCache.get(proxyUrl)
+  if (!hit) return
+  _agentCache.delete(proxyUrl)
+  await hit.close().catch(() => {})
+}
+
+/**
  * 安全地创建 undici Dispatcher
  *
  * 支持协议：
