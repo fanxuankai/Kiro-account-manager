@@ -432,39 +432,34 @@ export function SubscriptionPage() {
     })
   }, [linkedAccountIds])
 
-  // 获取链接经提链出口（可选）：每条链接经「代理池」页动态提链源的一个一次性端点发出；
-  // 未在代理池页配置接口地址时开关不生效（退回普通直连路径）
-  const [useDynamicExit, setUseDynamicExit] = useState(
-    (): boolean => localStorage.getItem('sublink_dynamic') === 'true'
-  )
-  const toggleDynamicExit = (v: boolean): void => {
-    setUseDynamicExit(v)
-    localStorage.setItem('sublink_dynamic', String(v))
+  // 取链接出口模式（与号池注册统一的三形态）：
+  //   direct=直连 / pool=代理池逐链接轮换（每条链接不同出口，含 hy2）/ api=提链出口（逐链接一次性端点）
+  // 旧版两键（sublink_dynamic 开关 + sublink_exit_proxy 单条选择）自动迁移到统一 key
+  const [exitMode, setExitMode] = useState<'direct' | 'pool' | 'api'>((): 'direct' | 'pool' | 'api' => {
+    const saved = localStorage.getItem('sublink_exit_mode')
+    if (saved === 'direct' || saved === 'pool' || saved === 'api') return saved
+    if (localStorage.getItem('sublink_dynamic') === 'true') return 'api'
+    if (localStorage.getItem('sublink_exit_proxy')) return 'pool'
+    return 'direct'
+  })
+  const changeExitMode = (mode: 'direct' | 'pool' | 'api'): void => {
+    setExitMode(mode)
+    localStorage.setItem('sublink_exit_mode', mode)
   }
   const dynamicProxyCfg =
-    useDynamicExit && (proxyPoolConfig.dynamicApiUrl || '').trim()
+    exitMode === 'api' && (proxyPoolConfig.dynamicApiUrl || '').trim()
       ? {
           url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
           viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
           batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
         }
       : undefined
-
-  // 静态出口(可选):不开提链时,取链接统一走代理池里选中的一条(支持 hy2);
-  // localStorage 记忆选择;开提链出口时忽略(提链优先,逐链接独立出口)
-  const [exitProxyId, setExitProxyId] = useState(
-    (): string => localStorage.getItem('sublink_exit_proxy') || ''
+  // pool 模式的轮换源：启用 + 验活可用的池条目（含 hy2）。
+  // 注意：参数化代理（单入口靠用户名区分出口）不在此注入 session——这类源请用提链模式
+  const usablePool = useMemo(
+    () => Array.from(proxyPool.values()).filter((p) => p.enabled && p.status === 'alive'),
+    [proxyPool]
   )
-  const exitProxyUrl = useMemo(() => {
-    if (dynamicProxyCfg) return undefined
-    if (!exitProxyId) return undefined
-    const entry = Array.from(proxyPool.values()).find((p) => p.id === exitProxyId)
-    return entry?.enabled ? entry.url : undefined
-  }, [dynamicProxyCfg, exitProxyId, proxyPool])
-  const changeExitProxy = (id: string): void => {
-    setExitProxyId(id)
-    localStorage.setItem('sublink_exit_proxy', id)
-  }
 
   // 批量并发获取订阅链接（已获取过链接的账号不参与；结果与已有链接合并而非整表替换）
   const handleBatchFetch = async () => {
@@ -505,6 +500,10 @@ export function SubscriptionPage() {
       ))
 
       try {
+        // pool 模式：按批次序号轮换取池条目（逐链接不同出口，防同 IP 批量关联）
+        const poolExitUrl = exitMode === 'pool' && usablePool.length > 0
+          ? usablePool[idx % usablePool.length]!.url
+          : undefined
         const tokenResult = await window.api.accountGetSubscriptionUrl(
           acc.credentials.accessToken,
           selectedPlanType,
@@ -515,7 +514,7 @@ export function SubscriptionPage() {
           acc.credentials?.authMethod,
           acc.id,
           dynamicProxyCfg,
-          exitProxyUrl
+          poolExitUrl
         )
 
         if (tokenResult.success && tokenResult.url) {
@@ -784,7 +783,10 @@ export function SubscriptionPage() {
         acc.credentials?.authMethod,
         acc.id,
         undefined,
-        exitProxyUrl
+        // pool 模式单条重取：随机取一条可用条目（避免总打同一条）
+        exitMode === 'pool' && usablePool.length > 0
+          ? usablePool[Math.floor(Math.random() * usablePool.length)]!.url
+          : undefined
       )
       // 刷新成功 = 仍在待付款流程，链接 URL 与套餐名一并落库
       if (r.success && r.url) {
@@ -1732,53 +1734,35 @@ export function SubscriptionPage() {
                 }
               </Button>
 
+              {/* 出口模式（与号池注册统一）：直连 / 代理池逐链接轮换 / 提链出口 */}
               <div
                 className="flex items-center gap-1.5"
                 title={
                   isEn
-                    ? 'Each link is fetched through a one-time endpoint from the proxy pool page\'s dynamic extract source. No effect until the API URL is configured there.'
-                    : '每条链接经「代理池」页动态提链源的一次性端点发出（逐链接独立出口、不复用）；未在该页配置接口地址时开关不生效'
-                }
-              >
-                <Switch
-                  checked={useDynamicExit}
-                  onCheckedChange={toggleDynamicExit}
-                  disabled={isFetching}
-                />
-                <span className="text-xs text-muted-foreground select-none">
-                  {isEn ? 'Dynamic exit' : '提链出口'}
-                </span>
-              </div>
-
-              {/* 静态出口：不开提链时取链接统一走代理池选中条目（支持 hy2）；开提链时禁用（提链优先） */}
-              <div
-                className="flex items-center gap-1.5"
-                title={
-                  dynamicProxyCfg
-                    ? (isEn ? 'Dynamic exit is on — per-link endpoints take priority' : '提链出口已开启，逐链接端点优先，静态出口被忽略')
-                    : (isEn
-                        ? 'Fetch all links through one selected proxy pool entry (hy2 supported). Empty = direct.'
-                        : '全部取链接统一走代理池选中的一条代理（支持 hy2）；不选 = 直连')
+                    ? 'Direct / proxy pool round-robin per link (hy2 supported) / dynamic extract endpoints per link. Pool entries must be enabled & validated.'
+                    : '直连 / 代理池逐链接轮换（每条链接不同出口，支持 hy2）/ 提链出口（逐链接一次性端点）。池模式只用已启用且验活可用的条目'
                 }
               >
                 <span className="text-xs text-muted-foreground select-none">
                   {isEn ? 'Exit:' : '出口:'}
                 </span>
                 <select
-                  value={exitProxyId}
-                  onChange={(e) => changeExitProxy(e.target.value)}
-                  disabled={isFetching || !!dynamicProxyCfg}
-                  className="h-7 px-2 rounded-md border bg-background text-xs max-w-52"
+                  value={exitMode}
+                  onChange={(e) => changeExitMode(e.target.value as 'direct' | 'pool' | 'api')}
+                  disabled={isFetching}
+                  className="h-7 px-2 rounded-md border bg-background text-xs"
                 >
-                  <option value="">{isEn ? 'Direct' : '直连'}</option>
-                  {Array.from(proxyPool.values())
-                    .filter((p) => p.enabled)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label || `${p.protocol}://${p.host}:${p.port}`}
-                        {p.status === 'alive' ? '' : (isEn ? ' (untested/dead)' : '（未验活/不可用）')}
-                      </option>
-                    ))}
+                  <option value="direct">{isEn ? 'Direct' : '直连'}</option>
+                  <option value="pool" disabled={usablePool.length === 0}>
+                    {isEn
+                      ? `Proxy pool (${usablePool.length} usable)`
+                      : `代理池（轮换，${usablePool.length} 条可用）`}
+                  </option>
+                  <option value="api" disabled={!(proxyPoolConfig.dynamicApiUrl || '').trim()}>
+                    {isEn
+                      ? 'Dynamic extract endpoints'
+                      : '提链出口'}
+                  </option>
                 </select>
               </div>
 
