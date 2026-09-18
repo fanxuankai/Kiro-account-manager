@@ -15,6 +15,7 @@
 //   继续（等待期间重置超时）；skip=标记失败跳下一号。
 
 import { BrowserWindow, protocol, session, type Session } from 'electron'
+import { execFileSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import type { LoginPoolStore, PoolEntry, PoolEntryView } from './store'
 import { totpNow } from './totp'
@@ -276,7 +277,7 @@ const AUTHORIZE_SNAPSHOT_JS = `(() => {
     .filter((b) => b.offsetParent !== null)
     .map((b) => ((b.tagName) + (b.name ? '[' + b.name + ']' : '') + ':' + ((b.textContent || b.value || '').trim().slice(0, 20))))
   return { hit: hit ? (hit.tagName + (hit.name ? '[' + hit.name + ']' : '') + ':' + (hit.textContent || hit.value || '').trim().slice(0, 30)) : null, buttons }
-})()`
+})`
 
 const PROBE_INTERVAL_MS = 1000
 const STEP_TIMEOUT_MS = 180_000
@@ -366,6 +367,15 @@ export class LoginPoolRunner {
     this.opts = opts
     this.running = true
     this.paused = false
+    if (opts.autoAuthorize) {
+      this.realMouseOk = this.probeRealMouse()
+      this.log(
+        this.realMouseOk ? 'ok' : 'warn',
+        this.realMouseOk
+          ? '授权实验：系统级真鼠标可用（System Events 派发按压）'
+          : '授权实验：系统级真鼠标不可用——需在「系统设置 → 隐私与安全性 → 辅助功能」添加本应用；本轮按压回退 Chromium 模拟事件'
+      )
+    }
     const proxyDesc = opts.proxy?.enabled
       ? opts.proxy.mode === 'api'
         ? `，出口代理=提链 API（批量 ${Math.min(20, Math.max(1, Math.round(opts.proxy.api?.batchSize ?? 5)))} 个/次）`
@@ -1232,9 +1242,51 @@ export class LoginPoolRunner {
   }
 
   /**
+   * 辅助功能权限探测（系统级真鼠标生效前提；批次启动时探一次缓存结果）
+   */
+  private probeRealMouse(): boolean {
+    if (process.platform !== 'darwin') return false
+    try {
+      execFileSync(
+        'osascript',
+        ['-e', 'tell application "System Events" to get name of first process'],
+        { timeout: 3000, stdio: 'ignore' }
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 系统级真鼠标可用性缓存（批次 start 时探测） */
+  private realMouseOk = false
+
+  /**
+   * 系统级真鼠标点击（macOS）：System Events 在屏幕坐标派发 AX click——不经过
+   * Chromium 输入管线，浏览器侧与真人点击同源。需应用已获「辅助功能」权限；
+   * 失败（未授权/非 mac）返回 false，调用方回退 sendInputEvent。
+   */
+  private async realMouseClick(win: BrowserWindow, pageX: number, pageY: number): Promise<boolean> {
+    if (process.platform !== 'darwin' || !this.realMouseOk) return false
+    try {
+      const b = win.getContentBounds()
+      const gx = Math.round(b.x + pageX)
+      const gy = Math.round(b.y + pageY)
+      execFileSync(
+        'osascript',
+        ['-e', `tell application "System Events" to click at {${gx}, ${gy}}`],
+        { timeout: 3000, stdio: 'ignore' }
+      )
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
    * 完整输入仿真点击（授权实验用）：比 click 多一段鼠标移动历史——
    * 从窗口随机位置到目标按钮的贝塞尔轨迹（15~24 个点），再按压。
-   * GitHub 对 authorize 的行为校验比登录严，孤零零一次 click 缺的正是这些上下文。
+   * 按压优先走系统级真鼠标（System Events），不可用回退 sendInputEvent。
    */
   private async clickWithTrail(
     win: BrowserWindow,
@@ -1269,6 +1321,7 @@ export class LoginPoolRunner {
     }
     // 移到位后的小停顿,再按压(人的节奏)
     await sleep(randInt(90, 260))
+    if (await this.realMouseClick(win, tx, ty)) return true
     win.webContents.sendInputEvent({ type: 'mouseDown', x: Math.round(tx), y: Math.round(ty), button: 'left', clickCount: 1 })
     await sleep(randInt(70, 150))
     win.webContents.sendInputEvent({ type: 'mouseUp', x: Math.round(tx), y: Math.round(ty), button: 'left', clickCount: 1 })
