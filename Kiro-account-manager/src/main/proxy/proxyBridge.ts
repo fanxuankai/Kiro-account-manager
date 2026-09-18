@@ -484,3 +484,20 @@ export function shutdownProxyBridge(): void {
     instances.delete(key)
   }
 }
+
+/**
+ * 杀掉指定 URL(不传 = 全部)的桥实例:验活失败后的自愈手段。
+ * 实例平时"进程活着就复用"——若节点/网络瞬断期间握手挂进半死状态,旧实例会持续
+ * 失败,只有重启应用才能恢复;杀掉后下次 resolve 即全新进程+全新握手,等价重启。
+ */
+export function resetProxyBridge(url?: string): void {
+  const target = url?.trim()
+  for (const [key, inst] of instances) {
+    if (target && key !== target) continue
+    inst.stopping = true
+    try {
+      inst.proc.kill()
+    } catch { /* ignore */ }
+    instances.delete(key)
+  }
+}

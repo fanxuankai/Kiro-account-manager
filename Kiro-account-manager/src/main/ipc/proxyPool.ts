@@ -6,7 +6,7 @@
 import { ipcMain } from 'electron'
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici'
 import { safeCreateProxyAgent } from '../proxy/systemProxy'
-import { resolveProxyUrl } from '../proxy/proxyBridge'
+import { resolveProxyUrl, resetProxyBridge, isBridgeableUrl } from '../proxy/proxyBridge'
 import { ChainProxyRelay } from '../registration/chainProxy'
 
 /**
@@ -84,6 +84,8 @@ function registerValidateHandler(): void {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)
       const isAbort = controller.signal.aborted
+      // 桥接协议验活失败:杀掉该实例,下次验活全新握手(等价重启应用的自愈效果)
+      if (isBridgeableUrl(url)) resetProxyBridge(url)
       return {
         success: false,
         latencyMs: Date.now() - start,
