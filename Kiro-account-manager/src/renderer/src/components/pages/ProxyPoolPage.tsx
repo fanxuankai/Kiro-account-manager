@@ -870,8 +870,8 @@ export function ProxyPoolPage(): React.ReactNode {
               onChange={(e) => setSingleInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddSingle()}
               placeholder={isEn
-                ? 'http://user:pass@host:port or socks5://... or hy2://auth@host:443/?sni=..&insecure=1'
-                : 'http://user:pass@host:port 或 socks5://... 或 hy2://auth@host:443/?sni=..&insecure=1'
+                ? 'http://user:pass@host:port or socks5://... or hy2://auth@host:443/?sni=.. or vless://uuid@host:443?type=ws&security=tls&sni=..'
+                : 'http://user:pass@host:port 或 socks5://... 或 hy2://auth@host:443/?sni=.. 或 vless://uuid@host:443?type=ws&security=tls&sni=..'
               }
               className="font-mono text-xs"
             />
@@ -890,8 +890,8 @@ export function ProxyPoolPage(): React.ReactNode {
             <div className="space-y-2 p-3 bg-muted/30 rounded-lg border border-dashed">
               <Label className="text-xs">
                 {isEn
-                  ? 'One proxy per line. Supports: http(s)://host:port, user:pass@host:port, host:port:user:pass, socks5://..., hy2://auth@host:443/?sni=..&insecure=1'
-                  : '每行一个代理。支持格式: http(s)://host:port、user:pass@host:port、host:port:user:pass、socks5://...、hy2://auth@host:443/?sni=..&insecure=1'
+                  ? 'One proxy per line. Supports: http(s)://, socks5://, hy2://auth@host:443/?sni=.., vless://uuid@host:443?type=ws&security=tls&sni=..'
+                  : '每行一个代理。支持格式: http(s)://、socks5://、hy2://auth@host:443/?sni=..、vless://uuid@host:443?type=ws&security=tls&sni=..'
                 }
               </Label>
               <textarea
@@ -1064,6 +1064,7 @@ export function ProxyPoolPage(): React.ReactNode {
                   <option value="socks5">SOCKS5</option>
                   <option value="socks4">SOCKS4</option>
                   <option value="hy2">HY2</option>
+                  <option value="vless">VLESS</option>
                 </select>
               </div>
 

@@ -142,6 +142,62 @@ for (const c of cases) {
   }
 }
 
+/** 与 src/main/proxy/hy2Bridge.ts 的 buildVlessOutbound 保持同构 */
+function vlessOutbound(p) {
+  const out = { type: 'vless', tag: 'vless-out', server: p.server, server_port: p.serverPort, uuid: p.uuid }
+  if (p.flow) out.flow = p.flow
+  if (p.security !== 'none') {
+    const tls = { enabled: true, server_name: p.sni || p.server }
+    if (p.insecure) tls.insecure = true
+    if (p.security === 'reality') {
+      tls.utls = { enabled: true, fingerprint: p.fingerprint || 'chrome' }
+      tls.reality = { enabled: true, public_key: p.publicKey || '', short_id: p.shortId || '' }
+    } else if (p.fingerprint) {
+      tls.utls = { enabled: true, fingerprint: p.fingerprint }
+    }
+    out.tls = tls
+  }
+  if (p.network === 'ws') {
+    out.transport = { type: 'ws', ...(p.path ? { path: p.path } : {}), ...(p.host ? { headers: { Host: p.host } } : {}) }
+  } else if (p.network === 'grpc') {
+    out.transport = { type: 'grpc', service_name: p.serviceName || '' }
+  }
+  return out
+}
+
+const vlessCases = [
+  {
+    name: 'vless+tcp+tls',
+    params: { server: 'v.example.com', serverPort: 443, uuid: 'b831381d-6324-4d53-ad4f-8cda48b30811', security: 'tls', sni: 'cdn.example.com', fingerprint: 'chrome', network: 'tcp' }
+  },
+  {
+    name: 'vless+ws+tls(CDN)',
+    params: { server: 'v.example.com', serverPort: 443, uuid: 'b831381d-6324-4d53-ad4f-8cda48b30811', security: 'tls', sni: 'cdn.example.com', network: 'ws', path: '/ray', host: 'cdn.example.com' }
+  },
+  {
+    name: 'vless+reality+vision',
+    params: { server: '1.2.3.4', serverPort: 8443, uuid: 'b831381d-6324-4d53-ad4f-8cda48b30811', security: 'reality', sni: 'www.microsoft.com', fingerprint: 'chrome', publicKey: 'SbVKOEMjK0sIlbwg4akyBg5mL5KZwwB-ed4eEE7YnRc', shortId: 'ab12', network: 'tcp', flow: 'xtls-rprx-vision' }
+  },
+  {
+    name: 'vless+grpc',
+    params: { server: 'v.example.com', serverPort: 443, uuid: 'b831381d-6324-4d53-ad4f-8cda48b30811', security: 'tls', network: 'grpc', serviceName: 'grpcSvc' }
+  }
+]
+for (const c of vlessCases) {
+  const cfg = path.join(tmp, `vless-${c.name}.json`.replace(/[^\w.-]/g, '_'))
+  fs.writeFileSync(cfg, JSON.stringify({
+    log: { level: 'warn', timestamp: true },
+    inbounds: [{ type: 'mixed', tag: 'in', listen: '127.0.0.1', listen_port: 10800 }],
+    outbounds: [vlessOutbound(c.params)]
+  }))
+  try {
+    execFileSync(bin, ['check', '-c', cfg], { stdio: 'pipe' })
+    console.log(`✓ 配置校验通过: ${c.name}`)
+  } catch (err) {
+    fail(`配置校验失败(${c.name}): ${err.stderr?.toString() || err.message}`)
+  }
+}
+
 // ── 2) direct 出站全链路:undici socks → sing-box mixed 入站 → direct 出站 → https ──
 const port = await findFreePort()
 const cfgPath = path.join(tmp, 'direct.json')

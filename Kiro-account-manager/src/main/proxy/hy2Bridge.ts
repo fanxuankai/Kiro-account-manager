@@ -1,9 +1,10 @@
-// hy2(Hysteria2)代理桥:把 hy2:// 代理 URL 自动转成本地 socks5 入站。
+// hy2(Hysteria2)/vless 代理桥:把 QUIC/TLS 系代理 URL 自动转成本地 socks5 入站。
 //
-// 背景:undici/socks 体系只认 TCP 代理(http/socks),而 Hysteria2 基于 QUIC(UDP),
-// Node 侧无现成实现。方案是应用内嵌 sing-box 内核(单文件二进制,extraResources 打包),
-// 每个 hy2:// URL 起一个 sing-box 实例:本地 mixed(socks5+http)入站 + hysteria2 出站。
-// 对上层完全透明——safeCreateProxyAgent / ChainProxyRelay / Chromium proxyRules
+// 背景:undici/socks 体系只认 TCP 代理(http/socks),而 Hysteria2(QUIC/UDP)和
+// vless(Xray 系 TLS/REALITY/CDN 传输)Node 侧无现成实现。方案是应用内嵌 sing-box
+// 内核(单文件二进制,extraResources 打包),每个桥接 URL 起一个 sing-box 实例:
+// 本地 mixed(socks5+http)入站 + 对应协议出站。对上层完全透明——
+// safeCreateProxyAgent / ChainProxyRelay / Chromium proxyRules
 // 看到的都是普通的 socks5://127.0.0.1:<port>。
 //
 // 生命周期:懒启动(resolve 时),崩溃自动重启(限频),app 退出统一回收。
@@ -30,12 +31,37 @@ export interface Hy2Params {
   serverPorts?: string[]
 }
 
+/** vless URI 解析结果(sing-box vless outbound 的原料) */
+export interface VlessParams {
+  server: string
+  serverPort: number
+  uuid: string
+  flow?: string
+  security: 'none' | 'tls' | 'reality'
+  sni?: string
+  insecure: boolean
+  /** uTLS 指纹(fp=chrome 等;reality 必须) */
+  fingerprint?: string
+  /** reality 公钥(pbk) */
+  publicKey?: string
+  /** reality shortId(sid) */
+  shortId?: string
+  network: 'tcp' | 'ws' | 'grpc' | 'http' | 'httpupgrade'
+  /** ws/httpupgrade/http 的 path */
+  path?: string
+  /** ws/httpupgrade 的 Host 头 / http 的 host */
+  host?: string
+  /** grpc serviceName */
+  serviceName?: string
+}
+
+/** 需要桥接的代理 URL(hy2/hysteria2/hysteria + vless) */
 export function isHy2Url(url: string | null | undefined): boolean {
   if (!url) return false
   const m = url.match(/^\s*([a-zA-Z][\w+.-]*):/)
   if (!m) return false
   const proto = m[1].toLowerCase()
-  return proto === 'hy2' || proto === 'hysteria2' || proto === 'hysteria'
+  return proto === 'hy2' || proto === 'hysteria2' || proto === 'hysteria' || proto === 'vless'
 }
 
 /** 解析 hy2/hysteria2 URI(官方格式:hy2://auth@host:port/?sni=&insecure=&obfs=salamander&obfs-password=&mport=) */
@@ -80,15 +106,113 @@ function parseHy2Url(url: string): Hy2Params | null {
   }
 }
 
-/** 生成 sing-box 配置:唯一 mixed 入站(127.0.0.1:port)+ hysteria2 出站 */
-export function buildSingboxConfig(p: Hy2Params, listenPort: number, bindInterface?: string): string {
+/** 解析 vless URI(V2RayN 系标准分享格式:
+ *  vless://uuid@host:port?type=ws&security=tls&sni=..&fp=chrome&pbk=..&sid=..&path=..&host=..&flow=xtls-rprx-vision) */
+function parseVlessUrl(url: string): VlessParams | null {
+  let u: URL
+  try {
+    u = new URL(url.trim())
+  } catch {
+    return null
+  }
+  const host = u.hostname
+  if (!host) return null
+  const q = u.searchParams
+  const uuid = u.username ? decodeURIComponent(u.username) : ''
+  if (!uuid) return null
+  const securityRaw = (q.get('security') || '').toLowerCase()
+  const security: VlessParams['security'] =
+    securityRaw === 'reality' ? 'reality' : securityRaw === 'tls' ? 'tls' : 'none'
+  const port = Number(u.port) || (security === 'none' ? 80 : 443)
+  const insecure = ['1', 'true', 'yes'].includes((q.get('allowInsecure') || q.get('insecure') || '').toLowerCase())
+  const networkRaw = (q.get('type') || 'tcp').toLowerCase()
+  const network = (['tcp', 'ws', 'grpc', 'http', 'httpupgrade'] as const).includes(
+    networkRaw as VlessParams['network']
+  )
+    ? (networkRaw as VlessParams['network'])
+    : 'tcp'
+  const rawPath = q.get('path') || ''
+  return {
+    server: host,
+    serverPort: port,
+    uuid,
+    flow: q.get('flow') || undefined,
+    security,
+    sni: q.get('sni') || undefined,
+    insecure,
+    fingerprint: q.get('fp') || undefined,
+    publicKey: q.get('pbk') || undefined,
+    shortId: q.get('sid') || undefined,
+    network,
+    path: network === 'grpc' ? undefined : rawPath.startsWith('/') ? rawPath : rawPath ? `/${rawPath}` : undefined,
+    host: q.get('host') || undefined,
+    serviceName: q.get('serviceName') || rawPath.replace(/^\//, '') || undefined
+  }
+}
+
+/** vless → sing-box outbound(传输层/安全层全映射) */
+function buildVlessOutbound(p: VlessParams): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    type: 'vless',
+    tag: 'vless-out',
+    server: p.server,
+    server_port: p.serverPort,
+    uuid: p.uuid
+  }
+  if (p.flow) out.flow = p.flow
+  if (p.security !== 'none') {
+    const tls: Record<string, unknown> = {
+      enabled: true,
+      server_name: p.sni || p.server
+    }
+    if (p.insecure) tls.insecure = true
+    if (p.security === 'reality') {
+      // reality 必须 uTLS;无 fp 时按惯例 chrome
+      tls.utls = { enabled: true, fingerprint: p.fingerprint || 'chrome' }
+      tls.reality = { enabled: true, public_key: p.publicKey || '', short_id: p.shortId || '' }
+    } else if (p.fingerprint) {
+      tls.utls = { enabled: true, fingerprint: p.fingerprint }
+    }
+    out.tls = tls
+  }
+  switch (p.network) {
+    case 'ws': {
+      const t: Record<string, unknown> = { type: 'ws' }
+      if (p.path) t.path = p.path
+      if (p.host) t.headers = { Host: p.host }
+      out.transport = t
+      break
+    }
+    case 'grpc':
+      out.transport = { type: 'grpc', service_name: p.serviceName || '' }
+      break
+    case 'httpupgrade': {
+      const t: Record<string, unknown> = { type: 'httpupgrade' }
+      if (p.host) t.host = p.host
+      if (p.path) t.path = p.path
+      out.transport = t
+      break
+    }
+    case 'http': {
+      const t: Record<string, unknown> = { type: 'http' }
+      if (p.host) t.host = [p.host]
+      if (p.path) t.path = p.path
+      out.transport = t
+      break
+    }
+    // tcp:不写 transport(默认)
+  }
+  return out
+}
+
+/** hy2 → sing-box outbound */
+function buildHy2Outbound(p: Hy2Params): Record<string, unknown> {
   const hy2Out: Record<string, unknown> = {
     type: 'hysteria2',
     tag: 'hy2-out',
     server: p.server,
     server_port: p.serverPort
   }
-  if (bindInterface) hy2Out.bind_interface = bindInterface
   if (p.password) hy2Out.password = p.password
   if (p.serverPorts) {
     hy2Out.server_ports = p.serverPorts
@@ -102,13 +226,24 @@ export function buildSingboxConfig(p: Hy2Params, listenPort: number, bindInterfa
     insecure: p.insecure,
     alpn: ['h3']
   }
+  return hy2Out
+}
+
+/** 生成 sing-box 配置:唯一 mixed 入站(127.0.0.1:port)+ 桥接协议出站 */
+export function buildSingboxConfig(
+  p: Hy2Params | VlessParams,
+  listenPort: number,
+  bindInterface?: string
+): string {
+  const outbound = 'uuid' in p ? buildVlessOutbound(p) : buildHy2Outbound(p)
+  if (bindInterface) outbound.bind_interface = bindInterface
   return JSON.stringify(
     {
       log: { level: 'warn', timestamp: true },
       inbounds: [
         { type: 'mixed', tag: 'in', listen: '127.0.0.1', listen_port: listenPort }
       ],
-      outbounds: [hy2Out]
+      outbounds: [outbound]
     },
     null,
     2
@@ -245,8 +380,9 @@ async function ensureInstance(hy2Url: string): Promise<string> {
   if (inflight) return inflight
 
   const task = (async (): Promise<string> => {
-    const params = parseHy2Url(hy2Url)
-    if (!params) throw new Error('hy2 链接格式无效(需 hy2://[auth@]host:port)')
+    const isVless = /^vless:/i.test(hy2Url.trim())
+    const params = isVless ? parseVlessUrl(hy2Url) : parseHy2Url(hy2Url)
+    if (!params) throw new Error(`链接格式无效(需 ${isVless ? 'vless://uuid@host:port' : 'hy2://[auth@]host:port'})`)
 
     const bin = singboxBinaryPath()
     if (!fs.existsSync(bin)) {
