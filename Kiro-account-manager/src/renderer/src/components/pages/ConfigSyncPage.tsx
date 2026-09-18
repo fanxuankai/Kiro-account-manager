@@ -4,14 +4,13 @@ import {
   Trash2, RefreshCw, AlertTriangle
 } from 'lucide-react'
 import { useAccountsStore } from '@/store/accounts'
-import { useWebhookStore } from '@/store/webhooks'
 import { useTranslation } from '@/hooks/useTranslation'
 import { Card, CardContent, CardHeader, CardTitle, Button, Label, Switch } from '../ui'
 
 /**
  * 配置同步页面
  *
- * 把"非敏感的应用配置"（代理池、Webhook、注册模板、限速/定时/配额、过滤偏好等）
+ * 把"非敏感的应用配置"（代理池、注册模板、限速/定时/配额、过滤偏好等）
  * 导出为单一 JSON 文件，方便在多台电脑之间同步。
  *
  * 敏感数据（账号凭据、refreshToken 等）不会被导出，
@@ -25,8 +24,6 @@ interface PortableConfig {
   /** 代理池条目（脱敏：密码字段会被打码） */
   proxyPool?: Array<Record<string, unknown>>
   proxyPoolConfig?: Record<string, unknown>
-  /** Webhook 列表 */
-  webhooks?: Array<Record<string, unknown>>
   /** RegisterPage 配置（kiro-register-config） */
   registerConfig?: Record<string, unknown>
   /** 注册模板（kiro-register-templates） */
@@ -49,7 +46,6 @@ interface PortableConfig {
     autoSwitchEnabled?: boolean
     autoSwitchThreshold?: number
     autoSwitchInterval?: number
-    switchTarget?: string
   }
 }
 
@@ -71,7 +67,6 @@ export function ConfigSyncPage(): React.ReactNode {
   // 导出选项（默认全开）
   const [opts, setOpts] = useState({
     proxyPool: true,
-    webhooks: true,
     registerConfig: true,
     registerTemplates: true,
     registerSettings: true,
@@ -108,11 +103,6 @@ export function ConfigSyncPage(): React.ReactNode {
         return out
       })
       payload.proxyPoolConfig = { ...store.proxyPoolConfig }
-    }
-
-    if (opts.webhooks) {
-      const webhooks = Array.from(useWebhookStore.getState().webhooks.values())
-      payload.webhooks = webhooks.map((w) => ({ ...w }))
     }
 
     if (opts.registerConfig) {
@@ -153,8 +143,7 @@ export function ConfigSyncPage(): React.ReactNode {
         usagePrecision: store.usagePrecision,
         autoSwitchEnabled: store.autoSwitchEnabled,
         autoSwitchThreshold: store.autoSwitchThreshold,
-        autoSwitchInterval: store.autoSwitchInterval,
-        switchTarget: store.switchTarget
+        autoSwitchInterval: store.autoSwitchInterval
       }
     }
 
@@ -239,20 +228,6 @@ export function ConfigSyncPage(): React.ReactNode {
         store.setProxyPoolConfig(data.proxyPoolConfig as Partial<typeof store.proxyPoolConfig>)
       }
 
-      // Webhooks
-      if (data.webhooks && data.webhooks.length > 0) {
-        const ws = useWebhookStore.getState()
-        let added = 0
-        for (const w of data.webhooks) {
-          const input = w as Parameters<typeof ws.addWebhook>[0]
-          if (input.kind && input.url) {
-            ws.addWebhook(input)
-            added++
-          }
-        }
-        counts['Webhook'] = added
-      }
-
       // 注册配置
       if (data.registerConfig) {
         try {
@@ -293,9 +268,6 @@ export function ConfigSyncPage(): React.ReactNode {
         if (s.privacyMode != null) store.setPrivacyMode(s.privacyMode)
         if (s.usagePrecision != null) store.setUsagePrecision(s.usagePrecision)
         if (s.autoSwitchEnabled != null) store.setAutoSwitch(s.autoSwitchEnabled, s.autoSwitchThreshold, s.autoSwitchInterval)
-        if (s.switchTarget != null && (s.switchTarget === 'ide' || s.switchTarget === 'cli' || s.switchTarget === 'both')) {
-          store.setSwitchTarget(s.switchTarget)
-        }
         counts['App 设置'] = 1
       }
 
@@ -367,11 +339,6 @@ export function ConfigSyncPage(): React.ReactNode {
               label={`${isEn ? 'Proxy Pool' : '代理池'} (${store.proxyPool.size})`}
               checked={opts.proxyPool}
               onChange={(v) => setOpts((p) => ({ ...p, proxyPool: v }))}
-            />
-            <ExportToggle
-              label={`${isEn ? 'Webhooks' : 'Webhook'} (${useWebhookStore.getState().webhooks.size})`}
-              checked={opts.webhooks}
-              onChange={(v) => setOpts((p) => ({ ...p, webhooks: v }))}
             />
             <ExportToggle
               label={isEn ? 'Register Config' : '注册配置'}

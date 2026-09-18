@@ -210,64 +210,6 @@ const api = {
     }
   },
 
-  // 切换账号 - 写入凭证到本地 SSO 缓存
-  switchAccount: (credentials: {
-    accessToken: string
-    refreshToken: string
-    clientId: string
-    clientSecret: string
-    region?: string
-    startUrl?: string
-    authMethod?: 'IdC' | 'social'
-    provider?: 'BuilderId' | 'Github' | 'Google' | 'Enterprise'
-    profileArn?: string
-    accountId?: string
-  }): Promise<{
-    success: boolean
-    error?: string
-    refreshedCredentials?: { accessToken: string; refreshToken: string; expiresIn: number }
-  }> => {
-    return ipcRenderer.invoke('switch-account', credentials)
-  },
-
-  // 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件
-  onKiroIdeTokenChanged: (callback: (data: { accountId: string; reason: string }) => void): (() => void) => {
-    const handler = (_event: unknown, data: { accountId: string; reason: string }): void => {
-      callback(data)
-    }
-    ipcRenderer.on('kiro-ide-token-changed', handler)
-    return (): void => {
-      ipcRenderer.removeListener('kiro-ide-token-changed', handler)
-    }
-  },
-
-  // 主动续期开关：开启后账号管理器会在 IDE refresh 阈值前抢先 refresh，IDE 永不自刷
-  setProactiveRenewalEnabled: (enabled: boolean): Promise<{ success: boolean; enabled?: boolean; error?: string }> => {
-    return ipcRenderer.invoke('set-proactive-renewal-enabled', enabled)
-  },
-  getProactiveRenewalEnabled: (): Promise<{ success: boolean; enabled: boolean; leadTimeMinutes?: number; error?: string }> => {
-    return ipcRenderer.invoke('get-proactive-renewal-enabled')
-  },
-
-  // 切换账号到 Kiro CLI - 写入凭证到 SQLite 数据库
-  switchAccountCli: (credentials: {
-    accessToken: string
-    refreshToken: string
-    clientId?: string
-    clientSecret?: string
-    region?: string
-    profileArn?: string
-    provider?: string
-    scopes?: string[]
-  }): Promise<{ success: boolean; error?: string; dbPath?: string }> => {
-    return ipcRenderer.invoke('switch-account-cli', credentials)
-  },
-
-  // 退出登录 - 清除本地 SSO 缓存
-  logoutAccount: (): Promise<{ success: boolean; deletedCount?: number; error?: string }> => {
-    return ipcRenderer.invoke('logout-account')
-  },
-
   // 文件操作 - 导出到文件
   exportToFile: (data: string, filename: string): Promise<boolean> => {
     return ipcRenderer.invoke('export-to-file', data, filename)
@@ -677,215 +619,6 @@ const api = {
     return () => ipcRenderer.removeListener('update-error', handler)
   },
 
-  // ============ Kiro 设置管理 ============
-
-  // 获取 Kiro 设置
-  getKiroSettings: (): Promise<{
-    settings?: Record<string, unknown>
-    mcpConfig?: { mcpServers: Record<string, unknown> }
-    steeringFiles?: string[]
-    error?: string
-  }> => {
-    return ipcRenderer.invoke('get-kiro-settings')
-  },
-
-  // 获取 Kiro 可用模型列表
-  getKiroAvailableModels: (): Promise<{
-    models: Array<{ id: string; name: string; description: string }>
-    error?: string
-  }> => {
-    return ipcRenderer.invoke('get-kiro-available-models')
-  },
-
-  // 保存 Kiro 设置
-  saveKiroSettings: (settings: Record<string, unknown>): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('save-kiro-settings', settings)
-  },
-
-  // 打开 Kiro MCP 配置文件
-  openKiroMcpConfig: (type: 'user' | 'workspace'): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('open-kiro-mcp-config', type)
-  },
-
-  // 打开 Kiro Steering 目录
-  openKiroSteeringFolder: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('open-kiro-steering-folder')
-  },
-
-  // 打开 Kiro settings.json 文件
-  openKiroSettingsFile: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('open-kiro-settings-file')
-  },
-
-  // 打开指定的 Steering 文件
-  openKiroSteeringFile: (filename: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('open-kiro-steering-file', filename)
-  },
-
-  // 创建默认的 rules.md 文件
-  createKiroDefaultRules: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('create-kiro-default-rules')
-  },
-
-  // 读取 Steering 文件内容
-  readKiroSteeringFile: (filename: string): Promise<{ success: boolean; content?: string; error?: string }> => {
-    return ipcRenderer.invoke('read-kiro-steering-file', filename)
-  },
-
-  // 保存 Steering 文件内容
-  saveKiroSteeringFile: (filename: string, content: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('save-kiro-steering-file', filename, content)
-  },
-
-  // 删除 Steering 文件
-  deleteKiroSteeringFile: (filename: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('delete-kiro-steering-file', filename)
-  },
-
-  // ============ MCP 服务器管理 ============
-
-  // 保存 MCP 服务器配置
-  saveMcpServer: (name: string, config: { command: string; args?: string[]; env?: Record<string, string> }, oldName?: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('save-mcp-server', name, config, oldName)
-  },
-
-  // 删除 MCP 服务器
-  deleteMcpServer: (name: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('delete-mcp-server', name)
-  },
-
-  // ============ Kiro API 反代服务器 ============
-
-  // 启动反代服务器
-  proxyStart: (config?: { port?: number; host?: string; apiKey?: string; enableMultiAccount?: boolean; logRequests?: boolean; clientDrivenToolExecution?: boolean; disableTools?: boolean; modelThinkingMode?: Record<string, boolean>; thinkingOutputFormat?: 'auto' | 'reasoning_content' | 'thinking' | 'think' }): Promise<{ success: boolean; port?: number; error?: string }> => {
-    return ipcRenderer.invoke('proxy-start', config)
-  },
-
-  // 停止反代服务器
-  proxyStop: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('proxy-stop')
-  },
-
-  // 获取反代服务器状态
-  proxyGetStatus: (): Promise<{ running: boolean; config: unknown; stats: unknown }> => {
-    return ipcRenderer.invoke('proxy-get-status')
-  },
-
-  // 重置累计 credits
-  proxyResetCredits: (): Promise<{ success: boolean }> => {
-    return ipcRenderer.invoke('proxy-reset-credits')
-  },
-
-  // 重置累计 tokens
-  proxyResetTokens: (): Promise<{ success: boolean }> => {
-    return ipcRenderer.invoke('proxy-reset-tokens')
-  },
-
-  // 重置请求统计
-  proxyResetRequestStats: (): Promise<{ success: boolean }> => {
-    return ipcRenderer.invoke('proxy-reset-request-stats')
-  },
-
-  // 获取反代详细日志
-  proxyGetLogs: (count?: number): Promise<Array<{ timestamp: string; level: string; category: string; message: string; data?: unknown }>> => {
-    return ipcRenderer.invoke('proxy-get-logs', count)
-  },
-
-  // 清除反代详细日志
-  proxyClearLogs: (): Promise<{ success: boolean }> => {
-    return ipcRenderer.invoke('proxy-clear-logs')
-  },
-
-  // 获取反代日志数量
-  proxyGetLogsCount: (): Promise<number> => {
-    return ipcRenderer.invoke('proxy-get-logs-count')
-  },
-
-  // 更新反代服务器配置
-  proxyUpdateConfig: (config: Record<string, unknown>): Promise<{ success: boolean; config?: unknown; error?: string }> => {
-    return ipcRenderer.invoke('proxy-update-config', config)
-  },
-
-  // ============ v1.8 反代安全 / 可观测 IPC ============
-
-  /** 获取反代自签证书信息（用于在 UI 显示指纹/有效期 + 让用户导出 .crt） */
-  proxySelfSignedCertInfo: (): Promise<{ success: boolean; cert?: string; key?: string; fingerprint?: string; notBefore?: number; notAfter?: number; subject?: string; altNames?: string[]; error?: string }> => {
-    return ipcRenderer.invoke('proxy-self-signed-cert-info')
-  },
-
-  /** 强制重新生成反代自签证书（重启 server 后生效） */
-  proxySelfSignedCertRegenerate: (): Promise<{ success: boolean; cert?: string; key?: string; fingerprint?: string; notBefore?: number; notAfter?: number; subject?: string; altNames?: string[]; error?: string }> => {
-    return ipcRenderer.invoke('proxy-self-signed-cert-regenerate')
-  },
-
-  /** 查询是否需要重启反代（port/host/tls 变更后 UI 提示） */
-  proxyNeedsRestart: (): Promise<{ needsRestart: boolean }> => {
-    return ipcRenderer.invoke('proxy-needs-restart')
-  },
-
-  /** 立即重启反代 */
-  proxyRestart: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('proxy-restart')
-  },
-
-  /** 获取反代审计日志 */
-  proxyAuditLog: (): Promise<{ entries: Array<{ ts: number; type: string; data: Record<string, unknown> }> }> => {
-    return ipcRenderer.invoke('proxy-audit-log')
-  },
-
-  /** 监听 main 进程推送的 webhook 事件（关键告警） */
-  onProxyWebhookTrigger: (callback: (event: string, payload: Record<string, unknown>) => void): (() => void) => {
-    const handler = (_e: Electron.IpcRendererEvent, data: { event: string; payload: Record<string, unknown> }): void => {
-      callback(data.event, data.payload)
-    }
-    ipcRenderer.on('proxy-webhook-trigger', handler)
-    return () => ipcRenderer.off('proxy-webhook-trigger', handler)
-  },
-
-  // 添加账号到反代池
-  proxyAddAccount: (account: { id: string; email?: string; accessToken: string; refreshToken?: string; profileArn?: string; expiresAt?: number; clientId?: string; clientSecret?: string; region?: string; authMethod?: string; provider?: string; machineId?: string }): Promise<{ success: boolean; accountCount?: number; error?: string }> => {
-    return ipcRenderer.invoke('proxy-add-account', account)
-  },
-
-  // 从反代池移除账号
-  proxyRemoveAccount: (accountId: string): Promise<{ success: boolean; accountCount?: number; error?: string }> => {
-    return ipcRenderer.invoke('proxy-remove-account', accountId)
-  },
-
-  // 同步账号到反代池（批量更新）
-  proxySyncAccounts: (accounts: Array<{ id: string; email?: string; accessToken: string; refreshToken?: string; profileArn?: string; expiresAt?: number; clientId?: string; clientSecret?: string; region?: string; authMethod?: string; provider?: string; machineId?: string }>): Promise<{ success: boolean; accountCount?: number; error?: string }> => {
-    return ipcRenderer.invoke('proxy-sync-accounts', accounts)
-  },
-
-  // 获取反代池账号列表
-  proxyGetAccounts: (): Promise<{ accounts: unknown[]; availableCount: number }> => {
-    return ipcRenderer.invoke('proxy-get-accounts')
-  },
-
-  // 重置反代池状态
-  proxyResetPool: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('proxy-reset-pool')
-  },
-
-  // 手动解除账号封禁标记
-  proxyClearAccountSuspended: (accountId: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('proxy-clear-account-suspended', accountId)
-  },
-
-  // 刷新模型缓存
-  proxyRefreshModels: (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('proxy-refresh-models')
-  },
-
-  // 获取可用模型列表
-  proxyGetModels: (): Promise<{ success: boolean; error?: string; models: Array<{ id: string; name: string; description: string; inputTypes?: string[]; maxInputTokens?: number | null; maxOutputTokens?: number | null; rateMultiplier?: number; rateUnit?: string }>; fromCache?: boolean }> => {
-    return ipcRenderer.invoke('proxy-get-models')
-  },
-
-  proxyConfigureClients: (input: { clients: Array<'claudeCode' | 'opencode' | 'codex' | 'gemini' | 'hermes' | 'openclaw'>; modelId: string; modelName?: string; models?: Array<{ id: string; name?: string; inputTypes?: string[]; maxInputTokens?: number | null; maxOutputTokens?: number | null }> }): Promise<{ success: boolean; error?: string; proxyOrigin: string; openaiBaseUrl: string; results: Array<{ client: 'claudeCode' | 'opencode' | 'codex' | 'gemini' | 'hermes' | 'openclaw'; success: boolean; paths: string[]; backupPaths: string[]; error?: string }> }> => {
-    return ipcRenderer.invoke('proxy-configure-clients', input)
-  },
-
   // 获取账户可用模型列表
   accountGetModels: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string): Promise<{ success: boolean; error?: string; models: Array<{ id: string; name: string; description: string; inputTypes?: string[]; maxInputTokens?: number | null; maxOutputTokens?: number | null; rateMultiplier?: number; rateUnit?: string }> }> => {
     return ipcRenderer.invoke('account-get-models', accessToken, region, profileArn, machineId, provider, authMethod, accountId)
@@ -926,80 +659,19 @@ const api = {
     return ipcRenderer.invoke('account-check-renewal', accessToken, region, profileArn, machineId, provider, authMethod, accountId)
   },
 
-  // 保存代理日志
-  proxySaveLogs: (logs: Array<{ time: string; path: string; status: number; tokens?: number }>): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke('proxy-save-logs', logs)
+  // 获取系统日志
+  proxyGetLogs: (count?: number): Promise<Array<{ timestamp: string; level: string; category: string; message: string; data?: unknown }>> => {
+    return ipcRenderer.invoke('proxy-get-logs', count)
   },
 
-  // 加载代理日志
-  proxyLoadLogs: (): Promise<{ success: boolean; logs: Array<{ time: string; path: string; status: number; tokens?: number }> }> => {
-    return ipcRenderer.invoke('proxy-load-logs')
+  // 清除系统日志
+  proxyClearLogs: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('proxy-clear-logs')
   },
 
-  // 监听反代请求事件
-  onProxyRequest: (callback: (info: { path: string; method: string; accountId?: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, info: { path: string; method: string; accountId?: string }): void => {
-      callback(info)
-    }
-    ipcRenderer.on('proxy-request', handler)
-    return () => {
-      ipcRenderer.removeListener('proxy-request', handler)
-    }
-  },
-
-  // 监听反代响应事件
-  onProxyResponse: (callback: (info: { path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, info: { path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }): void => {
-      callback(info)
-    }
-    ipcRenderer.on('proxy-response', handler)
-    return () => {
-      ipcRenderer.removeListener('proxy-response', handler)
-    }
-  },
-
-  // 监听反代错误事件
-  onProxyError: (callback: (error: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, error: string): void => {
-      callback(error)
-    }
-    ipcRenderer.on('proxy-error', handler)
-    return () => {
-      ipcRenderer.removeListener('proxy-error', handler)
-    }
-  },
-
-  // 监听反代状态变化事件
-  onProxyStatusChange: (callback: (status: { running: boolean; port: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, status: { running: boolean; port: number }): void => {
-      callback(status)
-    }
-    ipcRenderer.on('proxy-status-change', handler)
-    return () => {
-      ipcRenderer.removeListener('proxy-status-change', handler)
-    }
-  },
-
-  // 监听反代账号被封禁事件（TEMPORARILY_SUSPENDED / AccountSuspendedException）
-  onProxyAccountSuspended: (callback: (info: { id: string; email?: string; reason: string; message: string; suspendedAt: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, info: { id: string; email?: string; reason: string; message: string; suspendedAt: number }): void => {
-      callback(info)
-    }
-    ipcRenderer.on('proxy-account-suspended', handler)
-    return () => {
-      ipcRenderer.removeListener('proxy-account-suspended', handler)
-    }
-  },
-
-  // 监听反代账号更新事件（token 刷新 / Enterprise profileArn 自愈）
-  onProxyAccountUpdate: (callback: (info: { id: string; accessToken?: string; refreshToken?: string; expiresAt?: number; profileArn?: string }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, info: { id: string; accessToken?: string; refreshToken?: string; expiresAt?: number; profileArn?: string }): void => {
-      callback(info)
-    }
-    ipcRenderer.on('proxy-account-update', handler)
-    return () => {
-      ipcRenderer.removeListener('proxy-account-update', handler)
-    }
+  // 获取系统日志数量
+  proxyGetLogsCount: (): Promise<number> => {
+    return ipcRenderer.invoke('proxy-get-logs-count')
   },
 
   // ============ Usage API 类型设置 ============
@@ -1426,55 +1098,13 @@ const api = {
   },
 
   // ============ 诊断 API ============
-  /** 测试一个 URL 的连通性（GET，5 秒超时，不带代理特殊处理由主进程默认逻辑） */
-  diagnoseHttpProbe: (params: { url: string; method?: 'GET' | 'HEAD'; timeoutMs?: number }): Promise<{
-    success: boolean
-    latencyMs?: number
-    status?: number
-    error?: string
-  }> => {
-    return ipcRenderer.invoke('diagnose:http-probe', params)
-  },
-
   /**
-   * 设置账号 → 代理 URL 绑定（用于反代时"N 个账号一个 IP"分桶）
+   * 设置账号 → 代理 URL 绑定
    * @param accountId 账号 ID
    * @param proxyUrl 代理 URL；undefined 表示解绑
    */
   accountSetProxyBinding: (accountId: string, proxyUrl: string | undefined): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('account-set-proxy-binding', accountId, proxyUrl)
-  },
-
-  // ============ 一键诊断 ============
-  diagnoseRun: (params: {
-    proxyUrl?: string
-    targets: Array<{ id: string; label: string; url: string; timeoutMs?: number; expectStatus?: number[] }>
-  }): Promise<{ results: Array<{ id: string; label: string; url: string; success: boolean; httpStatus?: number; latencyMs?: number; error?: string }> }> => {
-    return ipcRenderer.invoke('diagnose:run', params)
-  },
-
-  /**
-   * 账号测活：指定账号走反代逻辑给指定模型发一条测试消息，验证是否正常返回
-   */
-  diagnoseAccountLiveness: (params: {
-    account: {
-      id?: string; email?: string; accessToken?: string; refreshToken?: string
-      clientId?: string; clientSecret?: string; region?: string
-      authMethod?: 'social' | 'idc' | 'IdC' | 'external_idp'; provider?: string
-      profileArn?: string; machineId?: string; expiresAt?: number; proxyUrl?: string
-    }
-    model?: string
-    message?: string
-    timeoutMs?: number
-  }): Promise<{
-    success: boolean
-    latencyMs: number
-    model?: string
-    content?: string
-    usage?: { inputTokens: number; outputTokens: number; credits: number }
-    error?: string
-  }> => {
-    return ipcRenderer.invoke('diagnose:account-liveness', params)
   },
 
   // 获取注册状态

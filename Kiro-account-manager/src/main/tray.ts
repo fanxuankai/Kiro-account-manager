@@ -64,11 +64,6 @@ function loadIconFromFile(iconKey: string): NativeImage {
   }
 }
 
-// 获取状态图标
-function getStatusIcon(running: boolean): NativeImage {
-  return loadIconFromFile(running ? 'status-running' : 'status-stopped')
-}
-
 // 获取菜单图标
 function getMenuIcon(name: string): NativeImage {
   return loadIconFromFile(name)
@@ -100,12 +95,8 @@ interface TrayCallbacks {
   onQuit: () => void
   onRefreshAccount: () => Promise<void>
   onSwitchAccount: () => Promise<void>
-  onToggleProxy: () => Promise<void>
-  getProxyStatus: () => { running: boolean; port: number }
   getCurrentAccount: () => TrayAccountInfo | null
   getAccountList: () => TrayAccountInfo[]
-  getProxyStats: () => { totalRequests: number; successRequests: number; failedRequests: number }
-  getSessionStats: () => { totalRequests: number; successRequests: number; failedRequests: number; startTime: number }
 }
 
 let callbacks: TrayCallbacks | null = null
@@ -148,27 +139,6 @@ function buildTrayMenu(): Menu {
   })
   menuTemplate.push({ type: 'separator' })
 
-  // 代理服务状态
-  if (callbacks) {
-    const proxyStatus = callbacks.getProxyStatus()
-    menuTemplate.push({
-      label: proxyStatus.running 
-        ? (isEn ? `Proxy Running (Port ${proxyStatus.port})` : `代理服务运行中 (端口 ${proxyStatus.port})`) 
-        : (isEn ? 'Proxy Stopped' : '代理服务已停止'),
-      icon: getStatusIcon(proxyStatus.running),
-      enabled: false
-    })
-    menuTemplate.push({
-      label: proxyStatus.running ? (isEn ? 'Stop Proxy' : '停止代理服务') : (isEn ? 'Start Proxy' : '启动代理服务'),
-      icon: getMenuIcon(proxyStatus.running ? 'stop' : 'play'),
-      click: async () => {
-        await callbacks?.onToggleProxy()
-        updateTrayMenu()
-      }
-    })
-    menuTemplate.push({ type: 'separator' })
-  }
-
   // 当前账户信息
   const account = callbacks?.getCurrentAccount() || currentAccount
   if (account) {
@@ -198,23 +168,6 @@ function buildTrayMenu(): Menu {
         enabled: false
       })
     }
-    // 从主进程获取实时统计数据（总计和会话）
-    const proxyStats = callbacks?.getProxyStats() || { totalRequests: 0, successRequests: 0, failedRequests: 0 }
-    const sessionStats = callbacks?.getSessionStats() || { totalRequests: 0, successRequests: 0, failedRequests: 0, startTime: 0 }
-    menuTemplate.push({
-      label: isEn 
-        ? `   Total: ${proxyStats.totalRequests} (✓${proxyStats.successRequests} ✗${proxyStats.failedRequests})`
-        : `   总计: ${proxyStats.totalRequests} (成功${proxyStats.successRequests} 失败${proxyStats.failedRequests})`,
-      icon: getMenuIcon('requests'),
-      enabled: false
-    })
-    menuTemplate.push({
-      label: isEn 
-        ? `   Session: ${sessionStats.totalRequests} (✓${sessionStats.successRequests} ✗${sessionStats.failedRequests})`
-        : `   本次: ${sessionStats.totalRequests} (成功${sessionStats.successRequests} 失败${sessionStats.failedRequests})`,
-      icon: getMenuIcon('requests'),
-      enabled: false
-    })
     menuTemplate.push({ type: 'separator' })
   } else {
     menuTemplate.push({
@@ -245,22 +198,6 @@ function buildTrayMenu(): Menu {
       await callbacks?.onSwitchAccount()
       updateTrayMenu()
     }
-  })
-
-  menuTemplate.push({ type: 'separator' })
-
-  // 快捷操作
-  menuTemplate.push({
-    label: isEn ? 'Copy Proxy Address' : '复制代理地址',
-    icon: getMenuIcon('copy'),
-    click: () => {
-      const { clipboard } = require('electron')
-      const proxyStatus = callbacks?.getProxyStatus()
-      if (proxyStatus?.running) {
-        clipboard.writeText(`http://127.0.0.1:${proxyStatus.port}`)
-      }
-    },
-    enabled: callbacks?.getProxyStatus()?.running ?? false
   })
 
   menuTemplate.push({ type: 'separator' })

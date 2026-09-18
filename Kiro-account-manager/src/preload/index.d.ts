@@ -83,23 +83,10 @@ interface RefreshResult {
     accessToken: string
     refreshToken?: string
     expiresIn: number
-    /**
-     * 反代在 main 进程中是否已经把新 token 同步写入 ~/.aws/sso/cache/kiro-auth-token.json。
-     * 仅当该账号被识别为 Kiro IDE 当前激活账号时才会同步，否则为 false。
-     */
-    syncedToIde?: boolean
-    /** 未同步到 IDE 时的原因描述（用于 UI 提示） */
-    syncSkipReason?: string
     /** Enterprise 账号刷新时主进程自动获取的真实 profileArn */
     profileArn?: string
   }
   error?: { message: string }
-}
-
-/** Kiro IDE 自己 refresh 完写回 token 文件、被反代检测到后通知 renderer 的 payload */
-interface KiroIdeTokenChangedPayload {
-  accountId: string
-  reason: string
 }
 
 interface BonusData {
@@ -218,71 +205,6 @@ interface KiroApi {
   onBackgroundCheckProgress: (callback: (data: { completed: number; total: number; success: number; failed: number }) => void) => () => void
   onBackgroundCheckResult: (callback: (data: { id: string; success: boolean; data?: unknown; error?: string }) => void) => () => void
   
-  // 切换账号 - 写入凭证到本地 SSO 缓存
-  switchAccount: (credentials: {
-    accessToken: string
-    refreshToken: string
-    clientId: string
-    clientSecret: string
-    region?: string
-    startUrl?: string
-    authMethod?: 'IdC' | 'social'
-    provider?: 'BuilderId' | 'Enterprise' | 'Github' | 'Google' | 'IAM_SSO'
-    profileArn?: string
-    /** 反代 store 里的 account.id，用于 main 进程记忆 lastSwitchedAccountId 供 watcher 反向同步 */
-    accountId?: string
-  }) => Promise<{
-    success: boolean
-    error?: string
-    /** 切号前 main 进程会做一次 refresh；这是 OIDC 返回的最新凭证，renderer 应据此更新 store */
-    refreshedCredentials?: {
-      accessToken: string
-      refreshToken: string
-      expiresIn: number
-    }
-  }>
-
-  /**
-   * 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件，回调里通常应该重新 loadAccounts
-   * 让 UI 显示最新 expiresAt。返回 unsubscribe 函数。
-   */
-  onKiroIdeTokenChanged: (callback: (data: KiroIdeTokenChangedPayload) => void) => () => void
-
-  /**
-   * 开启/关闭"主动续期"功能。
-   * 开启后账号管理器会在 IDE 当前激活账号 token 剩 ~15 分钟时抢先 refresh + 写磁盘，
-   * 让 IDE 永远拿到剩余时间充足的 token，IDE 内部的 refresh loop 不会被触发，
-   * 彻底消除 IDE 与账号管理器同时 refresh 撞车的可能。
-   */
-  setProactiveRenewalEnabled: (enabled: boolean) => Promise<{
-    success: boolean
-    enabled?: boolean
-    error?: string
-  }>
-
-  /** 读取主动续期开关当前状态 + 提前续期的分钟数 */
-  getProactiveRenewalEnabled: () => Promise<{
-    success: boolean
-    enabled: boolean
-    leadTimeMinutes?: number
-    error?: string
-  }>
-
-  // 切换账号到 Kiro CLI - 写入凭证到 SQLite 数据库
-  switchAccountCli: (credentials: {
-    accessToken: string
-    refreshToken: string
-    clientId?: string
-    clientSecret?: string
-    region?: string
-    profileArn?: string
-    provider?: string
-    scopes?: string[]
-  }) => Promise<{ success: boolean; error?: string; dbPath?: string }>
-
-  // 退出登录 - 清除本地 SSO 缓存
-  logoutAccount: () => Promise<{ success: boolean; deletedCount?: number; error?: string }>
-
   // 文件操作
   exportToFile: (data: string, filename: string) => Promise<boolean>
   importFromFile: () => Promise<{ content: string; format: string } | null>
@@ -681,123 +603,6 @@ interface KiroApi {
   onUpdateDownloaded: (callback: (info: { version: string; releaseDate?: string; releaseNotes?: string }) => void) => () => void
   onUpdateError: (callback: (error: string) => void) => () => void
 
-  // ============ Kiro 设置管理 API ============
-
-  // 获取 Kiro 设置
-  getKiroSettings: () => Promise<{
-    settings?: Record<string, unknown>
-    mcpConfig?: { mcpServers: Record<string, unknown> }
-    steeringFiles?: string[]
-    error?: string
-  }>
-
-  // 获取 Kiro 可用模型列表
-  getKiroAvailableModels: () => Promise<{
-    models: Array<{ id: string; name: string; description: string }>
-    error?: string
-  }>
-
-  // 保存 Kiro 设置
-  saveKiroSettings: (settings: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>
-
-  // 打开 Kiro MCP 配置文件
-  openKiroMcpConfig: (type: 'user' | 'workspace') => Promise<{ success: boolean; error?: string }>
-
-  // 打开 Kiro Steering 目录
-  openKiroSteeringFolder: () => Promise<{ success: boolean; error?: string }>
-
-  // 打开 Kiro settings.json 文件
-  openKiroSettingsFile: () => Promise<{ success: boolean; error?: string }>
-
-  // 打开指定的 Steering 文件
-  openKiroSteeringFile: (filename: string) => Promise<{ success: boolean; error?: string }>
-
-  // 创建默认的 rules.md 文件
-  createKiroDefaultRules: () => Promise<{ success: boolean; error?: string }>
-
-  // 读取 Steering 文件内容
-  readKiroSteeringFile: (filename: string) => Promise<{ success: boolean; content?: string; error?: string }>
-
-  // 保存 Steering 文件内容
-  saveKiroSteeringFile: (filename: string, content: string) => Promise<{ success: boolean; error?: string }>
-
-  // 删除 Steering 文件
-  deleteKiroSteeringFile: (filename: string) => Promise<{ success: boolean; error?: string }>
-
-  // ============ MCP 服务器管理 ============
-
-  // 保存 MCP 服务器配置
-  saveMcpServer: (name: string, config: { command: string; args?: string[]; env?: Record<string, string> }, oldName?: string) => Promise<{ success: boolean; error?: string }>
-
-  // 删除 MCP 服务器
-  deleteMcpServer: (name: string) => Promise<{ success: boolean; error?: string }>
-
-  // ============ Kiro API 反代服务器 ============
-
-  // 启动反代服务器
-  proxyStart: (config?: { port?: number; host?: string; apiKey?: string; enableMultiAccount?: boolean; logRequests?: boolean; clientDrivenToolExecution?: boolean; disableTools?: boolean; modelThinkingMode?: Record<string, boolean>; thinkingOutputFormat?: 'auto' | 'reasoning_content' | 'thinking' | 'think' }) => Promise<{ success: boolean; port?: number; error?: string }>
-
-  // 停止反代服务器
-  proxyStop: () => Promise<{ success: boolean; error?: string }>
-
-  // 获取反代服务器状态
-  proxyGetStatus: () => Promise<{ running: boolean; config: unknown; stats: unknown; sessionStats?: { totalRequests: number; successRequests: number; failedRequests: number; startTime: number } }>
-
-  // 重置累计 credits
-  proxyResetCredits: () => Promise<{ success: boolean }>
-
-  // 重置累计 tokens
-  proxyResetTokens: () => Promise<{ success: boolean }>
-
-  // 重置请求统计
-  proxyResetRequestStats: () => Promise<{ success: boolean }>
-
-  // 获取反代详细日志
-  proxyGetLogs: (count?: number) => Promise<Array<{ timestamp: string; level: string; category: string; message: string; data?: unknown }>>
-
-  // 清除反代详细日志
-  proxyClearLogs: () => Promise<{ success: boolean }>
-
-  // 获取反代日志数量
-  proxyGetLogsCount: () => Promise<number>
-
-  // 更新反代服务器配置
-  proxyUpdateConfig: (config: Record<string, unknown>) => Promise<{ success: boolean; config?: unknown; error?: string }>
-
-  // ============ v1.8 反代安全 / 可观测 IPC ============
-  proxySelfSignedCertInfo: () => Promise<{ success: boolean; cert?: string; key?: string; fingerprint?: string; notBefore?: number; notAfter?: number; subject?: string; altNames?: string[]; error?: string }>
-  proxySelfSignedCertRegenerate: () => Promise<{ success: boolean; cert?: string; key?: string; fingerprint?: string; notBefore?: number; notAfter?: number; subject?: string; altNames?: string[]; error?: string }>
-  proxyNeedsRestart: () => Promise<{ needsRestart: boolean }>
-  proxyRestart: () => Promise<{ success: boolean; error?: string }>
-  proxyAuditLog: () => Promise<{ entries: Array<{ ts: number; type: string; data: Record<string, unknown> }> }>
-  onProxyWebhookTrigger: (callback: (event: string, payload: Record<string, unknown>) => void) => (() => void)
-
-  // 添加账号到反代池
-  proxyAddAccount: (account: { id: string; email?: string; accessToken: string; refreshToken?: string; profileArn?: string; expiresAt?: number; clientId?: string; clientSecret?: string; region?: string; authMethod?: string; provider?: string; machineId?: string }) => Promise<{ success: boolean; accountCount?: number; error?: string }>
-
-  // 从反代池移除账号
-  proxyRemoveAccount: (accountId: string) => Promise<{ success: boolean; accountCount?: number; error?: string }>
-
-  // 同步账号到反代池（批量更新）
-  proxySyncAccounts: (accounts: Array<{ id: string; email?: string; accessToken: string; refreshToken?: string; profileArn?: string; expiresAt?: number; clientId?: string; clientSecret?: string; region?: string; authMethod?: string; provider?: string; machineId?: string }>) => Promise<{ success: boolean; accountCount?: number; error?: string }>
-
-  // 获取反代池账号列表
-  proxyGetAccounts: () => Promise<{ accounts: unknown[]; availableCount: number }>
-
-  // 重置反代池状态
-  proxyResetPool: () => Promise<{ success: boolean; error?: string }>
-
-  // 手动解除账号封禁标记
-  proxyClearAccountSuspended: (accountId: string) => Promise<{ success: boolean; error?: string }>
-
-  // 刷新模型缓存
-  proxyRefreshModels: () => Promise<{ success: boolean; error?: string }>
-
-  // 获取可用模型列表
-  proxyGetModels: () => Promise<{ success: boolean; error?: string; models: Array<{ id: string; name: string; description: string; inputTypes?: string[]; maxInputTokens?: number | null; maxOutputTokens?: number | null; rateMultiplier?: number; rateUnit?: string }>; fromCache?: boolean }>
-
-  proxyConfigureClients: (input: { clients: Array<'claudeCode' | 'opencode' | 'codex' | 'gemini' | 'hermes' | 'openclaw'>; modelId: string; modelName?: string; models?: Array<{ id: string; name?: string; inputTypes?: string[]; maxInputTokens?: number | null; maxOutputTokens?: number | null }> }) => Promise<{ success: boolean; error?: string; proxyOrigin: string; openaiBaseUrl: string; results: Array<{ client: 'claudeCode' | 'opencode' | 'codex' | 'gemini' | 'hermes' | 'openclaw'; success: boolean; paths: string[]; backupPaths: string[]; error?: string }> }>
-
   // 获取账户可用模型列表
   accountGetModels: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => Promise<{ success: boolean; error?: string; models: Array<{ id: string; name: string; description: string; inputTypes?: string[]; maxInputTokens?: number | null; maxOutputTokens?: number | null; rateMultiplier?: number; rateUnit?: string }> }>
 
@@ -822,29 +627,14 @@ interface KiroApi {
   // 只读检查订阅续费状态（cancelAtPeriodEnd=false 表示下周期会自动续费扣款）
   accountCheckRenewal: (accessToken: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string) => Promise<{ success: boolean; error?: string; cancelAtPeriodEnd?: boolean; currentPeriodEnd?: number; planName?: string; subId?: string; isFreePlan?: boolean; scheduledToFree?: boolean; transitionAt?: number; billing?: StripeBillingSnapshot; credentials?: { accessToken: string; refreshToken?: string; expiresIn?: number } }>
 
-  // 保存代理日志
-  proxySaveLogs: (logs: Array<{ time: string; path: string; status: number; tokens?: number }>) => Promise<{ success: boolean; error?: string }>
+  // 获取系统日志
+  proxyGetLogs: (count?: number) => Promise<Array<{ timestamp: string; level: string; category: string; message: string; data?: unknown }>>
 
-  // 加载代理日志
-  proxyLoadLogs: () => Promise<{ success: boolean; logs: Array<{ time: string; path: string; status: number; tokens?: number }> }>
+  // 清除系统日志
+  proxyClearLogs: () => Promise<{ success: boolean }>
 
-  // 监听反代请求事件
-  onProxyRequest: (callback: (info: { path: string; method: string; accountId?: string }) => void) => () => void
-
-  // 监听反代响应事件
-  onProxyResponse: (callback: (info: { path: string; model?: string; status: number; tokens?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number; reasoningTokens?: number; credits?: number; responseTime?: number; error?: string }) => void) => () => void
-
-  // 监听反代错误事件
-  onProxyError: (callback: (error: string) => void) => () => void
-
-  // 监听反代状态变化事件
-  onProxyStatusChange: (callback: (status: { running: boolean; port: number }) => void) => () => void
-
-  // 监听反代账号被封禁事件（TEMPORARILY_SUSPENDED / AccountSuspendedException）
-  onProxyAccountSuspended: (callback: (info: { id: string; email?: string; reason: string; message: string; suspendedAt: number }) => void) => () => void
-
-  // 监听反代账号更新事件（token 刷新 / Enterprise profileArn 自愈）
-  onProxyAccountUpdate: (callback: (info: { id: string; accessToken?: string; refreshToken?: string; expiresAt?: number; profileArn?: string }) => void) => () => void
+  // 获取系统日志数量
+  proxyGetLogsCount: () => Promise<number>
 
   // ============ Usage API 类型设置 ============
 
@@ -1112,42 +902,8 @@ interface KiroApi {
     }
   }>
 
-  // 诊断：通用 HTTP 探测
-  diagnoseHttpProbe: (params: { url: string; method?: 'GET' | 'HEAD'; timeoutMs?: number }) => Promise<{
-    success: boolean
-    latencyMs?: number
-    status?: number
-    error?: string
-  }>
-
-  // 账号-代理绑定（反代分桶）
+  // 账号-代理绑定
   accountSetProxyBinding: (accountId: string, proxyUrl: string | undefined) => Promise<{ success: boolean }>
-
-  // 一键诊断
-  diagnoseRun: (params: {
-    proxyUrl?: string
-    targets: Array<{ id: string; label: string; url: string; timeoutMs?: number; expectStatus?: number[] }>
-  }) => Promise<{ results: Array<{ id: string; label: string; url: string; success: boolean; httpStatus?: number; latencyMs?: number; error?: string }> }>
-
-  // 账号测活：指定账号 + 模型走反代逻辑发测试消息
-  diagnoseAccountLiveness: (params: {
-    account: {
-      id?: string; email?: string; accessToken?: string; refreshToken?: string
-      clientId?: string; clientSecret?: string; region?: string
-      authMethod?: 'social' | 'idc' | 'IdC' | 'external_idp'; provider?: string
-      profileArn?: string; machineId?: string; expiresAt?: number; proxyUrl?: string
-    }
-    model?: string
-    message?: string
-    timeoutMs?: number
-  }) => Promise<{
-    success: boolean
-    latencyMs: number
-    model?: string
-    content?: string
-    usage?: { inputTokens: number; outputTokens: number; credits: number }
-    error?: string
-  }>
 
   onRegistrationLog: (callback: (msg: string) => void) => () => void
 
