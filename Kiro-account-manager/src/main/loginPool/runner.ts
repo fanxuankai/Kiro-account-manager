@@ -261,6 +261,7 @@ const SIGNIN_SELECTORS = ['input[name="commit"]', 'button[type="submit"]']
  *  Cancel 也是 submit 型按钮,2026-09-18 实测曾兜到它,GitHub 回 access_denied
  *  ("The user has denied your application access")。只允许 id/name/文本精确命中。 */
 const AUTHORIZE_SELECTORS = [
+  { text: 'Authorize kirodotdev' },
   '#js-oauth-authorize-btn',
   'button[name="authorize"]',
   'input[name="authorize"]',
