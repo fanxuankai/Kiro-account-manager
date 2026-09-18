@@ -1023,7 +1023,7 @@ export class LoginPoolRunner {
               const denied = /error=|access_denied/i.test(detect.continueLink)
               this.log(
                 'info',
-                `${entry.username} 授权实验：带轨迹点击安全页继续链接${denied ? '（链接带 access_denied，服务端已拒，多半点了也白点）' : ''}`
+                `${entry.username} 授权实验：带轨迹点击安全页继续链接${denied ? `（链接带 access_denied=${detect.continueLink.slice(0, 300)}）` : ''}`
               )
               await this.clickWithTrail(win, [{ text: 'setup page' }, { text: 'continue' }])
             } else if (!notified.safeLink && (!this.opts.autoAuthorize || safeLinkAttempts >= 2)) {
@@ -1044,8 +1044,23 @@ export class LoginPoolRunner {
             authorizeAttempts++
             lastAuthorizeAt = Date.now()
             if (authorizeAttempts === 1) {
-              this.log('info', `${entry.username} 授权实验①：拟人停顿后带轨迹点击 Authorize`)
-              await sleep(randInt(900, 2200))
+              this.log('info', `${entry.username} 授权实验①：阅读停顿+滚动浏览后带轨迹点击 Authorize`)
+              await sleep(randInt(2500, 5000))
+              // 模拟人读授权页:一两次小幅滚动(看页面下方内容)再回位
+              const [vw, vh] = win.getContentSize()
+              for (let w = 0; w < randInt(1, 2); w++) {
+                win.webContents.sendInputEvent({
+                  type: 'mouseWheel',
+                  x: Math.round(vw / 2 + (Math.random() * 60 - 30)),
+                  y: Math.round(vh / 2 + (Math.random() * 40 - 20)),
+                  deltaY: randInt(120, 280),
+                  wheelTicksY: 2,
+                  wheelTicksX: 0,
+                  deltaX: 0
+                })
+                await sleep(randInt(600, 1400))
+              }
+              await sleep(randInt(500, 1200))
               const clicked = await this.clickWithTrail(win, AUTHORIZE_SELECTORS)
               if (!clicked) this.log('warn', `${entry.username} 授权按钮未找到（页面形态变化？）`)
             } else {
