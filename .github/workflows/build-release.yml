@@ -1,6 +1,6 @@
-# 打包 Windows(NSIS) + macOS(dmg/zip 双架构),产物统一由 release job 汇总建草稿
-# 触发:Actions → Build App → Run workflow,或 gh workflow run build-app.yml
-# 草稿标签取 package.json 版本(v{version});确认后手动 Publish,在线更新依赖正式 Release
+# 打包 Windows(NSIS) + macOS(dmg/zip 双架构),产物统一由 release job 汇总发布
+# 触发:Actions → Build & Release → Run workflow,或 gh workflow run build-release.yml
+# 标签取 package.json 版本(v{version});构建成功即发布正式 Release 并设为 latest,在线更新立即可见
 name: Build & Release
 
 on:
@@ -93,7 +93,7 @@ jobs:
             Kiro-account-manager/dist/latest-mac.yml
           if-no-files-found: error
 
-  # 唯一的发布入口:汇总两个平台的产物,一次性建草稿 Release(无并发分裂)
+  # 唯一的发布入口:汇总两个平台的产物,一次性发布正式 Release(无并发分裂)
   release:
     name: Draft Release
     needs: [build-windows, build-macos]
@@ -111,10 +111,10 @@ jobs:
         id: ver
         run: echo "version=$(jq -r .version Kiro-account-manager/package.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Create draft release
+      - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "v${{ steps.ver.outputs.version }}" artifacts/* \
-            --draft --generate-notes \
+            --generate-notes --latest \
             --title "v${{ steps.ver.outputs.version }}"
