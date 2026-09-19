@@ -18,6 +18,28 @@ npm run fetch:singbox    # 开发模式下载 sing-box 内核到 resources/bin/(
 node test/hy2-e2e.mjs    # hy2 桥端到端测试
 ```
 
+## 本地安装
+
+```bash
+cd Kiro-account-manager
+npm run build:win     # Windows: dist/ 下 NSIS 安装器,双击安装
+npm run build:mac     # macOS:  dist/ 下 dmg,按本机架构选(arm64/x64)
+npm run build:linux   # Linux:  dist/ 下 AppImage / deb
+```
+
+mac 命令行覆盖安装(应用开着会覆盖失败,先退出):
+
+```bash
+osascript -e 'tell application "Kiro Account Manager" to quit' 2>/dev/null; sleep 4
+rm -rf "/Applications/Kiro Account Manager.app"
+hdiutil attach -nobrowse -quiet dist/kiro-account-manager-<版本>-<arch>.dmg
+cp -R "/Volumes/Kiro Account Manager <版本>-<arch>/Kiro Account Manager.app" /Applications/
+hdiutil detach -quiet "/Volumes/Kiro Account Manager <版本>-<arch>"
+open "/Applications/Kiro Account Manager.app"
+```
+
+- 用户数据不受覆盖安装影响(mac 在 `~/Library/Application Support/kiro-account-manager`);本地验证可不 bump 版本,正式发布前再 bump。
+
 ## 打包发布
 
 ```bash

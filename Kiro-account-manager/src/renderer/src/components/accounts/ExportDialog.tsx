@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Badge } from '../ui'
-import { X, FileJson, FileText, Table, Clipboard, Check, Download, Key, Braces } from 'lucide-react'
+import { X, FileJson, FileText, Table, Clipboard, Check, Download, Key, Braces, ShieldCheck, AtSign } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import type { Account, AccountExportData } from '@/types/account'
 
-const EXPORT_FORMATS = ['json', 'oidc', 'txt', 'csv', 'kami', 'clipboard'] as const
+const EXPORT_FORMATS = ['json', 'oidc', 'txt', 'csv', 'kami', 'pool', 'emails', 'clipboard'] as const
 type ExportFormat = (typeof EXPORT_FORMATS)[number]
+
+/** 号池条目（凭据导出只用到这 4 个字段；password/secret 是明文） */
+interface PoolEntryForExport {
+  username: string
+  password: string
+  secret: string
+  kiroEmail?: string
+}
 
 // 记住上次使用的导出格式，非法存量值回退到 json
 function loadExportFormat(): ExportFormat {
@@ -40,6 +48,12 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
   }, [selectedFormat])
   const [includeCredentials, setIncludeCredentials] = useState(true)
   const [copied, setCopied] = useState(false)
+  // 号池条目快照：选「号池凭据」格式时按 kiroEmail ↔ 账号邮箱关联取明文凭据
+  const [poolEntries, setPoolEntries] = useState<PoolEntryForExport[]>([])
+  useEffect(() => {
+    if (!open) return
+    window.api.loginPoolList().then((snap) => setPoolEntries(snap.entries)).catch(() => setPoolEntries([]))
+  }, [open])
   const { exportAccounts } = useStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
@@ -50,8 +64,10 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
     { id: 'json', name: 'JSON', icon: FileJson, desc: isEn ? 'Full data, can be imported' : '完整数据，可用于导入' },
     { id: 'oidc', name: 'OIDC JSON', icon: Braces, desc: isEn ? 'Minimal JSON, paste to OIDC batch import' : 'OIDC 精简 JSON，可粘贴到批量添加' },
     { id: 'kami', name: isEn ? 'Card Key' : '卡密', icon: Key, desc: isEn ? 'email----password----token----id----secret' : '卡密格式：邮箱----密码----Token----ID----Secret' },
+    { id: 'pool', name: isEn ? 'Pool Credentials' : '号池凭据', icon: ShieldCheck, desc: isEn ? 'user----password----2FA secret (pool accounts only)' : '账号----密码----2FA密钥（仅号池来源的账号）' },
     { id: 'txt', name: 'TXT', icon: FileText, desc: isEn ? 'Text format' : (includeCredentials ? '可导入格式：邮箱,Token,昵称,登录方式' : '纯文本格式，每行一个账号') },
     { id: 'csv', name: 'CSV', icon: Table, desc: isEn ? 'Excel compatible' : (includeCredentials ? '可导入格式，Excel 兼容' : 'Excel 兼容格式') },
+    { id: 'emails', name: isEn ? 'Emails Only' : '仅账号名', icon: AtSign, desc: isEn ? 'One email per line' : '每行一个账号邮箱' },
     { id: 'clipboard', name: isEn ? 'Clipboard' : '剪贴板', icon: Clipboard, desc: isEn ? 'Copy to clipboard' : (includeCredentials ? '可导入格式：邮箱,Token' : '复制到剪贴板') },
   ]
 
@@ -161,6 +177,26 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
           ].join('----')
         ).join('\n')
 
+      case 'pool': {
+        // 号池凭据：选中账号按 kiroEmail ↔ 账号邮箱关联号池条目，导出明文
+        // 「账号----密码----2FA密钥」（与号池入池格式同构，可直接回贴）。
+        // 号池条目被「清除已入库」删除后关联不到，此类账号不会出现在导出里
+        const emails = new Set(accounts.map(acc => acc.email.toLowerCase()))
+        const seen = new Set<string>()
+        const lines: string[] = []
+        for (const e of poolEntries) {
+          if (!e.kiroEmail || !emails.has(e.kiroEmail.toLowerCase())) continue
+          if (seen.has(e.username)) continue
+          seen.add(e.username)
+          lines.push(`${e.username}----${e.password}----${e.secret}`)
+        }
+        return lines.join('\n')
+      }
+
+      case 'emails':
+        // 仅账号名：每行一个邮箱，用于批量复制账号列表
+        return accounts.map(acc => acc.email).join('\n')
+
       case 'clipboard':
         if (includeCredentials) {
           // 包含凭证时导出可导入格式：邮箱,RefreshToken
@@ -177,6 +213,20 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
         return ''
     }
   }
+
+  // 「号池凭据」格式的匹配数（提示块展示用；口径与 case 'pool' 一致）
+  const matchedPoolCount = (() => {
+    const emails = new Set(accounts.map(acc => acc.email.toLowerCase()))
+    const seen = new Set<string>()
+    let count = 0
+    for (const e of poolEntries) {
+      if (!e.kiroEmail || !emails.has(e.kiroEmail.toLowerCase())) continue
+      if (seen.has(e.username)) continue
+      seen.add(e.username)
+      count++
+    }
+    return count
+  })()
 
   // 导出处理
   const handleExport = async () => {
@@ -198,7 +248,9 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
       oidc: 'json',
       txt: 'txt',
       csv: 'csv',
-      kami: 'txt'
+      kami: 'txt',
+      pool: 'txt',
+      emails: 'txt'
     }
     const filename = `kiro-accounts-${new Date().toISOString().slice(0, 10)}.${extensions[selectedFormat]}`
     
@@ -286,6 +338,15 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
               </p>
             </div>
           )}
+          {selectedFormat === 'pool' && (
+            <div className="p-3 bg-muted rounded-lg">
+              <p className="text-xs text-muted-foreground">
+                {isEn
+                  ? `Format: user----password----2FA secret (same as pool input format, ${matchedPoolCount}/${accounts.length} matched by stored email). Accounts whose pool entries were cleared cannot be matched.`
+                  : `格式：账号----密码----2FA密钥（与号池入池格式相同，可回贴）。按入库邮箱关联匹配 ${matchedPoolCount}/${accounts.length} 个；号池条目已被「清除已入库」的账号关联不到。`}
+              </p>
+            </div>
+          )}
           {selectedFormat === 'json' && (
             <label className="flex items-center gap-2 p-3 bg-muted rounded-lg cursor-pointer">
               <input
@@ -307,7 +368,7 @@ export function ExportDialog({ open, onClose, accounts, selectedCount, useStore 
           <Button variant="outline" onClick={onClose}>
             {isEn ? 'Cancel' : '取消'}
           </Button>
-          {(selectedFormat === 'kami' || selectedFormat === 'oidc') && (
+          {(selectedFormat === 'kami' || selectedFormat === 'oidc' || selectedFormat === 'pool' || selectedFormat === 'emails') && (
             <Button variant="outline" disabled={copied} onClick={async () => {
               const content = generateContent(selectedFormat)
               await navigator.clipboard.writeText(content)

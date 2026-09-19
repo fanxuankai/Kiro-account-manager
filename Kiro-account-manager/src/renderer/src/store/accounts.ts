@@ -1018,11 +1018,13 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     // 待付款筛选：发过升级支付链接且账号仍为 Free（升级成功即已付款，自动不再命中；
-    // wasPaid 曾付费后降级的不算，Free 判定与组件层 isFreeTierAccount / isPendingPayment 同口径）
+    // wasPaid 曾付费后降级、已使用积分 > 0 的使用过账号都不算——按已付款处理，不再催付；
+    // Free 判定与组件层 isFreeTierAccount / isPendingPayment 同口径）
     if (filter.pendingPaymentOnly) {
       result = result.filter((a) => {
         if (!a.subscription?.paymentLinkAt) return false
         if (a.subscription.wasPaid) return false
+        if ((a.usage?.current ?? 0) > 0) return false
         const type = (a.subscription.type || '').toUpperCase()
         const title = (a.subscription.title || '').toUpperCase()
         return type.includes('FREE') || title.includes('FREE') || (!type && !title)
