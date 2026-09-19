@@ -62,7 +62,6 @@ export function parseImportContent(content: string, format: string): ParsedImpor
             region: item.region ? String(item.region) : undefined,
             // provider 缺省时按凭据形态推断：social 只有 refreshToken，IdC 才有 ClientId/Secret（与卡密同口径）
             idp: item.provider ? String(item.provider) : ((!clientId && !clientSecret) ? 'Google' : 'BuilderId'),
-            groupId: currentGroupId
           }
         })
       if (items.length === 0) {
@@ -169,15 +168,15 @@ function stripCodeFence(content: string): string {
  * 自动识别格式的导入解析（粘贴入口用，无文件扩展名可依据）。
  * 识别顺序：JSON（完整导出 / OIDC 凭证数组）→ 卡密 → 普通行格式（邮箱,RefreshToken）
  */
-export function parseImportContentAuto(content: string, currentGroupId?: string): ParsedImport {
+export function parseImportContentAuto(content: string): ParsedImport {
   const trimmed = stripCodeFence(content).trim()
   if (!trimmed) return { kind: 'invalid', message: '请输入要导入的内容' }
   if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
     try {
-      return parseImportContent(trimmed, 'json', currentGroupId)
+      return parseImportContent(trimmed, 'json')
     } catch {
       return { kind: 'invalid', message: 'JSON 解析失败：内容以 [ 或 { 开头，但不是合法的 JSON' }
     }
   }
-  return parseImportContent(trimmed, 'txt', currentGroupId)
+  return parseImportContent(trimmed, 'txt')
 }
