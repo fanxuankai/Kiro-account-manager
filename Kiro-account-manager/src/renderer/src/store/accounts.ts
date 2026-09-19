@@ -22,6 +22,7 @@ import type {
   ProxyProtocol
 } from '../types/proxy'
 import { DEFAULT_PROXY_POOL_CONFIG } from '../types/proxy'
+import { classifyLifecycle } from '../lib/accountLifecycle'
 
 // ============================================
 // 账号管理 Store
@@ -1029,6 +1030,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         const title = (a.subscription.title || '').toUpperCase()
         return type.includes('FREE') || title.includes('FREE') || (!type && !title)
       })
+    }
+
+    // 生命周期档位筛选（未使用/待支付/已订阅/已废弃，纯推导分类；与分组及其他筛选叠加）
+    if (filter.lifecycle) {
+      result = result.filter((a) => classifyLifecycle(a) === filter.lifecycle)
     }
 
     // 应用排序
