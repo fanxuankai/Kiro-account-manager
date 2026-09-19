@@ -26,7 +26,7 @@ function loadExportFormat(): ExportFormat {
     : 'json'
 }
 
-/** 导出所需的 store 切片（主库与闲置库均满足此结构） */
+/** 导出所需的主账号库 store 切片 */
 interface ExportStoreSlice {
   exportAccounts: (ids?: string[]) => AccountExportData
 }
@@ -36,7 +36,7 @@ interface ExportDialogProps {
   onClose: () => void
   accounts: Account[]
   selectedCount: number
-  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  /** store 钩子，默认主账号库 */
   useStore?: () => ExportStoreSlice
 }
 

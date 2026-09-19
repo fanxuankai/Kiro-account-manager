@@ -67,16 +67,8 @@ interface AccountData {
   proxyPool?: Record<string, unknown>
   proxyPoolConfig?: unknown
   proxyPoolCursor?: number
-  /** 账号-代理绑定映射 */
+  /** 历史账号-代理绑定映射（仅作兼容持久化） */
   accountProxyBindings?: Record<string, string>
-}
-
-/** 闲置账号库数据（独立 SQLite 文件 kiro-idle-accounts.db，物理隔离） */
-interface IdleAccountData {
-  accounts: Record<string, unknown>
-  groups: Record<string, unknown>
-  tags: Record<string, unknown>
-  privacyMode?: boolean
 }
 
 interface RefreshResult {
@@ -163,9 +155,6 @@ interface KiroApi {
   loadAccounts: () => Promise<AccountData | null>
   saveAccounts: (data: AccountData) => Promise<void>
 
-  // 闲置账号库（不参与保活/刷新，与主库物理隔离）
-  loadIdleAccounts: () => Promise<IdleAccountData | null>
-  saveIdleAccounts: (data: IdleAccountData) => Promise<void>
   refreshAccountToken: (account: unknown) => Promise<RefreshResult>
   checkAccountStatus: (account: unknown) => Promise<StatusResult>
   
@@ -892,9 +881,6 @@ interface KiroApi {
       endToEndRtMs?: number
     }
   }>
-
-  // 账号-代理绑定
-  accountSetProxyBinding: (accountId: string, proxyUrl: string | undefined) => Promise<{ success: boolean }>
 
   onRegistrationLog: (callback: (msg: string) => void) => () => void
 

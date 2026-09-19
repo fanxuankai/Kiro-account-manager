@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog, globalShortcut, protocol } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, globalShortcut, protocol, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import {
   checkMacUpdate,
@@ -22,7 +22,6 @@ import {
   saveAccountData,
   initIdleAccountDb,
   getIdleAccountData,
-  saveIdleAccountData,
   closeIdleAccountDb
 } from './accountDb'
 import {
@@ -207,7 +206,7 @@ function getNetworkAgent(): Dispatcher | undefined {
  * 通用 fetch 函数
  * @param url 请求 URL
  * @param options fetch 选项
- * @param overrideProxyUrl 可选：账号绑定的代理 URL（优先级最高，覆盖全局代理逻辑）
+ * @param overrideProxyUrl 可选：显式代理 URL（优先级最高，覆盖全局代理逻辑）
  *
  * 优先级：overrideProxyUrl > K-Proxy > 用户设置代理 > 系统代理 > 直连
  */
@@ -216,7 +215,7 @@ async function fetchWithAppProxy(
   options: RequestInit,
   overrideProxyUrl?: string
 ): Promise<Response> {
-  // 优先尝试账号绑定代理(hy2 代理先转本地 socks5,桥接失败回退全局逻辑)
+  // 优先尝试显式代理配置（hy2 代理先转本地 socks5，桥接失败回退全局逻辑）
   if (overrideProxyUrl) {
     const resolvedOverride = await resolveProxyUrl(overrideProxyUrl).catch(() => undefined)
     const accountAgent = safeCreateProxyAgent(resolvedOverride || overrideProxyUrl)
@@ -473,12 +472,9 @@ async function refreshOidcToken(
   refreshToken: string,
   clientId: string,
   clientSecret: string,
-  region: string = 'us-east-1',
-  proxyUrl?: string // 账号绑定的代理 URL（可选，优先级最高）
+  region: string = 'us-east-1'
 ): Promise<OidcRefreshResult> {
-  console.log(
-    `[OIDC] Refreshing token with clientId: ${clientId.substring(0, 20)}...${proxyUrl ? ' [via bound proxy]' : ''}`
-  )
+  console.log(`[OIDC] Refreshing token with clientId: ${clientId.substring(0, 20)}...`)
 
   const url = `https://oidc.${region}.amazonaws.com/token`
 
@@ -499,8 +495,7 @@ async function refreshOidcToken(
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(payload)
-        },
-        proxyUrl
+        }
       )
     )
 
@@ -582,10 +577,9 @@ async function refreshAccountAccessToken(
 
 // 社交登录 (GitHub/Google) 的 Token 刷新
 async function refreshSocialToken(
-  refreshToken: string,
-  proxyUrl?: string // 账号绑定的代理 URL（可选，优先级最高）
+  refreshToken: string
 ): Promise<OidcRefreshResult> {
-  console.log(`[Social] Refreshing token...${proxyUrl ? ' [via bound proxy]' : ''}`)
+  console.log('[Social] Refreshing token...')
 
   const url = `${KIRO_AUTH_ENDPOINT}/refreshToken`
   const machineId = getCurrentMachineId()
@@ -601,8 +595,7 @@ async function refreshSocialToken(
             'User-Agent': getKiroUserAgent(machineId)
           },
           body: JSON.stringify({ refreshToken })
-        },
-        proxyUrl
+        }
       )
     )
 
@@ -633,15 +626,14 @@ async function refreshTokenByMethod(
   clientId: string,
   clientSecret: string,
   region: string = 'us-east-1',
-  authMethod?: string,
-  proxyUrl?: string // 账号绑定的代理 URL（可选，优先级最高）
+  authMethod?: string
 ): Promise<OidcRefreshResult> {
   // 如果是社交登录，使用 Kiro Auth Service 刷新
   if (authMethod === 'social') {
-    return refreshSocialToken(token, proxyUrl)
+    return refreshSocialToken(token)
   }
   // 否则使用 OIDC 刷新 (IdC/BuilderId)
-  return refreshOidcToken(token, clientId, clientSecret, region, proxyUrl)
+  return refreshOidcToken(token, clientId, clientSecret, region)
 }
 
 function generateInvocationId(): string {
@@ -1191,6 +1183,11 @@ async function initStore(): Promise<void> {
     const { app } = await import('electron')
     const { initAccountDb } = await import('./accountDb')
     initAccountDb(app.getPath('userData'), legacyForDb)
+    try {
+      await migrateLegacyIdleAccounts()
+    } catch {
+      // 迁移失败不阻塞应用启动，下一次启动继续重试。
+    }
   } catch (error) {
     console.error('[AccountDb] init failed:', error)
   }
@@ -1263,85 +1260,158 @@ async function flushBackupNow(): Promise<void> {
   }
 }
 
-// ============ 闲置账号库：容灾备份（与主库备份物理分开的独立文件） ============
-// 机制与主库 createBackup 完全一致（5 分钟节流 + 延迟 flush），仅状态互相独立，
-// 备份文件为 kiro-idle-accounts.backup.enc（safeStorage 加密）。
-
+// ============ 旧闲置账号库：一次性迁移 ============
+// 旧版本把闲置账号放在独立 SQLite 中。新版本不再运行闲置库功能，
+// 但首次启动时会把旧数据合并回主账号库，源文件保留作为回退保险。
 const IDLE_BACKUP_FILE_BASE = 'kiro-idle-accounts'
-let lastIdleBackupTime = 0
-let pendingIdleBackupData: unknown = null
-let pendingIdleBackupTimer: ReturnType<typeof setTimeout> | null = null
-/** 最近一次保存的闲置库数据（退出前兜底保存/备份用） */
-let lastSavedIdleData: unknown = null
+const IDLE_MIGRATION_MARKER = '_idleAccountsMigratedAt'
 
-async function createIdleBackup(data: unknown): Promise<void> {
-  pendingIdleBackupData = data
-  const now = Date.now()
-  const elapsed = now - lastIdleBackupTime
-
-  if (elapsed >= BACKUP_THROTTLE_MS) {
-    await writeIdleBackupNow()
-    return
-  }
-
-  if (!pendingIdleBackupTimer) {
-    const delay = BACKUP_THROTTLE_MS - elapsed
-    pendingIdleBackupTimer = setTimeout(() => {
-      pendingIdleBackupTimer = null
-      void writeIdleBackupNow()
-    }, delay)
-  }
-}
-
-async function writeIdleBackupNow(): Promise<void> {
-  if (pendingIdleBackupData == null) return
-  const data = pendingIdleBackupData
-  pendingIdleBackupData = null
-  lastIdleBackupTime = Date.now()
-  try {
-    const { app } = await import('electron')
-    const { writeSecureBackup, isSecureBackupAvailable } = await import('./secureBackup')
-    await writeSecureBackup(app.getPath('userData'), data, IDLE_BACKUP_FILE_BASE)
-    console.log(
-      `[IdleBackup] Data backup created (${isSecureBackupAvailable() ? 'encrypted' : 'plaintext-fallback'})`
-    )
-  } catch (error) {
-    console.error('[IdleBackup] Failed to create backup:', error)
-  }
-}
-
-async function flushIdleBackupNow(): Promise<void> {
-  if (pendingIdleBackupTimer) {
-    clearTimeout(pendingIdleBackupTimer)
-    pendingIdleBackupTimer = null
-  }
-  if (pendingIdleBackupData != null) {
-    await writeIdleBackupNow()
-  }
-}
-
-/**
- * 初始化闲置账号库（懒加载，首次读写前调用）。
- * 容灾恢复：库为空但存在独立备份时，从备份恢复（镜像主库 initStore 的恢复机制）。
- */
-async function initIdleStore(): Promise<void> {
+async function initLegacyIdleStoreForMigration(): Promise<void> {
   const { app } = await import('electron')
+  const fs = await import('fs')
   const idleDb = initIdleAccountDb(app.getPath('userData'))
   if (!idleDb.hasAccounts()) {
-    try {
+    const backupPaths = [
+      join(app.getPath('userData'), `${IDLE_BACKUP_FILE_BASE}.backup.enc`),
+      join(app.getPath('userData'), `${IDLE_BACKUP_FILE_BASE}.backup.json`)
+    ]
+    if (backupPaths.some((filePath) => fs.existsSync(filePath))) {
       const { readSecureBackup } = await import('./secureBackup')
       const backupData = (await readSecureBackup(
         app.getPath('userData'),
         IDLE_BACKUP_FILE_BASE
       )) as { accounts?: unknown } | null
-      if (backupData && backupData.accounts) {
-        console.log('[IdleStore] Restoring idle accounts from backup...')
-        idleDb.migrateFrom(backupData)
-        console.log('[IdleStore] Idle accounts restored from backup successfully')
+      if (!backupData || typeof backupData !== 'object' || !backupData.accounts) {
+        throw new Error('旧闲置账号备份存在但无法读取')
       }
-    } catch {
-      // 备份不存在或损坏，空库起步
+      console.log('[IdleMigration] Restoring legacy idle accounts from backup...')
+      idleDb.migrateFrom(backupData)
     }
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function sameAccount(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  if (typeof a.userId === 'string' && a.userId && a.userId === b.userId) return true
+  const aEmail = typeof a.email === 'string' ? a.email : ''
+  const bEmail = typeof b.email === 'string' ? b.email : ''
+  const aProvider = asRecord(a.credentials).provider
+  const bProvider = asRecord(b.credentials).provider
+  return Boolean(aEmail && aEmail === bEmail && aProvider === bProvider)
+}
+
+function mergeMigratedAccount(
+  existing: Record<string, unknown>,
+  legacy: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...legacy, ...existing }
+
+  // 旧库账号可能带有主库中尚未保存的凭据字段；只补齐缺失字段，不覆盖主库现有值。
+  const legacyCredentials = asRecord(legacy.credentials)
+  const existingCredentials = asRecord(existing.credentials)
+  if (Object.keys(legacyCredentials).length || Object.keys(existingCredentials).length) {
+    merged.credentials = { ...legacyCredentials, ...existingCredentials }
+  }
+
+  // 账号标签取并集，避免同一个账号在主库和旧闲置库中重复时丢标签。
+  const tags = new Set<string>()
+  for (const value of [legacy.tags, existing.tags]) {
+    if (Array.isArray(value)) {
+      for (const tagId of value) {
+        if (typeof tagId === 'string' && tagId) tags.add(tagId)
+      }
+    }
+  }
+  if (tags.size > 0) merged.tags = Array.from(tags)
+
+  // groupId 仅作历史兼容字段：主库已有值优先，缺失时保留旧值。
+  if (!merged.groupId && legacy.groupId) merged.groupId = legacy.groupId
+  return merged
+}
+
+/**
+ * 将旧闲置库账号合并回主库。仅在主库 meta 没有迁移标记时执行，
+ * 保存成功后才写标记；失败时源数据保留并在下次启动重试。
+ */
+async function migrateLegacyIdleAccounts(): Promise<void> {
+  const { app } = await import('electron')
+  const fs = await import('fs')
+  const userDataDir = app.getPath('userData')
+  const idleDbPath = join(userDataDir, 'kiro-idle-accounts.db')
+  const hasLegacySource = fs.existsSync(idleDbPath)
+    || fs.existsSync(join(userDataDir, `${IDLE_BACKUP_FILE_BASE}.backup.enc`))
+    || fs.existsSync(join(userDataDir, `${IDLE_BACKUP_FILE_BASE}.backup.json`))
+
+  if (!hasLegacySource) return
+
+  const mainData = getAccountData()
+  if (!mainData || mainData[IDLE_MIGRATION_MARKER]) return
+
+  try {
+    await initLegacyIdleStoreForMigration()
+    const idleData = getIdleAccountData()
+    const sourceAccounts = asRecord(idleData?.accounts)
+    const sourceTags = asRecord(idleData?.tags)
+    const sourceGroups = asRecord(idleData?.groups)
+    const targetAccounts = asRecord(mainData.accounts)
+    const targetTags = asRecord(mainData.tags)
+    const targetGroups = asRecord(mainData.groups)
+
+    let imported = 0
+    let skipped = 0
+    for (const [id, value] of Object.entries(sourceAccounts)) {
+      const account = asRecord(value)
+      if (!account.id) account.id = id
+      const duplicateEntry = Object.entries(targetAccounts).find(([targetId, existing]) => (
+        targetId === id || sameAccount(account, asRecord(existing))
+      ))
+      if (duplicateEntry) {
+        const [targetId, existing] = duplicateEntry
+        targetAccounts[targetId] = mergeMigratedAccount(asRecord(existing), account)
+        skipped++
+        continue
+      }
+      // 迁移不改写 usage/subscription/paymentLink，生命周期由现有分类函数重新计算。
+      targetAccounts[id] = {
+        ...account,
+        ...(Object.prototype.hasOwnProperty.call(account, 'isActive') ? {} : { isActive: false })
+      }
+      imported++
+    }
+
+    for (const [id, tag] of Object.entries(sourceTags)) {
+      const sourceTag = asRecord(tag)
+      targetTags[id] = targetTags[id]
+        ? { ...sourceTag, ...asRecord(targetTags[id]) }
+        : sourceTag
+    }
+    // 分组 UI 已移除，但历史 groups/groupId 仍作为兼容数据保留。
+    for (const [id, group] of Object.entries(sourceGroups)) {
+      const sourceGroup = asRecord(group)
+      targetGroups[id] = targetGroups[id]
+        ? { ...sourceGroup, ...asRecord(targetGroups[id]) }
+        : sourceGroup
+    }
+
+    const nextData: Record<string, unknown> = {
+      ...mainData,
+      accounts: targetAccounts,
+      tags: targetTags,
+      groups: targetGroups,
+      [IDLE_MIGRATION_MARKER]: Date.now()
+    }
+    saveAccountData(nextData)
+    console.log(`[IdleMigration] Completed: imported=${imported}, skipped=${skipped}`)
+  } catch (error) {
+    console.error('[IdleMigration] Failed; legacy data will be retried next launch:', error)
+    throw error
+  } finally {
+    closeIdleAccountDb()
   }
 }
 
@@ -1647,15 +1717,92 @@ function initTray(): void {
   setTrayTooltip(`Kiro 账号管理器 v${app.getVersion()}`)
 }
 
+const DEFAULT_WINDOW_WIDTH = 1200
+const DEFAULT_WINDOW_HEIGHT = 1200
+const WINDOW_MIN_WIDTH = 800
+const WINDOW_MIN_HEIGHT = 600
+const WINDOW_STATE_KEY = 'windowState'
+
+type SavedWindowState = {
+  width: number
+  height: number
+  x?: number
+  y?: number
+  isMaximized: boolean
+}
+
+let windowStateSaveTimer: ReturnType<typeof setTimeout> | null = null
+
+function getSavedWindowState(): SavedWindowState | null {
+  const raw = store?.get(WINDOW_STATE_KEY) as Partial<SavedWindowState> | undefined
+  if (!raw || typeof raw !== 'object') return null
+
+  const width = Number(raw.width)
+  const height = Number(raw.height)
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null
+
+  const state: SavedWindowState = {
+    width: Math.max(WINDOW_MIN_WIDTH, Math.round(width)),
+    height: Math.max(WINDOW_MIN_HEIGHT, Math.round(height)),
+    isMaximized: raw.isMaximized === true
+  }
+  if (Number.isFinite(raw.x) && Number.isFinite(raw.y)) {
+    state.x = Math.round(raw.x as number)
+    state.y = Math.round(raw.y as number)
+  }
+
+  // 显示器布局变化后，至少保证窗口仍有一部分落在某个工作区内。
+  if (state.x !== undefined && state.y !== undefined) {
+    const visible = screen.getAllDisplays().some((display) => {
+      const area = display.workArea
+      const right = Math.min(state.x! + state.width, area.x + area.width)
+      const bottom = Math.min(state.y! + state.height, area.y + area.height)
+      const left = Math.max(state.x!, area.x)
+      const top = Math.max(state.y!, area.y)
+      return right - left >= 100 && bottom - top >= 100
+    })
+    if (!visible) {
+      delete state.x
+      delete state.y
+    }
+  }
+
+  return state
+}
+
+function saveWindowStateNow(): void {
+  if (!mainWindow || !store || mainWindow.isDestroyed()) return
+  const bounds = mainWindow.getNormalBounds()
+  store.set(WINDOW_STATE_KEY, {
+    width: Math.max(WINDOW_MIN_WIDTH, Math.round(bounds.width)),
+    height: Math.max(WINDOW_MIN_HEIGHT, Math.round(bounds.height)),
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    isMaximized: mainWindow.isMaximized()
+  } satisfies SavedWindowState)
+}
+
+function scheduleWindowStateSave(): void {
+  if (windowStateSaveTimer) clearTimeout(windowStateSaveTimer)
+  windowStateSaveTimer = setTimeout(() => {
+    windowStateSaveTimer = null
+    saveWindowStateNow()
+  }, 250)
+}
+
 function createWindow(): void {
   // Create the browser window.
   const isMac = process.platform === 'darwin'
+  const savedWindowState = getSavedWindowState()
   mainWindow = new BrowserWindow({
     title: `Kiro 账号管理器 v${app.getVersion()}`,
-    width: 1200, // 刚好容纳 3 列卡片 (340*3 + 16*2 + 边距)
-    height: 1200,
-    minWidth: 800,
-    minHeight: 600,
+    width: savedWindowState?.width ?? DEFAULT_WINDOW_WIDTH,
+    height: savedWindowState?.height ?? DEFAULT_WINDOW_HEIGHT,
+    ...(savedWindowState?.x !== undefined && savedWindowState?.y !== undefined
+      ? { x: savedWindowState.x, y: savedWindowState.y }
+      : {}),
+    minWidth: WINDOW_MIN_WIDTH,
+    minHeight: WINDOW_MIN_HEIGHT,
     show: false,
     autoHideMenuBar: true,
     icon,
@@ -1677,14 +1824,21 @@ function createWindow(): void {
   })
 
   // ============ 自定义 titlebar IPC ============
-  mainWindow.on('maximize', () => mainWindow?.webContents.send('window-maximize-changed', true))
-  mainWindow.on('unmaximize', () => mainWindow?.webContents.send('window-maximize-changed', false))
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window-maximize-changed', true)
+    scheduleWindowStateSave()
+  })
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window-maximize-changed', false)
+    scheduleWindowStateSave()
+  })
+  mainWindow.on('resize', scheduleWindowStateSave)
+  mainWindow.on('move', scheduleWindowStateSave)
 
   mainWindow.on('ready-to-show', () => {
     // 设置带版本号的标题（HTML 加载后会覆盖初始标题）
     mainWindow?.setTitle(`Kiro 账号管理器 v${app.getVersion()}`)
-    // 启动即最大化：在 show 之前调用，窗口直接以最大化出现，不闪小窗
-    mainWindow?.maximize()
+    if (savedWindowState?.isMaximized) mainWindow?.maximize()
     mainWindow?.show()
 
     // K-Proxy MITM 自启动
@@ -1722,6 +1876,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('close', (event) => {
+    saveWindowStateNow()
     // 托盘最小化逻辑 - 必须同步检查并调用 preventDefault
     if (traySettings.enabled && !isQuitting) {
       if (traySettings.closeAction === 'minimize') {
@@ -1764,6 +1919,10 @@ function createWindow(): void {
   })
 
   mainWindow.on('closed', () => {
+    if (windowStateSaveTimer) {
+      clearTimeout(windowStateSaveTimer)
+      windowStateSaveTimer = null
+    }
     mainWindow = null
   })
 
@@ -2248,34 +2407,6 @@ app.whenReady().then(async () => {
     }
   })
 
-  // IPC: 加载闲置账号数据（独立 SQLite 文件，与主库物理隔离）
-  ipcMain.handle('load-idle-accounts', async () => {
-    try {
-      await initStore()
-      await initIdleStore()
-      return getIdleAccountData()
-    } catch (error) {
-      console.error('Failed to load idle accounts:', error)
-      return null
-    }
-  })
-
-  // IPC: 保存闲置账号数据（独立库 + 独立容灾备份）
-  ipcMain.handle('save-idle-accounts', async (_event, data) => {
-    try {
-      await initStore()
-      await initIdleStore()
-      saveIdleAccountData(data as Record<string, unknown>)
-
-      lastSavedIdleData = data
-
-      await createIdleBackup(data)
-    } catch (error) {
-      console.error('Failed to save idle accounts:', error)
-      throw error
-    }
-  })
-
   // IPC: 刷新账号 Token（支持 IdC 和社交登录）
   ipcMain.handle('refresh-account-token', async (_event, account) => {
     try {
@@ -2291,21 +2422,17 @@ app.whenReady().then(async () => {
         return { success: false, error: { message: '缺少 OIDC 刷新凭证 (clientId/clientSecret)' } }
       }
 
-      // 查找账号绑定的代理 URL（账号池中已有 proxyUrl 字段）
-      const boundProxyUrl = undefined
-
       console.log(
-        `[IPC] Refreshing token (authMethod: ${authMethod || 'IdC'})...${boundProxyUrl ? ' [via bound proxy]' : ''}`
+        `[IPC] Refreshing token (authMethod: ${authMethod || 'IdC'})...`
       )
 
-      // 根据 authMethod 选择刷新方式（透传账号绑定代理）
+      // 根据 authMethod 选择刷新方式
       const refreshResult = await refreshTokenByMethod(
         refreshToken,
         clientId || '',
         clientSecret || '',
         region || 'us-east-1',
-        authMethod,
-        boundProxyUrl
+        authMethod
       )
 
       if (!refreshResult.success || !refreshResult.accessToken) {
@@ -2600,9 +2727,6 @@ app.whenReady().then(async () => {
       const { accessToken, refreshToken, clientId, clientSecret, region, authMethod, provider } =
         account.credentials || {}
 
-      // 查询账号绑定的代理（账号池）
-      const boundProxyUrl = undefined
-
       // 确定正确的 idp：优先使用 credentials.provider，否则回退到 account.idp
       // 社交登录使用实际的 provider (Github/Google)，IdC 使用 BuilderId
       let idp = 'BuilderId'
@@ -2651,7 +2775,7 @@ app.whenReady().then(async () => {
         const canRefresh = refreshToken && (authMethod === 'social' || (clientId && clientSecret))
         if (errorMsg.includes('401') && canRefresh) {
           console.log(
-            `[IPC] Token expired, attempting to refresh (authMethod: ${authMethod || 'IdC'})...${boundProxyUrl ? ' [via bound proxy]' : ''}`
+            `[IPC] Token expired, attempting to refresh (authMethod: ${authMethod || 'IdC'})...`
           )
 
           // 尝试刷新 token - 根据 authMethod 选择刷新方式（透传账号代理）
@@ -2660,8 +2784,7 @@ app.whenReady().then(async () => {
             clientId || '',
             clientSecret || '',
             region || 'us-east-1',
-            authMethod,
-            boundProxyUrl
+            authMethod
           )
 
           if (refreshResult.success && refreshResult.accessToken) {
@@ -2797,9 +2920,6 @@ app.whenReady().then(async () => {
             } = account.credentials
             const needsTokenRefresh = account.needsTokenRefresh !== false // 默认为 true（兼容旧版本）
 
-            // 查询账号绑定的代理（从主进程账号池）
-            const boundProxyUrl = undefined
-
             // 确定正确的 idp
             let idp = 'BuilderId'
             if (authMethod === 'social') {
@@ -2821,14 +2941,13 @@ app.whenReady().then(async () => {
                 return
               }
 
-              // 刷新 Token（透传账号绑定代理）
+              // 刷新 Token
               const refreshResult = await refreshTokenByMethod(
                 refreshToken,
                 clientId || '',
                 clientSecret || '',
                 region || 'us-east-1',
-                authMethod,
-                boundProxyUrl
+                authMethod
               )
 
               if (!refreshResult.success) {
@@ -5753,6 +5872,7 @@ app.on('window-all-closed', () => {
 
 // 应用退出前注销 URI 协议处理器并保存数据
 app.on('will-quit', async (event) => {
+  saveWindowStateNow()
   // 防止重复处理
   if (isQuitting) return
 
@@ -5801,20 +5921,6 @@ app.on('will-quit', async (event) => {
       } catch (err) {
         console.error('[Exit] Failed to close account db:', err)
       }
-      // 闲置账号库：退出前强制落盘备份并关闭（同主库机制）
-      try {
-        if (lastSavedIdleData) {
-          await createIdleBackup(lastSavedIdleData)
-          await flushIdleBackupNow()
-        }
-      } catch (err) {
-        console.error('[Exit] Failed to flush idle backup:', err)
-      }
-      try {
-        closeIdleAccountDb()
-      } catch (err) {
-        console.error('[Exit] Failed to close idle account db:', err)
-      }
       console.log('[Exit] Data saved successfully')
     } catch (error) {
       console.error('[Exit] Failed to save data:', error)
@@ -5824,12 +5930,6 @@ app.on('will-quit', async (event) => {
     unregisterProtocol()
     app.exit(0)
   } else {
-    // 无待保存数据时也要释放闲置库（同步关闭，WAL 可自动恢复）
-    try {
-      closeIdleAccountDb()
-    } catch {
-      /* ignore */
-    }
     unregisterProtocol()
   }
 })

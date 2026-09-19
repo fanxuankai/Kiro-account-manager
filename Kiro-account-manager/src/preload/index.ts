@@ -108,16 +108,6 @@ const api = {
     return ipcRenderer.invoke('save-accounts', data)
   },
 
-  // 闲置账号库 - 加载闲置账号数据（独立库，物理隔离）
-  loadIdleAccounts: (): Promise<unknown> => {
-    return ipcRenderer.invoke('load-idle-accounts')
-  },
-
-  // 闲置账号库 - 保存闲置账号数据
-  saveIdleAccounts: (data: unknown): Promise<void> => {
-    return ipcRenderer.invoke('save-idle-accounts', data)
-  },
-
   // 账号管理 - 刷新 Token
   refreshAccountToken: (account: unknown): Promise<unknown> => {
     return ipcRenderer.invoke('refresh-account-token', account)
@@ -1082,16 +1072,6 @@ const api = {
     }
   }> => {
     return ipcRenderer.invoke('proxy-pool:diagnose-chain', params)
-  },
-
-  // ============ 诊断 API ============
-  /**
-   * 设置账号 → 代理 URL 绑定
-   * @param accountId 账号 ID
-   * @param proxyUrl 代理 URL；undefined 表示解绑
-   */
-  accountSetProxyBinding: (accountId: string, proxyUrl: string | undefined): Promise<{ success: boolean }> => {
-    return ipcRenderer.invoke('account-set-proxy-binding', accountId, proxyUrl)
   },
 
   // 获取注册状态

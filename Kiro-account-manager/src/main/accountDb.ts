@@ -104,7 +104,7 @@ export class AccountDb {
   }
 
   /** 首次迁移：把旧 accountData（electron-store JSON 或加密备份恢复出的数据）整库导入。
-   *  只执行一次（meta 落 _legacyMigrated 标记）：用户清空主库（如移入闲置库）后库变空，
+   *  只执行一次（meta 落 _legacyMigrated 标记）：用户清空主库后库变空，
    *  旧 JSON 化石（迁移后不再更新，仍保有历史账号）不得再次回灌——"空库"不再等于"待迁移"。 */
   migrateFrom(legacy: unknown): void {
     const done = this.db.prepare("SELECT value FROM meta WHERE key = '_legacyMigrated'").get()
@@ -392,16 +392,6 @@ export function initIdleAccountDb(userDataDir: string): AccountDb {
 export function getIdleAccountData(): Rec | null {
   if (!idleAccountDb) return null
   return idleAccountDb.loadAll()
-}
-
-/** 行级 diff 保存闲置库数据。未初始化时抛错 */
-export function saveIdleAccountData(data: Rec): SaveDiffStat {
-  if (!idleAccountDb) throw new Error('闲置账号库未初始化')
-  return idleAccountDb.saveAll(data)
-}
-
-export function isIdleAccountDbReady(): boolean {
-  return idleAccountDb !== null
 }
 
 export function closeIdleAccountDb(): void {

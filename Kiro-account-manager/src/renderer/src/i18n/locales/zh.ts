@@ -44,11 +44,9 @@ const zh = {
   nav: {
     home: '主页',
     accounts: '账户管理',
-    idleAccounts: '闲置账号库',
     machineId: '机器码',
     kproxy: 'K-Proxy',
     proxyPool: '代理池',
-    configSync: '配置同步',
     register: '注册',
     loginPool: '号池注册',
     subscription: '批量订阅',

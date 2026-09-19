@@ -317,8 +317,6 @@ export function AccountDetailDialog({
                     <label className="text-xs font-medium text-muted-foreground">{isEn ? 'User ID' : '用户 ID'}</label>
                     <div className="text-xs font-mono break-all bg-primary/[0.06] px-3 py-2 rounded-lg border border-primary/15 select-all text-foreground/80">{privacyMode ? '********' : (account.userId || '-')}</div>
                  </div>
-                 {/* 代理绑定（B4） */}
-                 <ProxyBindingSection accountId={account.id} accountEmail={account.email || ''} isEn={isEn} />
                </div>
              </section>
 
@@ -465,90 +463,5 @@ export function AccountDetailDialog({
       </div>
     </div>,
     document.body
-  )
-}
-
-/** 账号详情对话框内的"代理绑定"段（B4 边缘修复） */
-function ProxyBindingSection({ accountId, accountEmail, isEn }: { accountId: string; accountEmail: string; isEn: boolean }): React.ReactNode {
-  const { proxyPool, accountProxyBindings, bindAccountsToProxy, unbindAccountFromProxy } = useAccountsStore()
-  const [open, setOpen] = useState(false)
-
-  const boundProxyId = accountProxyBindings[accountId]
-  const boundProxy = boundProxyId ? proxyPool.get(boundProxyId) : null
-
-  const aliveProxies = Array.from(proxyPool.values()).filter((p) => p.enabled && p.status !== 'dead')
-
-  return (
-    <div className="space-y-1 mt-3">
-      <label className="text-xs font-medium text-muted-foreground">{isEn ? 'Bound Proxy' : '绑定代理'}</label>
-      {boundProxy ? (
-        <div className="flex items-center gap-2 bg-cyan-500/10 border border-cyan-500/30 px-3 py-2 rounded-lg">
-          <span className="text-cyan-700 dark:text-cyan-300 text-xs font-mono flex-1 truncate" title={boundProxy.url}>
-            {boundProxy.protocol}://{boundProxy.host}:{boundProxy.port}
-            {boundProxy.label && <span className="text-muted-foreground ml-1.5">({boundProxy.label})</span>}
-          </span>
-          <Badge variant="outline" className="text-[10px]">{boundProxy.status}</Badge>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setOpen(!open)}
-            className="h-7 text-xs"
-          >
-            {isEn ? 'Change' : '更换'}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 text-xs text-destructive"
-            onClick={() => {
-              if (confirm(isEn ? `Unbind ${accountEmail}?` : `解绑 ${accountEmail}？`)) {
-                unbindAccountFromProxy(accountId)
-              }
-            }}
-          >
-            {isEn ? 'Unbind' : '解绑'}
-          </Button>
-        </div>
-      ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setOpen(!open)}
-          className="h-7 text-xs w-full"
-        >
-          {isEn ? '+ Bind to Proxy' : '+ 绑定代理'}
-        </Button>
-      )}
-
-      {open && (
-        <div className="border rounded-lg p-2 mt-2 space-y-1 max-h-48 overflow-y-auto">
-          {aliveProxies.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground p-2">
-              {isEn ? 'No alive proxies. Add and validate in "Proxy Pool".' : '无可用代理。请先在"代理池"添加并验活。'}
-            </p>
-          ) : (
-            aliveProxies.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => { bindAccountsToProxy([accountId], p.id); setOpen(false) }}
-                className={cn(
-                  'w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-muted',
-                  p.id === boundProxyId && 'bg-primary/10 text-primary'
-                )}
-              >
-                <span className="font-mono flex-1 truncate">
-                  {p.host}:{p.port}
-                  {p.label && <span className="text-muted-foreground ml-1.5">({p.label})</span>}
-                </span>
-                {p.latencyMs !== undefined && (
-                  <span className="text-[10px] text-muted-foreground">{p.latencyMs}ms</span>
-                )}
-                {p.id === boundProxyId && <span className="text-primary">✓</span>}
-              </button>
-            ))
-          )}
-        </div>
-      )}
-    </div>
   )
 }

@@ -6,8 +6,8 @@
 //          不可用（极少数 Linux 无 keyring）→ 退回明文 JSON，保证容灾不丢
 //   - 读：优先解密 *.backup.enc；失败/不存在再读旧明文 *.backup.json（平滑迁移）
 //
-// fileBase 参数：主账号库为 'kiro-accounts'，闲置账号库为 'kiro-idle-accounts'，
-// 两库备份文件物理分开。
+// fileBase 参数：主账号库为 'kiro-accounts'；历史闲置库迁移期间仍兼容
+// 'kiro-idle-accounts' 备份文件，但新版本不再写入该备份。
 
 import { safeStorage } from 'electron'
 import * as fs from 'fs/promises'

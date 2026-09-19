@@ -167,16 +167,6 @@ npm run typecheck
 - **Registration Analytics Report** — Donut chart (success rate) + 24-hour smooth curves (Catmull-Rom dual-line) + 7-day stacked trend bars + colorful error category cards + auth method comparison + CSV export
 - **Subscription Link Expiry Detection** — 15-minute threshold + HTTP HEAD live probe, one-click regenerate expired links
 - **Diagnostics Panel** — Check public/Kiro/AWS/email service/proxy pool connectivity, with report export
-- **Config Sync** — Multi-device sync of proxy pool/webhooks/register templates/rate limit settings/app preferences, supports AES-GCM + PBKDF2 password encryption
-
-#### 🌐 Reverse Proxy: Account-to-IP Bucketing (new end-to-end feature)
-
-- Accounts can be bound to any active proxy IP, with "N accounts per proxy" auto-distribution
-- Reverse proxy Kiro API calls strictly follow [account-bound proxy > global proxy] priority
-- Quick bind via toolbar / account card / list row / detail dialog (4 access points)
-- **All outbound requests for the account** (including token refresh, background batch refresh/check, Subscription/SetOverage API) route through the bound proxy
-- Auto-sync to main process account pool on proxy URL/status/disable changes, deletion auto-clears bindings
-- One-click auto-distribute (only-unbound mode or re-distribute-all)
 
 #### 🔌 Network Layer
 - **SOCKS5/SOCKS4 proxy support** — Via socks library + undici Agent.connect hook, HTTPS auto TLS upgrade

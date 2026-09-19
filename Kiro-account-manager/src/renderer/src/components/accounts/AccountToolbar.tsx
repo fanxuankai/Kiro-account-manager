@@ -10,7 +10,6 @@ import {
   getLifecycleCounts,
   type AccountLifecycle
 } from '@/lib/accountLifecycle'
-import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon } from 'lucide-react'
 import {
   Search,
   Plus,
@@ -35,7 +34,6 @@ import {
   List as ListIcon,
   Activity,
   KeyRound,
-  Archive
 } from 'lucide-react'
 
 export type AccountViewMode = 'grid' | 'list'
@@ -46,8 +44,6 @@ interface AccountToolbarProps {
   onQuickGithubLogin: () => void
   onImport: () => void
   onExport: () => void
-  /** 批量移入闲置账号库（物理隔离的离线库，不保活不刷新） */
-  onArchive: () => void
   viewMode: AccountViewMode
   onViewModeChange: (mode: AccountViewMode) => void
   onManageTags: () => void
@@ -60,7 +56,6 @@ export function AccountToolbar({
   onQuickGithubLogin,
   onImport,
   onExport,
-  onArchive,
   viewMode,
   onViewModeChange,
   onManageTags,
@@ -86,20 +81,14 @@ export function AccountToolbar({
     removeTagFromAccounts,
     activeLifecycleTab,
     setActiveLifecycleTab,
-    proxyPool,
-    accountProxyBindings,
-    bindAccountsToProxy,
-    unbindAccountFromProxy,
     refreshProgress
   } = useAccountsStore()
 
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
   const [showTagMenu, setShowTagMenu] = useState(false)
-  const [showProxyMenu, setShowProxyMenu] = useState(false)
 
   const tagMenuRef = useRef<HTMLDivElement>(null)
-  const proxyMenuRef = useRef<HTMLDivElement>(null)
   
   // 点击外部关闭菜单
   useEffect(() => {
@@ -107,41 +96,11 @@ export function AccountToolbar({
       if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) {
         setShowTagMenu(false)
       }
-      if (proxyMenuRef.current && !proxyMenuRef.current.contains(e.target as Node)) {
-        setShowProxyMenu(false)
-      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // 选中账号已绑定到每个代理的统计
-  const getSelectedProxyBindingStatus = useCallback(() => {
-    const selectedAccs = Array.from(selectedIds).map((id) => accounts.get(id)).filter(Boolean)
-    const proxyCounts = new Map<string | 'none', number>()
-    selectedAccs.forEach((acc) => {
-      if (!acc) return
-      const pid = accountProxyBindings[acc.id]
-      const key = pid || 'none'
-      proxyCounts.set(key, (proxyCounts.get(key) || 0) + 1)
-    })
-    return { selectedAccs, proxyCounts, total: selectedAccs.length }
-  }, [selectedIds, accounts, accountProxyBindings])
-
-  const handleBindToProxy = (proxyId: string): void => {
-    if (selectedIds.size === 0) return
-    bindAccountsToProxy(Array.from(selectedIds), proxyId)
-    setShowProxyMenu(false)
-  }
-
-  const handleUnbindAllSelected = (): void => {
-    if (selectedIds.size === 0) return
-    for (const id of selectedIds) {
-      unbindAccountFromProxy(id)
-    }
-    setShowProxyMenu(false)
-  }
-  
   const selectedTagStatus = useMemo(() => {
     const selectedAccounts = Array.from(selectedIds).map(id => accounts.get(id)).filter(Boolean)
     const tagCounts = new Map<string, number>()
@@ -434,127 +393,6 @@ export function AccountToolbar({
               </div>
             )}
           </div>
-          {/* 代理绑定下拉（选中账号时才高亮，未选时可作为信息查看入口） */}
-          <div className="relative" ref={proxyMenuRef}>
-            <Button
-              variant={showProxyMenu ? 'default' : 'ghost'}
-              size="icon"
-              className="h-8 w-8 relative"
-              onClick={() => {
-                setShowProxyMenu(!showProxyMenu)
-                setShowTagMenu(false)
-              }}
-              title={selectedCount > 0
-                ? (isEn ? `Bind ${selectedCount} selected accounts to a proxy` : `把选中 ${selectedCount} 个账号绑定到代理`)
-                : (isEn ? 'View proxy bindings' : '查看账号-代理绑定')
-              }
-            >
-              <NetworkIcon className="h-4 w-4" />
-              {selectedCount > 0 && (
-                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-primary" />
-              )}
-            </Button>
-
-            {showProxyMenu && (() => {
-              const aliveProxies = Array.from(proxyPool.values()).filter((p) => p.enabled && p.status !== 'dead')
-              const { proxyCounts, total } = getSelectedProxyBindingStatus()
-              return (
-                <div className="absolute right-0 top-full mt-2 z-50 w-[320px] max-h-[80vh] overflow-y-auto bg-popover border rounded-lg shadow-lg p-2">
-                  <div className="absolute -top-2 right-4 w-4 h-4 bg-popover border-l border-t rotate-45" />
-
-                  <div className="flex items-center justify-between px-2 py-1 mb-1">
-                    <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                      {isEn ? 'Proxy Bindings' : '代理绑定'}
-                    </span>
-                    {selectedCount > 0 && (
-                      <span className="text-[10px] text-primary">
-                        {isEn ? `${selectedCount} selected` : `已选 ${selectedCount}`}
-                      </span>
-                    )}
-                  </div>
-
-                  {selectedCount === 0 ? (
-                    <div className="px-2 py-3 text-[11px] text-muted-foreground">
-                      {isEn
-                        ? 'Select accounts first, then choose a proxy to bind to.'
-                        : '请先选择账号，再点击要绑定的代理'
-                      }
-                    </div>
-                  ) : (
-                    <>
-                      {aliveProxies.length === 0 ? (
-                        <div className="px-2 py-3 text-[11px] text-amber-600 dark:text-amber-400">
-                          {isEn
-                            ? 'No alive proxies. Add and validate proxies in "Proxy Pool" first.'
-                            : '没有可用代理。请先在"代理池"页面添加并验活代理'
-                          }
-                        </div>
-                      ) : (
-                        <div className="max-h-[280px] overflow-y-auto">
-                          {aliveProxies.map((p) => {
-                            const bindCount = proxyCounts.get(p.id) || 0
-                            const isAllBound = bindCount === total
-                            return (
-                              <button
-                                key={p.id}
-                                className={cn(
-                                  'w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded text-left hover:bg-muted transition-colors',
-                                  isAllBound && 'bg-primary/10'
-                                )}
-                                onClick={() => handleBindToProxy(p.id)}
-                              >
-                                <Link2Icon className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-mono text-xs truncate" title={p.url}>
-                                    {p.host}:{p.port}
-                                    {p.label && <span className="text-muted-foreground ml-1.5">({p.label})</span>}
-                                  </div>
-                                  <div className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-                                    <span>{p.protocol}</span>
-                                    {p.status === 'alive' && p.latencyMs !== undefined && (
-                                      <span className="text-green-600">{p.latencyMs}ms</span>
-                                    )}
-                                  </div>
-                                </div>
-                                {bindCount > 0 && (
-                                  <Badge variant="outline" className={cn(
-                                    'h-4 text-[9px]',
-                                    isAllBound ? 'border-primary text-primary' : ''
-                                  )}>
-                                    {bindCount}/{total}
-                                  </Badge>
-                                )}
-                                {isAllBound && <Check className="h-3 w-3 text-primary" />}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      )}
-
-                      <div className="border-t my-1" />
-                      <button
-                        className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-destructive/10 text-destructive"
-                        onClick={handleUnbindAllSelected}
-                        disabled={proxyCounts.get('none') === total}
-                      >
-                        <UnlinkIcon className="h-3.5 w-3.5" />
-                        <span>{isEn ? `Unbind selected (${selectedCount})` : `解绑选中 (${selectedCount})`}</span>
-                      </button>
-                    </>
-                  )}
-
-                  <div className="border-t my-1" />
-                  <div className="text-[10px] text-muted-foreground px-2 py-1 italic">
-                    {isEn
-                      ? 'Tip: bind N accounts to 1 proxy to reduce risk-control association.'
-                      : '提示：把 N 个账号绑定到同一代理 IP，可降低风控关联风险'
-                    }
-                  </div>
-                </div>
-              )
-            })()}
-          </div>
-
           <Button
             variant={privacyMode ? "default" : "ghost"}
             size="icon"
@@ -601,19 +439,6 @@ export function AccountToolbar({
           >
             {/* 与 batchRefresh 区分图标：Activity 代表"查看状态/活动" */}
             {isChecking ? <Loader2 className="h-4 w-4 animate-spin" /> : <Activity className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 hover:bg-primary/10 hover:text-primary"
-            onClick={onArchive}
-            disabled={selectedCount === 0}
-            title={selectedCount > 0
-              ? (isEn ? `Move ${selectedCount} accounts to Idle Accounts (offline, no keep-alive)` : `把选中的 ${selectedCount} 个账号移入闲置库（不保活、不刷新）`)
-              : (isEn ? 'Move to Idle Accounts (select first)' : '移入闲置库（请先选中账号）')
-            }
-          >
-            <Archive className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"

@@ -70,18 +70,8 @@ function AccountListRowComponent({
     maskNickname,
     usagePrecision,
     updateAccountStatus,
-    updateAccount,
-    accountProxyBindings,
-    proxyPool,
-    unbindAccountFromProxy
+    updateAccount
   } = useAccountsStore()
-
-  // 该账号绑定的代理（如有）
-  const boundProxy = useMemo(() => {
-    const proxyId = accountProxyBindings[account.id]
-    if (!proxyId) return null
-    return proxyPool.get(proxyId) || null
-  }, [accountProxyBindings, account.id, proxyPool])
 
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
@@ -439,35 +429,6 @@ function AccountListRowComponent({
             </Badge>
           )
         })() : null}
-
-        {/* 代理绑定徽章：可点击解绑（仅有绑定时显示） */}
-        {boundProxy && (
-          <Badge
-            variant="outline"
-            className={cn(
-              'text-[10px] h-5 px-1.5 font-normal cursor-pointer group transition-colors',
-              boundProxy.enabled && boundProxy.status !== 'dead'
-                ? 'border-cyan-500/40 text-cyan-700 dark:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20'
-                : 'border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10'
-            )}
-            title={`${isEn ? 'Bound proxy:' : '绑定代理：'} ${boundProxy.host}:${boundProxy.port}${boundProxy.label ? ` (${boundProxy.label})` : ''}\n${isEn ? 'Click to unbind' : '点击解绑'}`}
-            onClick={(e) => {
-              e.stopPropagation()
-              if (confirm(isEn
-                ? `Unbind ${account.email} from ${boundProxy.host}:${boundProxy.port}?`
-                : `解绑 ${account.email} 与 ${boundProxy.host}:${boundProxy.port}？`
-              )) {
-                unbindAccountFromProxy(account.id)
-              }
-            }}
-          >
-            <span className="opacity-70 group-hover:hidden">⇄</span>
-            <span className="hidden group-hover:inline">✕</span>
-            <span className="ml-0.5 max-w-[80px] truncate inline-block align-middle">
-              {boundProxy.host}
-            </span>
-          </Badge>
-        )}
 
         {/* 用量已超额（本地 percentUsed > 1，不调接口） */}
         {isCritical && (

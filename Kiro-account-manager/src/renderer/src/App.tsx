@@ -1,14 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AccountManager } from './components/accounts'
-import { IdleManager } from './components/idle'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
-import { HomePage, AboutPage, SettingsPage, MachineIdPage, KProxyPage, ProxyPoolPage, ConfigSyncPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage, LoginPagePool } from './components/pages'
+import { HomePage, AboutPage, SettingsPage, MachineIdPage, KProxyPage, ProxyPoolPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage, LoginPagePool } from './components/pages'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { TaskProgressWidget } from './components/layout/TaskProgressWidget'
 import { useAccountsStore, isBannedAccountError } from './store/accounts'
-import { useIdleAccountsStore } from './store/idleAccounts'
 
 // 托盘信息防抖延迟：后台刷新风暴时合并多次跨进程 IPC 为单次
 const TRAY_UPDATE_DEBOUNCE_MS = 400
@@ -99,9 +97,6 @@ function App(): React.JSX.Element {
       startAutoTokenRefresh()
       startAutoUsageRefresh()
     })
-    // 闲置账号库（独立 SQLite，物理隔离）：只加载数据，无任何定时器/网络调度
-    void useIdleAccountsStore.getState().loadFromStorage()
-
     return () => {
       stopAutoTokenRefresh()
       stopAutoUsageRefresh()
@@ -178,7 +173,6 @@ function App(): React.JSX.Element {
   useEffect(() => {
     const handleBeforeUnload = (): void => {
       void flushSaveImmediately()
-      void useIdleAccountsStore.getState().flushSaveImmediately()
     }
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => {
@@ -274,8 +268,6 @@ function App(): React.JSX.Element {
         return <HomePage />
       case 'accounts':
         return <AccountManager />
-      case 'idleAccounts':
-        return <IdleManager />
       case 'machineId':
         return <MachineIdPage />
       case 'kproxy':
@@ -288,8 +280,6 @@ function App(): React.JSX.Element {
         return <SubscriptionPage />
       case 'billing':
         return <BillingPage />
-      case 'configSync':
-        return <ConfigSyncPage />
       case 'logs':
         return <LogsPage />
       case 'loginPool':

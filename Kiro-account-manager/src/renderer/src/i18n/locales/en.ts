@@ -44,11 +44,9 @@ const en = {
   nav: {
     home: 'Home',
     accounts: 'Accounts',
-    idleAccounts: 'Idle Accounts',
     machineId: 'Machine ID',
     kproxy: 'K-Proxy',
     proxyPool: 'Proxy Pool',
-    configSync: 'Config Sync',
     register: 'Register',
     loginPool: 'Sign-up Pool',
     subscription: 'Subscription',

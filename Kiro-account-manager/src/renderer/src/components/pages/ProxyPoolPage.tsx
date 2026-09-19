@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   Network, Plus, Trash2, RefreshCw, Power, PowerOff, Upload, CheckCircle2,
   XCircle, Loader2, Globe, Clock, Activity, Settings2, Copy, FileText,
-  Link2, Users, Shuffle, Unlink, Stethoscope, Pencil
+  Link2, Stethoscope, Pencil
 } from 'lucide-react'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -302,12 +302,7 @@ export function ProxyPoolPage(): React.ReactNode {
     validateProxy,
     validateProxiesBatch,
     clearProxyPool,
-    setProxyPoolConfig,
-    accounts,
-    accountProxyBindings,
-    unbindAccountFromProxy,
-    clearAccountProxyBindings,
-    autoDistributeAccountsToProxies
+    setProxyPoolConfig
   } = useAccountsStore()
 
   const [singleInput, setSingleInput] = useState('')
@@ -324,9 +319,6 @@ export function ProxyPoolPage(): React.ReactNode {
   const [advancedSearchOpen, setAdvancedSearchOpen] = useState(false)
   const [isValidatingAll, setIsValidatingAll] = useState(false)
   const [testConcurrency, setTestConcurrency] = useState(10)
-  // 反代分桶：每代理承载账号数（0 = 均分）
-  const [accountsPerProxy, setAccountsPerProxy] = useState<number>(5)
-  const [bindingPanelExpanded, setBindingPanelExpanded] = useState(false)
   // 代理链诊断状态
   const [chainDiagnosing, setChainDiagnosing] = useState(false)
   const [chainDiagnose, setChainDiagnose] = useState<{
@@ -370,34 +362,6 @@ export function ProxyPoolPage(): React.ReactNode {
   const proxies = useMemo(() => Array.from(proxyPool.values()), [proxyPool])
   const poolHealth = useMemo(() => computePoolHealth(proxies), [proxies])
 
-  // 反代分桶：当前账号-代理绑定关系
-  const bindingStats = useMemo(() => {
-    const allAccounts = Array.from(accounts.values())
-    const totalActive = allAccounts.filter((a) => a.status === 'active').length
-    const boundCount = Object.keys(accountProxyBindings).filter(
-      (aid) => accounts.has(aid)
-    ).length
-    const aliveProxies = proxies.filter((p) => p.enabled && p.status !== 'dead')
-    // 每代理承载的账号数
-    const perProxy: Record<string, number> = {}
-    for (const [aid, pid] of Object.entries(accountProxyBindings)) {
-      if (!accounts.has(aid)) continue
-      perProxy[pid] = (perProxy[pid] || 0) + 1
-    }
-    // 风险点：单代理账号数 > 推荐阈值（默认 5）
-    const overloadedProxies = Object.entries(perProxy)
-      .filter(([, c]) => c > 10)
-      .map(([pid, c]) => ({ pid, count: c, proxy: proxyPool.get(pid) }))
-    return {
-      totalActive,
-      boundCount,
-      unboundCount: totalActive - boundCount,
-      aliveProxyCount: aliveProxies.length,
-      perProxy,
-      overloadedProxies
-    }
-  }, [accounts, accountProxyBindings, proxies, proxyPool])
-
   // 后台定时验活
   const lastAutoValidateRef = useRef(0)
   useEffect(() => {
@@ -420,29 +384,6 @@ export function ProxyPoolPage(): React.ReactNode {
     const timer = setInterval(tick, 60_000)
     return () => clearInterval(timer)
   }, [proxyPoolConfig.autoValidateIntervalMin, proxyPoolConfig.autoValidateConcurrency, proxyPool, validateProxiesBatch])
-
-  const handleAutoDistribute = useCallback((onlyUnbound: boolean) => {
-    if (bindingStats.aliveProxyCount === 0) {
-      alert(isEn ? 'No alive proxies. Validate proxies first.' : '没有可用代理，请先验活代理')
-      return
-    }
-    const activeAccountIds = Array.from(accounts.values())
-      .filter((a) => a.status === 'active')
-      .map((a) => a.id)
-    if (activeAccountIds.length === 0) {
-      alert(isEn ? 'No active accounts.' : '没有可用账号')
-      return
-    }
-    const result = autoDistributeAccountsToProxies({
-      accountsPerProxy,
-      onlyUnbound,
-      accountIds: activeAccountIds
-    })
-    alert(isEn
-      ? `Distributed ${result.distributed} accounts, skipped ${result.skipped}`
-      : `已分配 ${result.distributed} 个账号，跳过 ${result.skipped}`
-    )
-  }, [accounts, accountsPerProxy, autoDistributeAccountsToProxies, bindingStats.aliveProxyCount, isEn])
 
   const stats = useMemo(() => {
     let alive = 0, dead = 0, slow = 0, untested = 0, enabled = 0
@@ -1127,172 +1068,6 @@ export function ProxyPoolPage(): React.ReactNode {
                   ? `Matched ${filtered.length} of ${proxies.length}`
                   : `匹配 ${filtered.length} / ${proxies.length}`}
               </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* 账号-代理 N:1 绑定分桶 */}
-      <Card className="hover-lift">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Link2 className="h-4 w-4 text-primary" />
-            {isEn ? 'Account-to-IP Bucketing' : '账号绑定代理 IP'}
-            <span className="text-[10px] font-normal text-muted-foreground">
-              {isEn
-                ? '— Limit accounts per IP to avoid risk-control association'
-                : '— 限制每 IP 账号数，避免被风控关联'
-              }
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {/* 统计 */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
-            <div className="p-2 bg-muted/30 rounded">
-              <div className="text-[10px] text-muted-foreground">{isEn ? 'Active Accounts' : '可用账号'}</div>
-              <div className="text-lg font-bold">{bindingStats.totalActive}</div>
-            </div>
-            <div className="p-2 bg-green-50 dark:bg-green-950/20 rounded">
-              <div className="text-[10px] text-muted-foreground">{isEn ? 'Bound' : '已绑定'}</div>
-              <div className="text-lg font-bold text-green-600">{bindingStats.boundCount}</div>
-            </div>
-            <div className="p-2 bg-amber-50 dark:bg-amber-950/20 rounded">
-              <div className="text-[10px] text-muted-foreground">{isEn ? 'Unbound' : '未绑定'}</div>
-              <div className="text-lg font-bold text-amber-600">{bindingStats.unboundCount}</div>
-            </div>
-            <div className="p-2 bg-cyan-50 dark:bg-cyan-950/20 rounded">
-              <div className="text-[10px] text-muted-foreground">{isEn ? 'Alive Proxies' : '可用代理'}</div>
-              <div className="text-lg font-bold text-cyan-600">{bindingStats.aliveProxyCount}</div>
-            </div>
-          </div>
-
-          {/* 风险提示 */}
-          {bindingStats.overloadedProxies.length > 0 && (
-            <div className="p-2 bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800 rounded text-xs">
-              <div className="flex items-center gap-1.5 font-medium text-red-700 dark:text-red-300">
-                <XCircle className="h-3.5 w-3.5" />
-                {isEn ? 'Risk: Overloaded proxies' : '风险：超载代理'}
-              </div>
-              <p className="text-muted-foreground mt-1">
-                {isEn
-                  ? `${bindingStats.overloadedProxies.length} proxy/proxies are carrying more than 10 accounts. Consider re-distributing.`
-                  : `${bindingStats.overloadedProxies.length} 个代理承载了超过 10 个账号，建议重新分配。`
-                }
-              </p>
-            </div>
-          )}
-
-          {/* 自动分配 */}
-          <div className="flex items-center gap-3 flex-wrap p-3 bg-muted/20 rounded-lg border border-dashed">
-            <div className="flex items-center gap-2">
-              <Shuffle className="h-4 w-4 text-primary" />
-              <Label className="text-sm">{isEn ? 'Accounts per proxy' : '每代理承载'}:</Label>
-              <Input
-                type="number" min={0} max={50}
-                value={accountsPerProxy}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10)
-                  if (!isNaN(v) && v >= 0) setAccountsPerProxy(v)
-                }}
-                className="h-8 w-20 text-xs text-center"
-              />
-              <span className="text-[10px] text-muted-foreground italic">
-                {accountsPerProxy === 0
-                  ? (isEn ? '(0 = even split)' : '(0 = 均分)')
-                  : (isEn ? `accounts → 1 IP` : '账号 / IP')
-                }
-              </span>
-            </div>
-            <Button size="sm" onClick={() => handleAutoDistribute(true)} disabled={bindingStats.unboundCount === 0}>
-              <Users className="h-4 w-4 mr-1" />
-              {isEn ? `Auto-Bind Unbound (${bindingStats.unboundCount})` : `自动绑定未分配 (${bindingStats.unboundCount})`}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => handleAutoDistribute(false)}>
-              <RefreshCw className="h-4 w-4 mr-1" />
-              {isEn ? 'Re-Distribute All' : '重新分配全部'}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-destructive ml-auto"
-              onClick={() => {
-                if (bindingStats.boundCount === 0) return
-                if (confirm(isEn ? `Unbind all ${bindingStats.boundCount} accounts?` : `解绑全部 ${bindingStats.boundCount} 个账号？`)) {
-                  clearAccountProxyBindings()
-                }
-              }}
-              disabled={bindingStats.boundCount === 0}
-            >
-              <Unlink className="h-4 w-4 mr-1" />
-              {isEn ? 'Unbind All' : '解绑全部'}
-            </Button>
-          </div>
-
-          {/* 详细绑定关系（折叠） */}
-          <button
-            onClick={() => setBindingPanelExpanded(!bindingPanelExpanded)}
-            className="text-xs text-primary hover:underline flex items-center gap-1"
-          >
-            {bindingPanelExpanded
-              ? (isEn ? '▼ Hide binding details' : '▼ 隐藏绑定明细')
-              : (isEn ? '▶ Show binding details' : '▶ 显示绑定明细')
-            }
-          </button>
-
-          {bindingPanelExpanded && (
-            <div className="space-y-2 max-h-64 overflow-y-auto border rounded-lg">
-              {proxies.filter((p) => p.enabled && p.status !== 'dead').map((p) => {
-                const boundAccountIds = Object.entries(accountProxyBindings)
-                  .filter(([, pid]) => pid === p.id)
-                  .map(([aid]) => aid)
-                if (boundAccountIds.length === 0) return null
-                return (
-                  <div key={p.id} className="p-2 border-b last:border-b-0">
-                    <div className="flex items-center justify-between gap-2 text-xs mb-1">
-                      <span className="font-mono truncate" title={p.url}>
-                        {p.host}:{p.port}
-                        {p.label && <Badge variant="outline" className="ml-1.5 h-4 text-[9px]">{p.label}</Badge>}
-                      </span>
-                      <Badge variant="outline" className="text-[10px]">
-                        {boundAccountIds.length} {isEn ? 'accounts' : '账号'}
-                      </Badge>
-                    </div>
-                    <div className="flex flex-wrap gap-1 pl-2">
-                      {boundAccountIds.map((aid) => {
-                        const acc = accounts.get(aid)
-                        return (
-                          <span
-                            key={aid}
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-muted text-[10px] hover:bg-destructive/10 transition-colors group"
-                          >
-                            <span title={acc?.email}>{(acc?.email || aid.slice(0, 8))}</span>
-                            <button
-                              onClick={() => unbindAccountFromProxy(aid)}
-                              className="opacity-30 group-hover:opacity-100 text-destructive"
-                              title={isEn ? 'Unbind' : '解绑'}
-                            >
-                              <XCircle className="h-2.5 w-2.5" />
-                            </button>
-                          </span>
-                        )
-                      })}
-                    </div>
-                  </div>
-                )
-              })}
-              {bindingStats.unboundCount > 0 && (
-                <div className="p-2 bg-amber-50 dark:bg-amber-950/10 text-xs">
-                  <span className="text-amber-700 dark:text-amber-300">
-                    {isEn ? `${bindingStats.unboundCount} accounts have no proxy binding (will use global proxy / direct).` : `${bindingStats.unboundCount} 个账号未绑定代理（将走全局代理 / 直连）`}
-                  </span>
-                </div>
-              )}
-              {bindingStats.boundCount === 0 && (
-                <div className="p-4 text-center text-xs text-muted-foreground">
-                  {isEn ? 'No bindings yet. Click "Auto-Bind" above to start.' : '尚无绑定。点击上方"自动绑定"开始。'}
-                </div>
-              )}
             </div>
           )}
         </CardContent>

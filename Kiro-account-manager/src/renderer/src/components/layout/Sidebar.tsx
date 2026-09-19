@@ -1,4 +1,4 @@
-import { Home, Users, Settings, Info, ChevronRight, Fingerprint, Shield, UserPlus, CreditCard, ScrollText, Network, Archive, Warehouse, Receipt, KeyRound } from 'lucide-react'
+import { Home, Users, Settings, Info, ChevronRight, Fingerprint, Shield, UserPlus, CreditCard, ScrollText, Network, Receipt, KeyRound } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { cn } from '@/lib/utils'
 import kiroLogo from '@/assets/kiro-high-resolution-logo-transparent.png'
@@ -6,7 +6,7 @@ import kiroLogoSmall from '@/assets/Kiro Logo.svg'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 
-export type PageType = 'home' | 'accounts' | 'idleAccounts' | 'machineId' | 'kproxy' | 'proxyPool' | 'register' | 'loginPool' | 'subscription' | 'billing' | 'configSync' | 'logs' | 'settings' | 'about'
+export type PageType = 'home' | 'accounts' | 'machineId' | 'kproxy' | 'proxyPool' | 'register' | 'loginPool' | 'subscription' | 'billing' | 'logs' | 'settings' | 'about'
 
 interface SidebarProps {
   currentPage: PageType
@@ -18,7 +18,6 @@ interface SidebarProps {
 const menuItemsConfig: { id: PageType; labelKey: string; icon: React.ElementType }[] = [
   { id: 'home', labelKey: 'nav.home', icon: Home },
   { id: 'accounts', labelKey: 'nav.accounts', icon: Users },
-  { id: 'idleAccounts', labelKey: 'nav.idleAccounts', icon: Warehouse },
   { id: 'machineId', labelKey: 'nav.machineId', icon: Fingerprint },
   { id: 'kproxy', labelKey: 'nav.kproxy', icon: Shield },
   { id: 'proxyPool', labelKey: 'nav.proxyPool', icon: Network },
@@ -26,7 +25,6 @@ const menuItemsConfig: { id: PageType; labelKey: string; icon: React.ElementType
   { id: 'loginPool', labelKey: 'nav.loginPool', icon: KeyRound },
   { id: 'subscription', labelKey: 'nav.subscription', icon: CreditCard },
   { id: 'billing', labelKey: 'nav.billing', icon: Receipt },
-  { id: 'configSync', labelKey: 'nav.configSync', icon: Archive },
   { id: 'logs', labelKey: 'nav.logs', icon: ScrollText },
   { id: 'settings', labelKey: 'nav.settings', icon: Settings },
   { id: 'about', labelKey: 'nav.about', icon: Info },

@@ -70,7 +70,7 @@ const parseDateTimeInput = (v: string, endOfDay: boolean): number | undefined =>
   return Number.isNaN(t) ? undefined : t
 }
 
-/** 筛选面板所需的 store 切片（主库与闲置库均满足此结构） */
+/** 筛选面板所需的主账号库 store 切片 */
 interface FilterPanelStoreSlice {
   filter: FilterType
   setFilter: (filter: FilterType) => void
@@ -81,7 +81,7 @@ interface FilterPanelStoreSlice {
 }
 
 interface AccountFilterPanelProps {
-  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  /** store 钩子，默认主账号库 */
   useStore?: () => FilterPanelStoreSlice
 }
 

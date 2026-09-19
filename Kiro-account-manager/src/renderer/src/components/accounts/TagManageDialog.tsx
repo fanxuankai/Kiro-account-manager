@@ -5,7 +5,7 @@ import { useTranslation } from '@/hooks/useTranslation'
 import type { AccountTag } from '@/types/account'
 import { X, Plus, Edit2, Trash2, Tag, Check, Palette } from 'lucide-react'
 
-/** 标签管理所需的 store 切片（主库与闲置库均满足此结构） */
+/** 标签管理所需的主账号库 store 切片 */
 interface TagManageStoreSlice {
   tags: Map<string, AccountTag>
   accounts: Map<string, { id: string; email: string; tags: string[] }>
@@ -19,7 +19,7 @@ interface TagManageStoreSlice {
 interface TagManageDialogProps {
   isOpen: boolean
   onClose: () => void
-  /** store 钩子，默认主账号库；闲置账号库传入 useIdleAccountsStore */
+  /** store 钩子，默认主账号库 */
   useStore?: () => TagManageStoreSlice
 }
 

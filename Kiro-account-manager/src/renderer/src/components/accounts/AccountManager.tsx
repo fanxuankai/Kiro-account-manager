@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { useAccountsStore } from '@/store/accounts'
-import { useIdleAccountsStore } from '@/store/idleAccounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import { AccountToolbar, type AccountViewMode } from './AccountToolbar'
 import { AccountGrid } from './AccountGrid'
@@ -116,54 +115,6 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     setShowTagDialog(true)
   }
 
-  // 批量移入闲置账号库：整账号搬运到独立 SQLite 库（物理隔离，不保活不刷新），
-  // 主库移除（removeAccounts 会顺带清理账号的代理绑定）
-  const handleArchive = (): void => {
-    const main = useAccountsStore.getState()
-    if (main.selectedIds.size === 0) return
-
-    const selected = Array.from(main.selectedIds)
-      .map(id => main.accounts.get(id))
-      .filter((a): a is Account => a !== undefined)
-
-    // 当前激活账号不允许归档：IDE 正在用它，归档会导致保活断开
-    if (selected.some(a => a.id === main.activeAccountId)) {
-      alert(isEn ? 'The active account cannot be archived. Switch to another account first.' : '当前激活账号不能移入闲置库，请先切换到其他账号')
-      return
-    }
-
-    // 按闲置库去重口径预筛（id / 邮箱+provider）
-    const idleStore = useIdleAccountsStore.getState()
-    const idleAccounts = idleStore.accounts
-    const isDuplicateInIdle = (acc: Account): boolean => {
-      if (idleAccounts.has(acc.id)) return true
-      for (const e of idleAccounts.values()) {
-        if (acc.userId && e.userId === acc.userId) return true
-        if (acc.email === e.email && acc.credentials?.provider === e.credentials?.provider) return true
-      }
-      return false
-    }
-    const archivable = selected.filter(acc => !isDuplicateInIdle(acc))
-    const skippedCount = selected.length - archivable.length
-
-    if (archivable.length === 0) {
-      alert(isEn ? 'All selected accounts already exist in Idle Accounts' : '选中的账号在闲置库中均已存在')
-      return
-    }
-    if (!confirm(isEn ? `Move ${archivable.length} accounts to Idle Accounts? (offline, no keep-alive)` : `确定把 ${archivable.length} 个账号移入闲置库吗？（闲置库不保活、不刷新 Token）`)) {
-      return
-    }
-
-    const result = idleStore.receiveAccounts(archivable)
-    if (result.success > 0) {
-      main.removeAccounts(archivable.map(acc => acc.id))
-      const skipNote = skippedCount > 0 ? (isEn ? `, ${skippedCount} skipped (already exist)` : `，跳过 ${skippedCount} 个已存在`) : ''
-      alert(`${isEn ? 'Archived' : '已移入闲置库'} ${result.success} ${isEn ? 'account(s)' : '个账号'}${skipNote}`)
-    } else {
-      alert(isEn ? 'Archive failed' : '移入闲置库失败')
-    }
-  }
-
   // 编辑账号
   const handleEditAccount = (account: Account): void => {
     setEditingAccount(account)
@@ -207,7 +158,6 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
           }}
           onImport={handleImport}
           onExport={handleExport}
-          onArchive={handleArchive}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
           onManageTags={handleManageTags}
