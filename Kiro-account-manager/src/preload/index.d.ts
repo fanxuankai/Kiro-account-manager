@@ -261,17 +261,6 @@ interface KiroApi {
     error?: string
   }>
 
-  // 获取本地 SSO 缓存中当前使用的账号信息
-  getLocalActiveAccount: () => Promise<{
-    success: boolean
-    data?: {
-      refreshToken: string
-      accessToken?: string
-      authMethod?: string
-      provider?: string
-    }
-    error?: string
-  }>
 
   // 从 Kiro 本地配置导入凭证
   loadKiroCredentials: () => Promise<{

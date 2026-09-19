@@ -3921,35 +3921,6 @@ app.whenReady().then(async () => {
     }
   )
 
-  // IPC: 获取本地 SSO 缓存中当前使用的账号信息
-  ipcMain.handle('get-local-active-account', async () => {
-    const os = await import('os')
-    const path = await import('path')
-
-    try {
-      const ssoCache = path.join(os.homedir(), '.aws', 'sso', 'cache')
-      const tokenPath = path.join(ssoCache, 'kiro-auth-token.json')
-
-      const tokenContent = await readFile(tokenPath, 'utf-8')
-      const tokenData = JSON.parse(tokenContent)
-
-      if (!tokenData.refreshToken) {
-        return { success: false, error: '本地缓存中没有 refreshToken' }
-      }
-
-      return {
-        success: true,
-        data: {
-          refreshToken: tokenData.refreshToken,
-          accessToken: tokenData.accessToken,
-          authMethod: tokenData.authMethod,
-          provider: tokenData.provider
-        }
-      }
-    } catch {
-      return { success: false, error: '无法读取本地 SSO 缓存' }
-    }
-  })
 
   // IPC: 从 Kiro 本地配置导入凭证
   ipcMain.handle('load-kiro-credentials', async () => {
