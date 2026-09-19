@@ -88,8 +88,8 @@ export function IdleManager(): React.ReactNode {
     setShowImportDialog(true)
   }
 
-  // 执行导入弹窗解析结果的入库
-  const handleParsedImport = (parsed: ParsedImport): ImportResult => {
+  // 执行导入弹窗解析结果的入库（闲置库离线导入，无联网验证；签名与主库弹窗一致）
+  const handleParsedImport = async (parsed: ParsedImport): Promise<ImportResult> => {
     const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
     const groupName = currentGroupId ? groups.get(currentGroupId)?.name ?? (isEn ? 'Ungrouped' : '未分组') : (isEn ? 'Ungrouped' : '未分组')
     try {

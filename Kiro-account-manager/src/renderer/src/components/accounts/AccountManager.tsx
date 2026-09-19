@@ -12,7 +12,7 @@ import { TagManageDialog } from './TagManageDialog'
 import { ExportDialog } from './ExportDialog'
 import { ImportDialog, type ImportResult } from './ImportDialog'
 import { Button } from '../ui'
-import type { Account } from '@/types/account'
+import type { Account, AccountImportItem } from '@/types/account'
 import { type ParsedImport } from '@/lib/importParse'
 import { ArrowLeft, Loader2, Users } from 'lucide-react'
 
@@ -25,7 +25,8 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     isLoading,
     accounts,
     importFromExportData,
-    importAccounts,
+    addAccount,
+    batchImportConcurrency,
     selectedIds,
     deselectAll,
     activeGroupTab,
@@ -95,7 +96,12 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   }
 
   // 执行导入弹窗解析结果的入库
-  const handleParsedImport = (parsed: ParsedImport): ImportResult => {
+  // 凭证类（OIDC/卡密/行格式）走验证式导入——与「添加账号」同款：先在线验证拉全
+  // 邮箱/订阅/用量再入库，保证数据完整；完整导出 JSON 仍为离线恢复。
+  const handleParsedImport = async (
+    parsed: ParsedImport,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<ImportResult> => {
     // 导入归入"当前打开的分组"（activeGroupTab 为真实分组时），否则未分组
     const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
     const groupName = currentGroupId ? groups.get(currentGroupId)?.name ?? '未分组' : '未分组'
@@ -110,9 +116,141 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
         const skippedMsg = skippedInfo ? `，${skippedInfo.error}` : ''
         return { ok: result.success > 0, message: `导入完成：成功 ${result.success} 个${skippedMsg}` }
       }
-      const result = importAccounts(parsed.items)
-      const label = parsed.format === 'kami' ? '卡密导入完成' : parsed.format === 'oidc' ? 'OIDC 凭证导入完成' : '导入完成'
-      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）` }
+
+      // 检查账户是否已存在（同 userId 或 同邮箱+同 provider；与「添加账号」同口径）
+      const isAccountExists = (email: string, userId: string, provider?: string): boolean => {
+        return Array.from(accounts.values()).some(acc => {
+          if (userId && acc.userId === userId) return true
+          if (email && acc.email === email && acc.credentials.provider === provider) return true
+          return false
+        })
+      }
+
+      const importResult = { success: 0, failed: 0, skipped: 0, errors: [] as string[] }
+
+      const importOne = async (cred: AccountImportItem): Promise<void> => {
+        try {
+          const credProvider = (cred.idp as string) || 'BuilderId'
+          const credAuthMethod = (credProvider === 'BuilderId' || credProvider === 'Enterprise') ? 'IdC' : 'social'
+          const result = await window.api.verifyAccountCredentials({
+            refreshToken: cred.refreshToken,
+            clientId: cred.clientId || '',
+            clientSecret: cred.clientSecret || '',
+            region: cred.region || 'us-east-1',
+            authMethod: credAuthMethod,
+            provider: credProvider
+          })
+
+          if (result.success && result.data) {
+            const { email, userId } = result.data
+            if (isAccountExists(email, userId, credProvider)) {
+              importResult.skipped++
+              importResult.errors.push(`${cred.email || email}: 已存在`)
+              return
+            }
+
+            const idpMap: Record<string, 'BuilderId' | 'Enterprise' | 'Github' | 'Google'> = {
+              'BuilderId': 'BuilderId',
+              'Enterprise': 'Enterprise',
+              'Github': 'Github',
+              'Google': 'Google'
+            }
+            const now = Date.now()
+            // 详细用量/订阅能力字段（preload 类型未细标，与「添加账号」同款断言取用）
+            const usageData = result.data.usage as {
+              current: number; limit: number
+              baseLimit?: number; baseCurrent?: number
+              freeTrialLimit?: number; freeTrialCurrent?: number; freeTrialExpiry?: string
+              bonuses?: Account['usage']['bonuses']; nextResetDate?: string
+              resourceDetail?: Account['usage']['resourceDetail']
+            }
+            const subData = (result.data as { subscription?: { managementTarget?: string; upgradeCapability?: string; overageCapability?: string } }).subscription
+            addAccount({
+              email,
+              password: cred.password,
+              userId,
+              nickname: email ? email.split('@')[0] : undefined,
+              idp: idpMap[credProvider] || 'BuilderId',
+              groupId: currentGroupId,
+              credentials: {
+                accessToken: result.data.accessToken,
+                csrfToken: '',
+                refreshToken: result.data.refreshToken,
+                clientId: cred.clientId || '',
+                clientSecret: cred.clientSecret || '',
+                region: cred.region || 'us-east-1',
+                expiresAt: result.data.expiresIn ? now + result.data.expiresIn * 1000 : now + 3600 * 1000,
+                authMethod: credAuthMethod as 'IdC' | 'social',
+                provider: credProvider as 'BuilderId' | 'Enterprise' | 'Github' | 'Google',
+                profileArn: result.data.profileArn
+              },
+              subscription: {
+                type: result.data.subscriptionType as Account['subscription']['type'],
+                title: result.data.subscriptionTitle,
+                daysRemaining: result.data.daysRemaining,
+                expiresAt: result.data.expiresAt,
+                managementTarget: subData?.managementTarget,
+                upgradeCapability: subData?.upgradeCapability,
+                overageCapability: subData?.overageCapability
+              },
+              usage: {
+                current: usageData.current,
+                limit: usageData.limit,
+                percentUsed: usageData.limit > 0
+                  ? usageData.current / usageData.limit
+                  : 0,
+                lastUpdated: now,
+                baseLimit: usageData.baseLimit,
+                baseCurrent: usageData.baseCurrent,
+                freeTrialLimit: usageData.freeTrialLimit,
+                freeTrialCurrent: usageData.freeTrialCurrent,
+                freeTrialExpiry: usageData.freeTrialExpiry,
+                bonuses: usageData.bonuses,
+                nextResetDate: usageData.nextResetDate,
+                resourceDetail: usageData.resourceDetail
+              },
+              tags: [],
+              status: 'active',
+              lastUsedAt: now
+            })
+            importResult.success++
+          } else {
+            importResult.failed++
+            const err = result.error as { message?: string } | string | undefined
+            const errorMsg = typeof err === 'object' ? (err?.message || '验证失败') : (err || '验证失败')
+            importResult.errors.push(`${cred.email || cred.refreshToken.slice(0, 10)}: ${errorMsg}`)
+          }
+        } catch (e) {
+          importResult.failed++
+          importResult.errors.push(`${cred.email}: ${e instanceof Error ? e.message : '导入失败'}`)
+        }
+      }
+
+      // 并发控制与批间延迟：与「添加账号」批量导入一致，避免 API 限流
+      const items = parsed.items
+      let done = 0
+      const BATCH_SIZE = batchImportConcurrency
+      for (let i = 0; i < items.length; i += BATCH_SIZE) {
+        const batch = items.slice(i, i + BATCH_SIZE)
+        await Promise.allSettled(
+          batch.map(cred => importOne(cred).finally(() => {
+            done++
+            onProgress?.(done, items.length)
+          }))
+        )
+        if (i + BATCH_SIZE < items.length) {
+          await new Promise(resolve => setTimeout(resolve, 100))
+        }
+      }
+
+      const errSummary = importResult.errors.length
+        ? `；明细：${importResult.errors.slice(0, 5).join('、')}${importResult.errors.length > 5 ? ` 等 ${importResult.errors.length} 条` : ''}`
+        : ''
+      const skippedMsg = importResult.skipped ? `，已存在跳过 ${importResult.skipped} 个` : ''
+      return {
+        ok: importResult.success > 0,
+        message: `验证导入完成：成功 ${importResult.success} 个${skippedMsg}，失败 ${importResult.failed} 个（分组：${groupName}）${errSummary}`
+      }
     } catch (e) {
       console.error('Import error:', e)
       return { ok: false, message: '解析导入内容失败' }

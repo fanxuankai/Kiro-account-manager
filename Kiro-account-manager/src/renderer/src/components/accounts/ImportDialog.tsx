@@ -15,8 +15,11 @@ export interface ImportResult {
 interface ImportDialogProps {
   open: boolean
   onClose: () => void
-  /** 执行解析结果的入库（export / items 两类），返回结果回执 */
-  onImport: (parsed: ParsedImport) => ImportResult
+  /** 执行解析结果的入库（export / items 两类），返回结果回执；onProgress 用于验证式导入的进度回显 */
+  onImport: (
+    parsed: ParsedImport,
+    onProgress?: (done: number, total: number) => void
+  ) => Promise<ImportResult>
 }
 
 /**
@@ -30,6 +33,8 @@ export function ImportDialog({ open, onClose, onImport }: ImportDialogProps): Re
   const [parseError, setParseError] = useState('')
   const [result, setResult] = useState<ImportResult | null>(null)
   const [importing, setImporting] = useState(false)
+  // 验证式导入进度（已完成/总数），显示在导入按钮上
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 
@@ -38,23 +43,27 @@ export function ImportDialog({ open, onClose, onImport }: ImportDialogProps): Re
       setContent('')
       setParseError('')
       setResult(null)
+      setProgress(null)
     }
   }, [open])
 
   if (!open) return null
 
   // 粘贴或选文件拿到内容后的统一导入流程
-  const runImport = (raw: string): void => {
+  const runImport = async (raw: string): Promise<void> => {
     setParseError('')
     setResult(null)
+    setProgress(null)
     const parsed = parseImportContentAuto(raw)
     if (parsed.kind === 'invalid') {
       setParseError(parsed.message)
       return
     }
     setImporting(true)
+    // 点击即显示 0/n：进度回调只在每条完成时触发，不先占位的话验证期间按钮毫无反馈、像卡住
+    if (parsed.kind === 'items') setProgress({ done: 0, total: parsed.items.length })
     try {
-      const r = onImport(parsed)
+      const r = await onImport(parsed, (done, total) => setProgress({ done, total }))
       setResult(r)
       // 导入成功：短暂展示结果后自动关闭
       if (r.ok) {
@@ -74,7 +83,7 @@ export function ImportDialog({ open, onClose, onImport }: ImportDialogProps): Re
     setResult(null)
     const fileData = await window.api.importFromFile()
     if (!fileData) return
-    runImport(fileData.content)
+    await runImport(fileData.content)
   }
 
   // 粘贴按钮：读剪贴板填入文本域（用户确认后再点导入）
@@ -177,7 +186,11 @@ export function ImportDialog({ open, onClose, onImport }: ImportDialogProps): Re
             disabled={importing || !content.trim()}
           >
             <Upload className="h-4 w-4 mr-2" />
-            {result?.ok ? (isEn ? 'Imported' : '已导入') : (isEn ? 'Import' : '导入')}
+            {importing && progress
+              ? `${isEn ? 'Importing' : '导入中'} ${progress.done}/${progress.total}`
+              : result?.ok
+                ? (isEn ? 'Imported' : '已导入')
+                : (isEn ? 'Import' : '导入')}
           </Button>
         </div>
       </div>
