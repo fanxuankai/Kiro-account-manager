@@ -164,7 +164,7 @@ export function isPendingPayment(
 // ============ 支付链接复制文本（邮箱 + 说明 + 链接三行） ============
 
 // 订阅页单条/批量复制与账号管理"待付款"弹窗共用：
-// 把邮箱、说明（套餐名 + 15 分钟有效期提示）、链接拼成三行文本，
+// 把邮箱、说明（套餐名 + 24 小时有效期提示）、链接拼成三行文本，
 // 方便日后按邮箱检索发出去的聊天记录
 export function formatPaymentLinkText(
   email: string,
@@ -174,8 +174,8 @@ export function formatPaymentLinkText(
 ): string {
   const plan = planName || 'Kiro'
   const note = isEn
-    ? `${plan} subscription upgrade link, valid for 15 minutes, please complete payment soon`
-    : `${plan} 订阅升级链接，15 分钟内有效，请尽快完成支付`
+    ? `${plan} subscription upgrade link, valid for 24 hours, please complete payment soon`
+    : `${plan} 订阅升级链接，24 小时内有效，请尽快完成支付`
   return isEn
     ? `Email: ${email}\nNote: ${note}\nLink: ${url}`
     : `邮箱：${email}\n说明：${note}\n链接：${url}`

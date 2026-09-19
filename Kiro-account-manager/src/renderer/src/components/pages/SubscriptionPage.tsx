@@ -5,6 +5,7 @@ import QRCode from 'qrcode'
 import { useAccountsStore } from '@/store/accounts'
 import { Button, Card, CardContent, Switch } from '../ui'
 import { switchAccountToFree, formatPaymentLinkText, isPendingPayment } from '../accounts/_helpers'
+import { PayInAppDialog } from '../payment/PayInAppDialog'
 import {
   CreditCard,
   ExternalLink,
@@ -197,6 +198,8 @@ export function SubscriptionPage() {
   const [showImportDialog, setShowImportDialog] = useState(false)
   // 扫码支付：当前展示二维码的链接
   const [qrLink, setQrLink] = useState<SubscriptionLink | null>(null)
+  // 应用内支付：当前发起支付的链接
+  const [payTarget, setPayTarget] = useState<{ url: string; accountId: string; email?: string } | null>(null)
   // 快选：从顶部按设定数量分批选择可用链接（默认 10，跨页面记忆）
   const [quickPickCount, setQuickPickCountState] = useState(_quickPickCount)
   // 过滤降级 Free：开启后"可升级"不含曾订阅后降为 Free 的账号
@@ -257,7 +260,7 @@ export function SubscriptionPage() {
   }, [])
 
   // 启动恢复：链接列表是会话内存态，重启即丢；把库中仍为 Free 且带 paymentLink 的账号
-  // 回填进列表（超 15 分钟直接标"过期"，可手动重生成）。已在列表中的账号不重复添加
+  // 回填进列表（超 24 小时直接标"过期"，可手动重生成——Stripe Checkout Session 默认 24h）。已在列表中的账号不重复添加
   useEffect(() => {
     setLinks((prev) => {
       const existing = new Set(prev.map((l) => l.accountId))
@@ -265,7 +268,7 @@ export function SubscriptionPage() {
       for (const acc of useAccountsStore.getState().accounts.values()) {
         const sub = acc.subscription
         if (!sub?.paymentLink || existing.has(acc.id) || !isPendingPayment(acc)) continue
-        const stale = sub.paymentLinkAt !== undefined && Date.now() - sub.paymentLinkAt > 15 * 60 * 1000
+        const stale = sub.paymentLinkAt !== undefined && Date.now() - sub.paymentLinkAt > 24 * 60 * 60 * 1000
         restored.push({
           accountId: acc.id,
           email: acc.email || acc.id,
@@ -832,7 +835,7 @@ export function SubscriptionPage() {
     setIsValidatingLinks(true)
     try {
       const targets = links.filter((l) => l.status === 'success' && l.url)
-      const STALE_AFTER_MS = 15 * 60 * 1000
+      const STALE_AFTER_MS = 24 * 60 * 60 * 1000
       const now = Date.now()
 
       // 先按时间标记 expired，剩下的并发用 HTTP 探测真实可达性
@@ -871,7 +874,7 @@ export function SubscriptionPage() {
         const result = checkResults[l.accountId]
         if (!result) return l
         if (result === 'expired') {
-          return { ...l, status: 'expired' as const, error: '链接已失效（HTTP 探测失败或超过 15 分钟）' }
+          return { ...l, status: 'expired' as const, error: '链接已失效（HTTP 探测失败或超过 24 小时）' }
         }
         return { ...l, validated: true }
       })
@@ -1795,7 +1798,7 @@ export function SubscriptionPage() {
                 size="sm"
                 onClick={handleValidateLinks}
                 disabled={isFetching || isValidatingLinks || links.filter(l => l.status === 'success').length === 0}
-                title={isEn ? 'Detect expired links (>15min old)' : '检测过期链接（生成超过 15 分钟）'}
+                title={isEn ? 'Detect expired links (>24h old)' : '检测过期链接（生成超过 24 小时）'}
               >
                 {isValidatingLinks ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
                 {isEn ? 'Validate' : '检测有效性'}
@@ -2146,6 +2149,16 @@ export function SubscriptionPage() {
                             >
                               <ExternalLink className="h-3.5 w-3.5" />
                             </button>
+                            {/* 应用内支付：窗口自动填账单地址，卡号与 Pay 人工 */}
+                            <button
+                              onClick={() =>
+                                setPayTarget({ url: link.url!, accountId: link.accountId, email: link.email })
+                              }
+                              className="p-1 rounded hover:bg-primary/10 text-primary"
+                              title={isEn ? 'Pay in app (auto-fill billing address)' : '应用内支付（自动填账单地址）'}
+                            >
+                              <CreditCard className="h-3.5 w-3.5" />
+                            </button>
                             <button
                               onClick={() => setQrLink(link)}
                               className="p-1 rounded hover:bg-muted"
@@ -2220,6 +2233,9 @@ export function SubscriptionPage() {
 
           {/* 扫码支付二维码对话框 */}
           <QrPayDialog link={qrLink} onClose={() => setQrLink(null)} isEn={isEn} />
+
+          {/* 应用内支付对话框 */}
+          <PayInAppDialog target={payTarget} onClose={() => setPayTarget(null)} isEn={isEn} />
         </>
       )}
     </div>

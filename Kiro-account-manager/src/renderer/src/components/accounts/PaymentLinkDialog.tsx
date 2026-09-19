@@ -6,6 +6,7 @@ import { useAccountsStore } from '@/store/accounts'
 import type { Account } from '@/types/account'
 import { cn } from '@/lib/utils'
 import { formatPaymentLinkText } from './_helpers'
+import { PayInAppDialog } from '../payment/PayInAppDialog'
 import {
   Wallet,
   X,
@@ -15,13 +16,15 @@ import {
   Trash2,
   AlertTriangle,
   Clock,
-  Link2
+  Link2,
+  CreditCard
 } from 'lucide-react'
 
 /**
  * 待付款支付链接弹窗 — 展示账号上落库的升级支付链接（subscription.paymentLink）。
  * 能力：二维码 / 三行复制（邮箱+说明+链接，与订阅页同格式）/ 无痕打开 / 手动编辑 / 清空。
- * 新鲜度按 paymentLinkAt 估算（超 15 分钟提示可能过期）；paymentLinkAt 保留作历史标记。
+ * 新鲜度按 paymentLinkAt 估算（超 24 小时提示可能过期——Stripe Checkout Session
+ * 默认 24h 有效，实测口径 2026-09-19 确认）；paymentLinkAt 保留作历史标记。
  */
 
 interface PaymentLinkDialogProps {
@@ -31,8 +34,8 @@ interface PaymentLinkDialogProps {
   isEn: boolean
 }
 
-// 与订阅页链接失效判定同口径：15 分钟
-const LINK_STALE_AFTER_MS = 15 * 60 * 1000
+// 与订阅页链接失效判定同口径：Stripe Checkout Session 默认 24 小时
+const LINK_STALE_AFTER_MS = 24 * 60 * 60 * 1000
 
 function validHttpUrl(input: string): boolean {
   try {
@@ -58,6 +61,7 @@ export function PaymentLinkDialog({
   const [dataUrl, setDataUrl] = useState<string | null>(null)
   const [qrFailed, setQrFailed] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [payInApp, setPayInApp] = useState(false)
 
   // 打开/切换账号时进入查看态；无链接时直接进入编辑态（手动补录）
   useEffect(() => {
@@ -170,8 +174,8 @@ export function PaymentLinkDialog({
             )}
             {stale
               ? isEn
-                ? `May have expired — generated ${minutesAgo} min ago (valid for ~15 min)`
-                : `可能已过期：生成于 ${minutesAgo} 分钟前（有效期约 15 分钟），建议重新获取`
+                ? `May have expired — generated ${minutesAgo} min ago (valid for ~24h)`
+                : `可能已过期：生成于 ${minutesAgo} 分钟前（有效期约 24 小时），建议重新获取`
               : isEn
                 ? `Generated ${minutesAgo} min ago`
                 : `生成于 ${minutesAgo} 分钟前`}
@@ -255,6 +259,16 @@ export function PaymentLinkDialog({
                 <ExternalLink className="h-3.5 w-3.5 mr-1" />
                 {isEn ? 'Open' : '打开'}
               </Button>
+              {/* 应用内支付：窗口自动填账单地址，卡号与 Pay 人工 */}
+              <Button
+                variant="outline"
+                size="sm"
+                title={isEn ? 'Pay in app window (auto-fill billing address)' : '应用内支付（自动填账单地址）'}
+                onClick={() => setPayInApp(true)}
+              >
+                <CreditCard className="h-3.5 w-3.5 mr-1" />
+                {isEn ? 'Pay in app' : '应用内支付'}
+              </Button>
               {/* 仅复制 URL（要发原始链接时用） */}
               <Button
                 variant="outline"
@@ -279,6 +293,13 @@ export function PaymentLinkDialog({
           </div>
         )}
       </div>
+      {payInApp && url && (
+        <PayInAppDialog
+          target={{ url, accountId: account.id, email: account.email }}
+          onClose={() => setPayInApp(false)}
+          isEn={isEn}
+        />
+      )}
     </div>,
     document.body
   )

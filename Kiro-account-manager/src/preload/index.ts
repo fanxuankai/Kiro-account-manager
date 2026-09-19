@@ -631,6 +631,84 @@ const api = {
     return ipcRenderer.invoke('open-subscription-window', url)
   },
 
+  // ============ 应用内支付（Stripe Checkout + 自动填账单地址） ============
+
+  // 省份列表（账单地址生成用）
+  paymentProvinces: (): Promise<string[]> => {
+    return ipcRenderer.invoke('payment-provinces')
+  },
+
+  // 生成一条随机中国账单地址（UI 预览用；邮编与市/区真实对应）
+  paymentGenerateAddress: (province?: string): Promise<{
+    name: string
+    zip: string
+    city: string
+    district: string
+    street: string
+    provinceZh: string
+    provinceEn: string
+  }> => {
+    return ipcRenderer.invoke('payment-generate-address', province)
+  },
+
+  // 打开应用内支付窗口（自动选国家/省、填账单地址；卡号与 Pay 留人工）
+  paymentOpen: (payload: {
+    url: string
+    accountId: string
+    email?: string
+    province?: string
+    address?: {
+      name: string
+      zip: string
+      city: string
+      district: string
+      street: string
+      provinceZh: string
+      provinceEn: string
+    }
+  }): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('payment-open', payload)
+  },
+
+  // 支付窗口状态推送（filling/filled/success/expired/closed/error）
+  onPaymentUpdate: (callback: (update: {
+    accountId: string
+    email?: string
+    phase: 'filling' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
+    detail?: string
+    address?: {
+      name: string
+      zip: string
+      city: string
+      district: string
+      street: string
+      provinceZh: string
+      provinceEn: string
+    }
+  }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, update: {
+      accountId: string
+      email?: string
+      phase: 'filling' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
+      detail?: string
+      address?: {
+        name: string
+        zip: string
+        city: string
+        district: string
+        street: string
+        provinceZh: string
+        provinceEn: string
+      }
+    }): void => {
+      callback(update)
+    }
+    ipcRenderer.on('payment-update', handler)
+    return () => {
+      ipcRenderer.removeListener('payment-update', handler)
+    }
+  },
+
   // 以账号身份在应用内私密浏览器打开 Kiro 官网后台（免登录）
   accountOpenPortal: (accountId: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('account-open-portal', accountId)

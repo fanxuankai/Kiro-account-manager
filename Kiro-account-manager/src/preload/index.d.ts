@@ -607,6 +607,56 @@ interface KiroApi {
   // 在新窗口打开订阅链接
   openSubscriptionWindow: (url: string) => Promise<{ success: boolean; error?: string }>
 
+  // ============ 应用内支付（Stripe Checkout + 自动填账单地址） ============
+
+  // 省份列表（账单地址生成用）
+  paymentProvinces: () => Promise<string[]>
+
+  // 生成一条随机中国账单地址（UI 预览用；邮编与市/区真实对应）
+  paymentGenerateAddress: (province?: string) => Promise<{
+    name: string
+    zip: string
+    city: string
+    district: string
+    street: string
+    provinceZh: string
+    provinceEn: string
+  }>
+
+  // 打开应用内支付窗口（自动选国家/省、填账单地址；卡号与 Pay 留人工）
+  paymentOpen: (payload: {
+    url: string
+    accountId: string
+    email?: string
+    province?: string
+    address?: {
+      name: string
+      zip: string
+      city: string
+      district: string
+      street: string
+      provinceZh: string
+      provinceEn: string
+    }
+  }) => Promise<{ success: boolean; error?: string }>
+
+  // 支付窗口状态推送（filling/filled/success/expired/closed/error）
+  onPaymentUpdate: (callback: (update: {
+    accountId: string
+    email?: string
+    phase: 'filling' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
+    detail?: string
+    address?: {
+      name: string
+      zip: string
+      city: string
+      district: string
+      street: string
+      provinceZh: string
+      provinceEn: string
+    }
+  }) => void) => () => void
+
   // 以账号身份在应用内私密浏览器打开 Kiro 官网后台（免登录）
   accountOpenPortal: (accountId: string) => Promise<{ success: boolean; error?: string }>
 

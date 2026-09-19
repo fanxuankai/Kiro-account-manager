@@ -44,6 +44,8 @@ import {
 } from './proxy'
 import { switchSubscriptionToFree, checkRenewalStatus } from './proxy/stripePortal'
 import { openAccountPortal } from './kiroPortal'
+import { openPaymentWindow } from './payment/paymentWindow'
+import { generateBillingAddress, listProvinces, isValidProvince } from './payment/addressGen'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
 import { resolveProxyUrl, shutdownProxyBridge } from './proxy/proxyBridge'
 import { probeExitIp } from './proxy/proxyTools'
@@ -4889,6 +4891,52 @@ app.whenReady().then(async () => {
       }
     }
   })
+
+  // IPC: 应用内支付 —— 省份列表 / 随机地址（UI 预览用）/ 打开支付窗口（自动填账单地址）
+  ipcMain.handle('payment-provinces', () => listProvinces())
+
+  ipcMain.handle('payment-generate-address', (_event, province?: string) => {
+    return generateBillingAddress(
+      province && isValidProvince(province) ? province : undefined
+    )
+  })
+
+  ipcMain.handle(
+    'payment-open',
+    async (
+      _event,
+      payload: {
+        url: string
+        accountId: string
+        email?: string
+        province?: string
+        address?: ReturnType<typeof generateBillingAddress>
+      }
+    ) => {
+      try {
+        if (!/^https:\/\//i.test(payload.url)) {
+          return { success: false, error: '仅支持 https 支付链接' }
+        }
+        await openPaymentWindow({
+          url: payload.url,
+          accountId: payload.accountId,
+          email: payload.email,
+          province: payload.province,
+          address: payload.address,
+          notify: (update) => {
+            const w = mainWindow
+            if (w && !w.isDestroyed()) w.webContents.send('payment-update', update)
+          }
+        })
+        return { success: true }
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to open payment window'
+        }
+      }
+    }
+  )
 
   // IPC: 以指定账号身份在应用内私密浏览器打开 Kiro 官网后台（注入凭证 cookie，免登录）
   ipcMain.handle('account-open-portal', async (_event, accountId: string) => {
