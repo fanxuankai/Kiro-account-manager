@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, ClipboardPaste, FolderOpen, Loader2 } from 'lucide-react'
+import { X, ClipboardPaste, Loader2 } from 'lucide-react'
 import { Button, Card, CardContent, CardHeader, CardTitle } from '../ui'
 import { useIdleAccountsStore } from '@/store/idleAccounts'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -17,12 +17,11 @@ interface IdleAddDialogProps {
 //  3. 普通行：邮箱,RefreshToken[,昵称[,登录方式]]（兼容 | 分隔）
 // 邮箱缺失的凭证会被跳过（离线无法从 token 反查邮箱）。
 export function IdleAddDialog({ isOpen, onClose }: IdleAddDialogProps): React.ReactNode {
-  const { groups, importAccounts } = useIdleAccountsStore()
+  const { importAccounts } = useIdleAccountsStore()
   const { t } = useTranslation()
   const isEn = t('common.unknown') === 'Unknown'
 
   const [pasteText, setPasteText] = useState('')
-  const [selectedGroupId, setSelectedGroupId] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -30,7 +29,6 @@ export function IdleAddDialog({ isOpen, onClose }: IdleAddDialogProps): React.Re
   useEffect(() => {
     if (isOpen) {
       setPasteText('')
-      setSelectedGroupId('')
       setError(null)
     }
   }, [isOpen])
@@ -145,10 +143,7 @@ export function IdleAddDialog({ isOpen, onClose }: IdleAddDialogProps): React.Re
     setError(null)
     try {
       const { items, invalidCount } = parsePastedCredentials()
-      const result = importAccounts(items.map(item => ({
-        ...item,
-        groupId: selectedGroupId || undefined
-      })))
+      const result = importAccounts(items)
       const skipped = result.errors.find(e => e.id === 'skipped')?.error
       const parts = [
         `${isEn ? 'Imported' : '导入成功'} ${result.success} ${isEn ? 'account(s)' : '个'}`,
@@ -189,24 +184,6 @@ export function IdleAddDialog({ isOpen, onClose }: IdleAddDialogProps): React.Re
             {isEn
               ? 'Idle accounts are never auto-refreshed. To restore keep-alive, move the account back to Account Manager.'
               : '闲置账号不会自动刷新 Token。需要保活时，请在列表中「移回账号管理」。'}
-          </div>
-
-          {/* 分组选择 */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium flex items-center gap-1.5">
-              <FolderOpen className="h-4 w-4 text-muted-foreground" />
-              {isEn ? 'Add to group' : '添加到分组'}
-            </label>
-            <select
-              value={selectedGroupId}
-              onChange={(e) => setSelectedGroupId(e.target.value)}
-              className="w-full h-10 px-3 py-2 text-sm rounded-xl border border-input bg-background/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-            >
-              <option value="">{isEn ? 'Ungrouped' : '未分组'}</option>
-              {Array.from(groups.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map(g => (
-                <option key={g.id} value={g.id}>{g.name}</option>
-              ))}
-            </select>
           </div>
 
           {/* 凭证粘贴 */}

@@ -179,7 +179,6 @@ export function LoginPagePool(): React.ReactNode {
             userId,
             nickname: email ? email.split('@')[0] : undefined,
             idp: 'Github',
-            groupId: undefined,
             credentials: {
               accessToken: result.data.accessToken,
               csrfToken: '',

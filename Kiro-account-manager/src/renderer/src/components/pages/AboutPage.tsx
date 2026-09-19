@@ -340,8 +340,8 @@ export function AboutPage() {
         <CardContent className="text-sm text-muted-foreground space-y-3">
           <p>
             {isEn 
-              ? 'Kiro Account Manager is a powerful multi-account management tool for Kiro IDE. It supports quick account switching, auto token refresh, group/tag management, and machine ID management.'
-              : 'Kiro 账户管理器是一个功能强大的 Kiro IDE 多账号管理工具。支持多账号快速切换、自动 Token 刷新、分组标签管理、机器码管理等功能，帮助你高效管理和使用多个 Kiro 账号。'}
+              ? 'Kiro Account Manager is a powerful multi-account management tool for Kiro IDE. It supports quick account switching, auto token refresh, tag management, and machine ID management.'
+              : 'Kiro 账户管理器是一个功能强大的 Kiro IDE 多账号管理工具。支持多账号快速切换、自动 Token 刷新、标签管理、机器码管理等功能，帮助你高效管理和使用多个 Kiro 账号。'}
           </p>
           <p>
             {isEn 
@@ -377,7 +377,7 @@ export function AboutPage() {
             </li>
             <li className="flex items-start gap-2">
               <span className="text-primary mt-0.5">✓</span>
-              <strong>{isEn ? 'Groups & Tags' : '分组与标签'}</strong>{isEn ? ': Batch set groups/tags' : '：多选账户批量设置分组/标签，支持多标签'}
+              <strong>{isEn ? 'Tags' : '标签管理'}</strong>{isEn ? ': Batch set tags with multi-tag support' : '：多选账户批量设置标签，支持多标签'}
             </li>
             <li className="flex items-start gap-2">
               <span className="text-primary mt-0.5">✓</span>

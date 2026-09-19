@@ -43,6 +43,8 @@ interface PortableConfig {
     statusCheckInterval?: number
     privacyMode?: boolean
     usagePrecision?: boolean
+    deprecatedUsageThreshold?: number
+    deprecatedUsagePercentThreshold?: number
     autoSwitchEnabled?: boolean
     autoSwitchThreshold?: number
     autoSwitchInterval?: number
@@ -141,6 +143,8 @@ export function ConfigSyncPage(): React.ReactNode {
         statusCheckInterval: store.statusCheckInterval,
         privacyMode: store.privacyMode,
         usagePrecision: store.usagePrecision,
+        deprecatedUsageThreshold: store.deprecatedUsageThreshold,
+        deprecatedUsagePercentThreshold: store.deprecatedUsagePercentThreshold,
         autoSwitchEnabled: store.autoSwitchEnabled,
         autoSwitchThreshold: store.autoSwitchThreshold,
         autoSwitchInterval: store.autoSwitchInterval
@@ -267,6 +271,12 @@ export function ConfigSyncPage(): React.ReactNode {
         if (s.statusCheckInterval != null) store.setStatusCheckInterval(s.statusCheckInterval)
         if (s.privacyMode != null) store.setPrivacyMode(s.privacyMode)
         if (s.usagePrecision != null) store.setUsagePrecision(s.usagePrecision)
+        if (s.deprecatedUsageThreshold != null || s.deprecatedUsagePercentThreshold != null) {
+          store.setLifecycleThresholds(
+            s.deprecatedUsageThreshold ?? store.deprecatedUsageThreshold,
+            s.deprecatedUsagePercentThreshold ?? store.deprecatedUsagePercentThreshold
+          )
+        }
         if (s.autoSwitchEnabled != null) store.setAutoSwitch(s.autoSwitchEnabled, s.autoSwitchThreshold, s.autoSwitchInterval)
         counts['App 设置'] = 1
       }

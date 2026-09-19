@@ -22,6 +22,11 @@ import type {
   ProxyProtocol
 } from '../types/proxy'
 import { DEFAULT_PROXY_POOL_CONFIG } from '../types/proxy'
+import {
+  classifyAccountLifecycle,
+  DEFAULT_ACCOUNT_LIFECYCLE_THRESHOLDS,
+  type AccountLifecycle
+} from '@/lib/accountLifecycle'
 
 // ============================================
 // 账号管理 Store
@@ -76,7 +81,9 @@ let _filterCache: {
   accounts: unknown
   filter: unknown
   sort: unknown
-  activeGroupTab: unknown
+  activeLifecycleTab: unknown
+  deprecatedUsageThreshold: unknown
+  deprecatedUsagePercentThreshold: unknown
   output: Account[]
 } | null = null
 
@@ -134,8 +141,8 @@ interface AccountsState {
 
   // 筛选和排序
   filter: AccountFilter
-  /** 当前激活的分组 Tab：'all' | 'ungrouped' | <groupId>，互斥 */
-  activeGroupTab: string
+  /** 当前激活的生命周期 Tab，四个 Tab 互斥 */
+  activeLifecycleTab: AccountLifecycle
   sort: AccountSort
 
   // 选中的账号（用于批量操作）
@@ -172,6 +179,10 @@ interface AccountsState {
 
   // 使用量显示精度
   usagePrecision: boolean // true: 显示精确小数, false: 显示整数
+
+  // 账号生命周期阈值（percent 内部使用 0–1）
+  deprecatedUsageThreshold: number
+  deprecatedUsagePercentThreshold: number
 
   // 代理设置
   proxyEnabled: boolean
@@ -241,11 +252,6 @@ interface AccountsActions {
   setActiveAccount: (id: string | null) => void
   getActiveAccount: () => Account | null
 
-  // 分组操作
-  addGroup: (group: Omit<AccountGroup, 'id' | 'createdAt' | 'order'>) => string
-  updateGroup: (id: string, updates: Partial<AccountGroup>) => void
-  removeGroup: (id: string) => void
-  moveAccountsToGroup: (accountIds: string[], groupId: string | undefined) => void
 
   // 标签操作
   addTag: (tag: Omit<AccountTag, 'id'>) => string
@@ -257,7 +263,7 @@ interface AccountsActions {
   // 筛选和排序
   setFilter: (filter: AccountFilter) => void
   clearFilter: () => void
-  setActiveGroupTab: (tab: string) => void
+  setActiveLifecycleTab: (tab: AccountLifecycle) => void
   setSort: (sort: AccountSort) => void
   getFilteredAccounts: () => Account[]
 
@@ -308,6 +314,9 @@ interface AccountsActions {
 
   // 使用量精度
   setUsagePrecision: (enabled: boolean) => void
+
+  // 账号生命周期阈值
+  setLifecycleThresholds: (usageThreshold: number, percentThreshold: number) => void
 
   // 代理设置
   setProxy: (enabled: boolean, url?: string) => Promise<void>
@@ -431,7 +440,7 @@ type AccountsStore = AccountsState & AccountsActions
 const defaultSort: AccountSort = { field: 'lastUsedAt', order: 'desc' }
 
 // 默认筛选
-// 筛选/分组变化后把选中集裁剪到可见结果：防止"先选后滤"时不可见账号仍被批量操作。
+// 筛选变化后把选中集裁剪到可见结果：防止"先选后滤"时不可见账号仍被批量操作。
 // 返回 null 表示无需变更。
 function pruneSelectionToVisible(selectedIds: Set<string>, visible: Account[]): Set<string> | null {
   if (selectedIds.size === 0) return null
@@ -442,12 +451,29 @@ function pruneSelectionToVisible(selectedIds: Set<string>, visible: Account[]): 
 
 const defaultFilter: AccountFilter = {}
 
-// 从 localStorage 恢复分组 Tab（遵循 Electron renderer 环境总是可用）
-const loadActiveGroupTab = (): string => {
+const normalizeUsageThreshold = (value: unknown): number => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed)
+    ? Math.max(0, parsed)
+    : DEFAULT_ACCOUNT_LIFECYCLE_THRESHOLDS.deprecatedUsageThreshold
+}
+
+const normalizeUsagePercentThreshold = (value: unknown): number => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed)
+    ? Math.min(1, Math.max(0, parsed))
+    : DEFAULT_ACCOUNT_LIFECYCLE_THRESHOLDS.deprecatedUsagePercentThreshold
+}
+
+// 从 localStorage 恢复生命周期 Tab（遵循 Electron renderer 环境总是可用）
+const loadActiveLifecycleTab = (): AccountLifecycle => {
   try {
-    return localStorage.getItem('accounts_activeGroupTab') || 'all'
+    const value = localStorage.getItem('accounts_activeLifecycleTab')
+    return value === 'unused' || value === 'pendingPayment' || value === 'subscribed' || value === 'deprecated'
+      ? value
+      : 'unused'
   } catch {
-    return 'all'
+    return 'unused'
   }
 }
 
@@ -459,7 +485,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   tags: new Map(),
   activeAccountId: null,
   filter: defaultFilter,
-  activeGroupTab: loadActiveGroupTab(),
+  activeLifecycleTab: loadActiveLifecycleTab(),
   sort: defaultSort,
   selectedIds: new Set(),
   isLoading: false,
@@ -478,6 +504,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   proactiveRenewalLeadMinutes: 15,
   privacyMode: false,
   usagePrecision: false,
+  deprecatedUsageThreshold: DEFAULT_ACCOUNT_LIFECYCLE_THRESHOLDS.deprecatedUsageThreshold,
+  deprecatedUsagePercentThreshold: DEFAULT_ACCOUNT_LIFECYCLE_THRESHOLDS.deprecatedUsagePercentThreshold,
   proxyEnabled: false,
   proxyUrl: '',
   autoSwitchEnabled: false,
@@ -748,73 +776,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     return activeAccountId ? accounts.get(activeAccountId) ?? null : null
   },
 
-  // ==================== 分组操作 ====================
-
-  addGroup: (groupData) => {
-    const id = uuidv4()
-    const { groups } = get()
-
-    const group: AccountGroup = {
-      ...groupData,
-      id,
-      order: groups.size,
-      createdAt: Date.now()
-    }
-
-    set((state) => {
-      const groups = new Map(state.groups)
-      groups.set(id, group)
-      return { groups }
-    })
-
-    get().saveToStorage()
-    return id
-  },
-
-  updateGroup: (id, updates) => {
-    set((state) => {
-      const groups = new Map(state.groups)
-      const group = groups.get(id)
-      if (group) {
-        groups.set(id, { ...group, ...updates })
-      }
-      return { groups }
-    })
-    get().saveToStorage()
-  },
-
-  removeGroup: (id) => {
-    set((state) => {
-      const groups = new Map(state.groups)
-      groups.delete(id)
-
-      // 移除账号的分组引用
-      const accounts = new Map(state.accounts)
-      for (const [accountId, account] of accounts) {
-        if (account.groupId === id) {
-          accounts.set(accountId, { ...account, groupId: undefined })
-        }
-      }
-
-      return { groups, accounts }
-    })
-    get().saveToStorage()
-  },
-
-  moveAccountsToGroup: (accountIds, groupId) => {
-    set((state) => {
-      const accounts = new Map(state.accounts)
-      for (const id of accountIds) {
-        const account = accounts.get(id)
-        if (account) {
-          accounts.set(id, { ...account, groupId })
-        }
-      }
-      return { accounts }
-    })
-    get().saveToStorage()
-  },
-
   // ==================== 标签操作 ====================
 
   addTag: (tagData) => {
@@ -908,9 +869,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     set({ filter: defaultFilter })
   },
 
-  setActiveGroupTab: (tab) => {
-    try { localStorage.setItem('accounts_activeGroupTab', tab) } catch { /* no-op */ }
-    set({ activeGroupTab: tab })
+  setActiveLifecycleTab: (tab) => {
+    try { localStorage.setItem('accounts_activeLifecycleTab', tab) } catch { /* no-op */ }
+    set({ activeLifecycleTab: tab })
     const pruned = pruneSelectionToVisible(get().selectedIds, get().getFilteredAccounts())
     if (pruned) set({ selectedIds: pruned })
   },
@@ -920,7 +881,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   },
 
   getFilteredAccounts: () => {
-    const { accounts, filter, sort, activeGroupTab } = get()
+    const { accounts, filter, sort, activeLifecycleTab, deprecatedUsageThreshold, deprecatedUsagePercentThreshold } = get()
 
     // 引用缓存命中：返回上次结果（数组同引用，便于消费方 useMemo 复用）
     if (
@@ -928,19 +889,20 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       _filterCache.accounts === accounts &&
       _filterCache.filter === filter &&
       _filterCache.sort === sort &&
-      _filterCache.activeGroupTab === activeGroupTab
+      _filterCache.activeLifecycleTab === activeLifecycleTab &&
+      _filterCache.deprecatedUsageThreshold === deprecatedUsageThreshold &&
+      _filterCache.deprecatedUsagePercentThreshold === deprecatedUsagePercentThreshold
     ) {
       return _filterCache.output
     }
 
     let result = Array.from(accounts.values())
 
-    // 优先按分组 Tab 互斥过滤（与 filter.groupIds 独立）
-    if (activeGroupTab === 'ungrouped') {
-      result = result.filter((a) => !a.groupId)
-    } else if (activeGroupTab !== 'all') {
-      result = result.filter((a) => a.groupId === activeGroupTab)
+    const lifecycleThresholds = {
+      deprecatedUsageThreshold,
+      deprecatedUsagePercentThreshold
     }
+    result = result.filter((a) => classifyAccountLifecycle(a, lifecycleThresholds) === activeLifecycleTab)
 
     // 应用筛选
     if (filter.search) {
@@ -962,10 +924,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     if (filter.idps?.length) {
       result = result.filter((a) => filter.idps!.includes(a.idp))
-    }
-
-    if (filter.groupIds?.length) {
-      result = result.filter((a) => a.groupId && filter.groupIds!.includes(a.groupId))
     }
 
     if (filter.tagIds?.length) {
@@ -1017,20 +975,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       result = result.filter((a) => isBannedAccountError(a.lastError))
     }
 
-    // 待付款筛选：发过升级支付链接且账号仍为 Free（升级成功即已付款，自动不再命中；
-    // wasPaid 曾付费后降级、已使用积分 > 0 的使用过账号都不算——按已付款处理，不再催付；
-    // Free 判定与组件层 isFreeTierAccount / isPendingPayment 同口径）
-    if (filter.pendingPaymentOnly) {
-      result = result.filter((a) => {
-        if (!a.subscription?.paymentLinkAt) return false
-        if (a.subscription.wasPaid) return false
-        if ((a.usage?.current ?? 0) > 0) return false
-        const type = (a.subscription.type || '').toUpperCase()
-        const title = (a.subscription.title || '').toUpperCase()
-        return type.includes('FREE') || title.includes('FREE') || (!type && !title)
-      })
-    }
-
     // 应用排序
     result.sort((a, b) => {
       let cmp = 0
@@ -1066,7 +1010,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     })
 
     // 写入缓存：下次相同输入直接命中
-    _filterCache = { accounts, filter, sort, activeGroupTab, output: result }
+    _filterCache = { accounts, filter, sort, activeLifecycleTab, deprecatedUsageThreshold, deprecatedUsagePercentThreshold, output: result }
     return result
   },
 
@@ -1188,7 +1132,6 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             percentUsed: 0,
             lastUpdated: now
           },
-          groupId: item.groupId,
           tags: item.tags ?? [],
           status: 'unknown',
           lastUsedAt: now
@@ -1258,7 +1201,10 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         continue
       }
       try {
-        accountsToAdd.push({ ...accountData, isActive: false })
+        // 旧版导出中的 groupId 仅作兼容读取，不再写入新导入账号。
+        const { groupId: _legacyGroupId, ...accountWithoutGroup } = accountData
+        void _legacyGroupId
+        accountsToAdd.push({ ...accountWithoutGroup, isActive: false })
         result.success++
       } catch (error) {
         result.failed++
@@ -1269,7 +1215,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       }
     }
 
-    // 一次 set 应用所有分组、标签、账号 — 单次 re-render
+    // 一次 set 应用兼容分组数据、标签和账号 — 单次 re-render
     if (data.groups.length > 0 || data.tags.length > 0 || accountsToAdd.length > 0) {
       set((state) => {
         const groups = data.groups.length > 0 ? new Map(state.groups) : state.groups
@@ -1701,6 +1647,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           statusCheckInterval: data.statusCheckInterval ?? 60,
           privacyMode: data.privacyMode ?? false,
           usagePrecision: data.usagePrecision ?? false,
+          deprecatedUsageThreshold: normalizeUsageThreshold(data.deprecatedUsageThreshold),
+          deprecatedUsagePercentThreshold: normalizeUsagePercentThreshold(data.deprecatedUsagePercentThreshold),
           proxyEnabled: data.proxyEnabled ?? false,
           proxyUrl: data.proxyUrl ?? '',
           autoSwitchEnabled: data.autoSwitchEnabled ?? false,
@@ -1813,6 +1761,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       statusCheckInterval,
       privacyMode,
       usagePrecision,
+      deprecatedUsageThreshold,
+      deprecatedUsagePercentThreshold,
       proxyEnabled,
       proxyUrl,
       autoSwitchEnabled,
@@ -1848,6 +1798,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           statusCheckInterval,
           privacyMode,
           usagePrecision,
+          deprecatedUsageThreshold,
+          deprecatedUsagePercentThreshold,
           proxyEnabled,
           proxyUrl,
           autoSwitchEnabled,
@@ -1956,6 +1908,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   setUsagePrecision: (enabled) => {
     set({ usagePrecision: enabled })
+    get().saveToStorage()
+  },
+
+  setLifecycleThresholds: (usageThreshold, percentThreshold) => {
+    set({
+      deprecatedUsageThreshold: normalizeUsageThreshold(usageThreshold),
+      deprecatedUsagePercentThreshold: normalizeUsagePercentThreshold(percentThreshold)
+    })
+    const pruned = pruneSelectionToVisible(get().selectedIds, get().getFilteredAccounts())
+    if (pruned) set({ selectedIds: pruned })
     get().saveToStorage()
   },
 

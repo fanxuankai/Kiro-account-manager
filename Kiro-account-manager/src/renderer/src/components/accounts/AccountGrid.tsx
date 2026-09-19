@@ -51,7 +51,6 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
   const {
     getFilteredAccounts,
     tags,
-    groups,
     selectedIds,
     toggleSelection,
     checkAccountStatus
@@ -79,7 +78,7 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
 
   const accounts = getFilteredAccounts()
 
-  // 将账号按行分组（包含添加按钮作为虚拟项）
+  // 将账号按行排列（包含添加按钮作为虚拟项）
   const rows = useMemo(() => {
     const result: (Account | 'add')[][] = []
     const allItems: (Account | 'add')[] = [...accounts, 'add']
@@ -145,7 +144,6 @@ export function AccountGrid({ onAddAccount, onEditAccount }: AccountGridProps): 
                       <AccountCard
                         account={item}
                         tags={tags}
-                        groups={groups}
                         isSelected={selectedIds.has(item.id)}
                         onSelect={() => toggleSelection(item.id)}
                         onEdit={() => onEditAccount(item)}

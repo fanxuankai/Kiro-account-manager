@@ -45,7 +45,6 @@ let _filterCache: {
   accounts: unknown
   filter: unknown
   sort: unknown
-  activeGroupTab: unknown
   output: Account[]
 } | null = null
 
@@ -61,8 +60,6 @@ export interface IdleAccountsState {
   tags: Map<string, AccountTag>
 
   filter: AccountFilter
-  /** 当前激活的分组 Tab：'all' | 'ungrouped' | <groupId>，互斥 */
-  activeGroupTab: string
   sort: AccountSort
   selectedIds: Set<string>
 
@@ -82,12 +79,6 @@ export interface IdleAccountsActions {
   /** 接收从另一库移动过来的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重） */
   receiveAccounts: (accounts: Account[]) => BatchOperationResult
 
-  // 分组操作
-  addGroup: (group: Omit<AccountGroup, 'id' | 'createdAt' | 'order'>) => string
-  updateGroup: (id: string, updates: Partial<AccountGroup>) => void
-  removeGroup: (id: string) => void
-  moveAccountsToGroup: (accountIds: string[], groupId: string | undefined) => void
-
   // 标签操作
   addTag: (tag: Omit<AccountTag, 'id'>) => string
   updateTag: (id: string, updates: Partial<AccountTag>) => void
@@ -98,7 +89,6 @@ export interface IdleAccountsActions {
   // 筛选和排序
   setFilter: (filter: AccountFilter) => void
   clearFilter: () => void
-  setActiveGroupTab: (tab: string) => void
   setSort: (sort: AccountSort) => void
   getFilteredAccounts: () => Account[]
 
@@ -137,7 +127,7 @@ type IdleAccountsStore = IdleAccountsState & IdleAccountsActions
 // 闲置库默认按入库时间倒序（最近移入/导入的排前面）
 const defaultSort: AccountSort = { field: 'createdAt', order: 'desc' }
 
-// 筛选/分组变化后把选中集裁剪到可见结果（同主 store 机制）
+// 筛选变化后把选中集裁剪到可见结果
 function pruneSelectionToVisible(selectedIds: Set<string>, visible: Account[]): Set<string> | null {
   if (selectedIds.size === 0) return null
   const visibleIds = new Set(visible.map((a) => a.id))
@@ -146,14 +136,6 @@ function pruneSelectionToVisible(selectedIds: Set<string>, visible: Account[]): 
 }
 
 const defaultFilter: AccountFilter = {}
-
-const loadActiveGroupTab = (): string => {
-  try {
-    return localStorage.getItem('idle_activeGroupTab') || 'all'
-  } catch {
-    return 'all'
-  }
-}
 
 /** 防重复加载标记：App 启动加载一次后不再重复覆盖内存态 */
 let idleLoadedOnce = false
@@ -164,7 +146,6 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
   groups: new Map(),
   tags: new Map(),
   filter: defaultFilter,
-  activeGroupTab: loadActiveGroupTab(),
   sort: defaultSort,
   selectedIds: new Set(),
   isLoading: false,
@@ -291,73 +272,6 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
     return result
   },
 
-  // ==================== 分组操作 ====================
-
-  addGroup: (groupData) => {
-    const id = uuidv4()
-    const { groups } = get()
-
-    const group: AccountGroup = {
-      ...groupData,
-      id,
-      order: groups.size,
-      createdAt: Date.now()
-    }
-
-    set((state) => {
-      const groups = new Map(state.groups)
-      groups.set(id, group)
-      return { groups }
-    })
-
-    get().saveToStorage()
-    return id
-  },
-
-  updateGroup: (id, updates) => {
-    set((state) => {
-      const groups = new Map(state.groups)
-      const group = groups.get(id)
-      if (group) {
-        groups.set(id, { ...group, ...updates })
-      }
-      return { groups }
-    })
-    get().saveToStorage()
-  },
-
-  removeGroup: (id) => {
-    set((state) => {
-      const groups = new Map(state.groups)
-      groups.delete(id)
-
-      // 移除账号的分组引用
-      const accounts = new Map(state.accounts)
-      for (const [accountId, account] of accounts) {
-        if (account.groupId === id) {
-          accounts.set(accountId, { ...account, groupId: undefined })
-        }
-      }
-
-      return { groups, accounts }
-    })
-    get().saveToStorage()
-  },
-
-  moveAccountsToGroup: (accountIds, groupId) => {
-    set((state) => {
-      const accounts = new Map(state.accounts)
-      for (const id of accountIds) {
-        const account = accounts.get(id)
-        if (account) {
-          accounts.set(id, { ...account, groupId })
-        }
-      }
-      return { accounts }
-    })
-    get().saveToStorage()
-  },
-
   // ==================== 标签操作 ====================
 
   addTag: (tagData) => {
@@ -451,38 +365,24 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
     set({ filter: defaultFilter })
   },
 
-  setActiveGroupTab: (tab) => {
-    try { localStorage.setItem('idle_activeGroupTab', tab) } catch { /* no-op */ }
-    set({ activeGroupTab: tab })
-    const pruned = pruneSelectionToVisible(get().selectedIds, get().getFilteredAccounts())
-    if (pruned) set({ selectedIds: pruned })
-  },
 
   setSort: (sort) => {
     set({ sort })
   },
 
   getFilteredAccounts: () => {
-    const { accounts, filter, sort, activeGroupTab } = get()
+    const { accounts, filter, sort } = get()
 
     if (
       _filterCache &&
       _filterCache.accounts === accounts &&
       _filterCache.filter === filter &&
-      _filterCache.sort === sort &&
-      _filterCache.activeGroupTab === activeGroupTab
+      _filterCache.sort === sort
     ) {
       return _filterCache.output
     }
 
     let result = Array.from(accounts.values())
-
-    // 优先按分组 Tab 互斥过滤（与 filter.groupIds 独立）
-    if (activeGroupTab === 'ungrouped') {
-      result = result.filter((a) => !a.groupId)
-    } else if (activeGroupTab !== 'all') {
-      result = result.filter((a) => a.groupId === activeGroupTab)
-    }
 
     // 应用筛选
     if (filter.search) {
@@ -504,10 +404,6 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
 
     if (filter.idps?.length) {
       result = result.filter((a) => filter.idps!.includes(a.idp))
-    }
-
-    if (filter.groupIds?.length) {
-      result = result.filter((a) => a.groupId && filter.groupIds!.includes(a.groupId))
     }
 
     if (filter.tagIds?.length) {
@@ -559,19 +455,6 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
       result = result.filter((a) => isBannedAccountError(a.lastError))
     }
 
-    // 待付款筛选：发过升级支付链接且账号仍为 Free（wasPaid 曾付费后降级、
-    // 已使用积分 > 0 的使用过账号都不算——按已付款处理，与主库同口径）
-    if (filter.pendingPaymentOnly) {
-      result = result.filter((a) => {
-        if (!a.subscription?.paymentLinkAt) return false
-        if (a.subscription.wasPaid) return false
-        if ((a.usage?.current ?? 0) > 0) return false
-        const type = (a.subscription.type || '').toUpperCase()
-        const title = (a.subscription.title || '').toUpperCase()
-        return type.includes('FREE') || title.includes('FREE') || (!type && !title)
-      })
-    }
-
     // 应用排序
     result.sort((a, b) => {
       let cmp = 0
@@ -606,7 +489,7 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
       return sort.order === 'desc' ? -cmp : cmp
     })
 
-    _filterCache = { accounts, filter, sort, activeGroupTab, output: result }
+    _filterCache = { accounts, filter, sort, output: result }
     return result
   },
 
@@ -726,7 +609,6 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
             percentUsed: 0,
             lastUpdated: now
           },
-          groupId: item.groupId,
           tags: item.tags ?? [],
           status: 'unknown',
           lastUsedAt: now
@@ -787,7 +669,10 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
         skipped++
         continue
       }
-      accountsToAdd.push({ ...accountData, isActive: false })
+      // 旧版导出中的 groupId 仅作兼容读取，不再写入新导入账号。
+      const { groupId: _legacyGroupId, ...accountWithoutGroup } = accountData
+      void _legacyGroupId
+      accountsToAdd.push({ ...accountWithoutGroup, isActive: false })
       result.success++
     }
 

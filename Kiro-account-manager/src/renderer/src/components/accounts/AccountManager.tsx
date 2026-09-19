@@ -7,7 +7,6 @@ import { AccountGrid } from './AccountGrid'
 import { AccountList } from './AccountList'
 import { AddAccountDialog } from './AddAccountDialog'
 import { EditAccountDialog } from './EditAccountDialog'
-import { GroupManageDialog } from './GroupManageDialog'
 import { TagManageDialog } from './TagManageDialog'
 import { ExportDialog } from './ExportDialog'
 import { ImportDialog, type ImportResult } from './ImportDialog'
@@ -28,15 +27,12 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     importAccounts,
     selectedIds,
     deselectAll,
-    activeGroupTab,
-    groups
   } = useAccountsStore()
 
   const [showAddDialog, setShowAddDialog] = useState(false)
   // 快捷 GitHub 无痕登录：打开添加对话框后自动发起（关闭时复位）
   const [addDialogAutoGithub, setAddDialogAutoGithub] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
-  const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
@@ -54,7 +50,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog || showImportDialog) return
+      if (showAddDialog || editingAccount || showTagDialog || showExportDialog || showImportDialog) return
       if (selectedIds.size > 0) {
         e.preventDefault()
         deselectAll()
@@ -65,7 +61,6 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   }, [
     showAddDialog,
     editingAccount,
-    showGroupDialog,
     showTagDialog,
     showExportDialog,
     showImportDialog,
@@ -96,9 +91,6 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
 
   // 执行导入弹窗解析结果的入库
   const handleParsedImport = (parsed: ParsedImport): ImportResult => {
-    // 导入归入"当前打开的分组"（activeGroupTab 为真实分组时），否则未分组
-    const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
-    const groupName = currentGroupId ? groups.get(currentGroupId)?.name ?? '未分组' : '未分组'
     try {
       // invalid 在 ImportDialog 内已被拦截，这里兜底返回（同时满足类型收窄）
       if (parsed.kind === 'invalid') {
@@ -112,16 +104,11 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       }
       const result = importAccounts(parsed.items)
       const label = parsed.format === 'kami' ? '卡密导入完成' : parsed.format === 'oidc' ? 'OIDC 凭证导入完成' : '导入完成'
-      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）` }
+      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个` }
     } catch (e) {
       console.error('Import error:', e)
       return { ok: false, message: '解析导入内容失败' }
     }
-  }
-
-  // 管理分组
-  const handleManageGroups = (): void => {
-    setShowGroupDialog(true)
   }
 
   // 管理标签
@@ -223,7 +210,6 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
           onArchive={handleArchive}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          onManageGroups={handleManageGroups}
           onManageTags={handleManageTags}
           isFilterExpanded={isFilterExpanded}
           onToggleFilter={() => setIsFilterExpanded(!isFilterExpanded)}
@@ -263,12 +249,6 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
         open={!!editingAccount}
         onOpenChange={(open) => !open && setEditingAccount(null)}
         account={editingAccount}
-      />
-
-      {/* 分组管理对话框 */}
-      <GroupManageDialog
-        isOpen={showGroupDialog}
-        onClose={() => setShowGroupDialog(false)}
       />
 
       {/* 标签管理对话框 */}

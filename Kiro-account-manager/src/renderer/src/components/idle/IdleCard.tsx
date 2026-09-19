@@ -3,7 +3,7 @@ import { Card, CardContent, Badge, Button } from '../ui'
 import { useIdleAccountsStore } from '@/store/idleAccounts'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import type { Account, AccountTag, AccountGroup } from '@/types/account'
+import type { Account, AccountTag } from '@/types/account'
 import {
   toRgba,
   generateGlowStyle,
@@ -22,7 +22,6 @@ import {
   Copy,
   Clock,
   Info,
-  FolderOpen,
   Calendar,
   AlertCircle,
   KeyRound,
@@ -34,7 +33,6 @@ import { cn } from '@/lib/utils'
 interface IdleCardProps {
   account: Account
   tags: Map<string, AccountTag>
-  groups: Map<string, AccountGroup>
   isSelected: boolean
   onSelect: () => void
   onEdit: () => void
@@ -48,7 +46,6 @@ interface IdleCardProps {
 export const IdleCard = memo(function IdleCard({
   account,
   tags,
-  groups,
   isSelected,
   onSelect,
   onEdit,
@@ -96,8 +93,6 @@ export const IdleCard = memo(function IdleCard({
     .map((id) => tags.get(id))
     .filter((t): t is AccountTag => t !== undefined)
 
-  // 分组引用在闲置库中不存在时显示为未分组
-  const accountGroup = account.groupId ? groups.get(account.groupId) : undefined
 
   // 生成光环样式
   const glowStyle = useMemo(() => {
@@ -206,14 +201,6 @@ export const IdleCard = memo(function IdleCard({
               </div>
               <div className="flex items-center gap-2 mt-1">
                   {account.nickname && <span className="text-xs text-muted-foreground truncate">{maskNickname(account.nickname)}</span>}
-                  {accountGroup && (
-                    <span
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground flex items-center gap-1"
-                      style={{ color: accountGroup.color, backgroundColor: accountGroup.color + '15' }}
-                    >
-                      <FolderOpen className="w-3 h-3" /> {accountGroup.name}
-                    </span>
-                  )}
               </div>
            </div>
         </div>

@@ -40,10 +40,9 @@ function parseCSVLine(line: string): string[] {
  * 解析导入文件内容。
  * @param content        文件文本内容
  * @param format         文件格式（json/csv/txt，由文件对话框识别）
- * @param currentGroupId 当前打开的分组 id（导入账号归入该分组；undefined 表示未分组）
  * JSON 解析失败会抛出异常，由调用方统一提示。
  */
-export function parseImportContent(content: string, format: string, currentGroupId?: string): ParsedImport {
+export function parseImportContent(content: string, format: string): ParsedImport {
   if (format === 'json') {
     const data = JSON.parse(content)
     // OIDC 凭证（数组=批量导入，单对象=单个导入，与「添加账号」入口同口径）：[{email, refreshToken, provider, clientId, clientSecret}]
@@ -96,7 +95,6 @@ export function parseImportContent(content: string, format: string, currentGroup
         clientId: cols[4] || '',
         clientSecret: cols[5] || '',
         region: cols[6] || 'us-east-1',
-        groupId: currentGroupId
       }
     }).filter(item => item.email && item.refreshToken)
 
@@ -131,8 +129,7 @@ export function parseImportContent(content: string, format: string, currentGroup
           refreshToken: parts[2]?.trim() || '',
           clientId,
           clientSecret,
-          idp,
-          groupId: currentGroupId
+          idp
         }
       }).filter(item => item.email && item.refreshToken)
 
@@ -150,7 +147,6 @@ export function parseImportContent(content: string, format: string, currentGroup
         refreshToken: parts[1]?.trim() || '',
         nickname: parts[2]?.trim() || undefined,
         idp: parts[3]?.trim() || 'Google',
-        groupId: currentGroupId
       }
     }).filter(item => item.email && item.refreshToken)
 

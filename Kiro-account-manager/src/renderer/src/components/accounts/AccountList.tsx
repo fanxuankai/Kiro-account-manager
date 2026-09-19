@@ -25,7 +25,6 @@ export function AccountList({ onAddAccount, onEditAccount }: AccountListProps): 
   const {
     getFilteredAccounts,
     tags,
-    groups,
     selectedIds,
     checkAccountStatus
   } = useAccountsStore()
@@ -91,7 +90,6 @@ export function AccountList({ onAddAccount, onEditAccount }: AccountListProps): 
               <AccountListRow
                 account={account}
                 tags={tags}
-                groups={groups}
                 isSelected={selectedIds.has(account.id)}
                 onEdit={() => onEditAccount(account)}
                 onShowDetail={() => handleShowDetail(account)}

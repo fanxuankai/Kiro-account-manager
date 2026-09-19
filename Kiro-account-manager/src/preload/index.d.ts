@@ -34,6 +34,8 @@ interface AccountData {
   statusCheckInterval: number
   privacyMode?: boolean
   usagePrecision?: boolean
+  deprecatedUsageThreshold?: number
+  deprecatedUsagePercentThreshold?: number
   proxyEnabled?: boolean
   proxyUrl?: string
   autoSwitchEnabled?: boolean

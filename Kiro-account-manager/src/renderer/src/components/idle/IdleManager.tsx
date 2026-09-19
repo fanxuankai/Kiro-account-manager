@@ -7,7 +7,7 @@ import { IdleGrid } from './IdleGrid'
 import { IdleList } from './IdleList'
 import { IdleAddDialog } from './IdleAddDialog'
 import { IdleEditDialog } from './IdleEditDialog'
-import { GroupManageDialog, TagManageDialog, ExportDialog, ImportDialog, type ImportResult } from '../accounts'
+import { TagManageDialog, ExportDialog, ImportDialog, type ImportResult } from '../accounts'
 import { type ParsedImport } from '@/lib/importParse'
 import type { Account } from '@/types/account'
 import { Loader2, Warehouse } from 'lucide-react'
@@ -21,8 +21,6 @@ export function IdleManager(): React.ReactNode {
     selectedIds,
     deselectAll,
     getSelectedAccounts,
-    activeGroupTab,
-    groups,
     importFromExportData,
     importAccounts,
     removeAccounts
@@ -30,7 +28,6 @@ export function IdleManager(): React.ReactNode {
 
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
-  const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [showImportDialog, setShowImportDialog] = useState(false)
@@ -48,7 +45,7 @@ export function IdleManager(): React.ReactNode {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog || showImportDialog) return
+      if (showAddDialog || editingAccount || showTagDialog || showExportDialog || showImportDialog) return
       if (selectedIds.size > 0) {
         e.preventDefault()
         deselectAll()
@@ -59,7 +56,6 @@ export function IdleManager(): React.ReactNode {
   }, [
     showAddDialog,
     editingAccount,
-    showGroupDialog,
     showTagDialog,
     showExportDialog,
     showImportDialog,
@@ -90,8 +86,6 @@ export function IdleManager(): React.ReactNode {
 
   // 执行导入弹窗解析结果的入库
   const handleParsedImport = (parsed: ParsedImport): ImportResult => {
-    const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
-    const groupName = currentGroupId ? groups.get(currentGroupId)?.name ?? (isEn ? 'Ungrouped' : '未分组') : (isEn ? 'Ungrouped' : '未分组')
     try {
       // invalid 在 ImportDialog 内已被拦截，这里兜底返回（同时满足类型收窄）
       if (parsed.kind === 'invalid') {
@@ -105,7 +99,7 @@ export function IdleManager(): React.ReactNode {
       }
       const result = importAccounts(parsed.items)
       const label = parsed.format === 'kami' ? '卡密导入完成' : parsed.format === 'oidc' ? 'OIDC 凭证导入完成' : '导入完成'
-      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）` }
+      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个` }
     } catch (e) {
       console.error('Idle import error:', e)
       return { ok: false, message: '解析导入内容失败' }
@@ -203,7 +197,6 @@ export function IdleManager(): React.ReactNode {
           onRestore={handleBatchRestore}
           viewMode={viewMode}
           onViewModeChange={setViewMode}
-          onManageGroups={() => setShowGroupDialog(true)}
           onManageTags={() => setShowTagDialog(true)}
           isFilterExpanded={isFilterExpanded}
           onToggleFilter={() => setIsFilterExpanded(!isFilterExpanded)}
@@ -241,13 +234,6 @@ export function IdleManager(): React.ReactNode {
         open={!!editingAccount}
         onOpenChange={(open) => !open && setEditingAccount(null)}
         account={editingAccount}
-      />
-
-      {/* 分组管理对话框（闲置库独立分组） */}
-      <GroupManageDialog
-        isOpen={showGroupDialog}
-        onClose={() => setShowGroupDialog(false)}
-        useStore={useIdleAccountsStore}
       />
 
       {/* 标签管理对话框（闲置库独立标签） */}

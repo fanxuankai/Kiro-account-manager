@@ -26,7 +26,6 @@ export function IdleList({ onAddAccount, onEditAccount, onRestoreAccount }: Idle
   const {
     getFilteredAccounts,
     tags,
-    groups,
     selectedIds
   } = useIdleAccountsStore()
   const { t } = useTranslation()
@@ -75,7 +74,6 @@ export function IdleList({ onAddAccount, onEditAccount, onRestoreAccount }: Idle
               <IdleListRow
                 account={account}
                 tags={tags}
-                groups={groups}
                 isSelected={selectedIds.has(account.id)}
                 onEdit={() => onEditAccount(account)}
                 onShowDetail={() => setDetailAccount(account)}

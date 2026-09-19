@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useAccountsStore, isBannedAccountError } from '@/store/accounts'
 import { Card, CardContent, CardHeader, CardTitle } from '../ui'
-import { Users, CheckCircle, AlertTriangle, Clock, Zap, Shield, Fingerprint, FolderPlus, Tag, TrendingUp, Activity, BarChart3, Ban, ChevronRight } from 'lucide-react'
+import { Users, CheckCircle, AlertTriangle, Clock, Zap, Shield, Fingerprint, Tag, TrendingUp, Activity, BarChart3, Ban, ChevronRight } from 'lucide-react'
 import kiroLogo from '@/assets/kiro-high-resolution-logo-transparent.png'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -28,7 +28,7 @@ const getSubscriptionColor = (type: string, title?: string): string => {
 }
 
 export function HomePage() {
-  const { accounts, activeAccountId, getStats, darkMode, usagePrecision, setFilter, setActiveGroupTab } = useAccountsStore()
+  const { accounts, activeAccountId, getStats, darkMode, usagePrecision, setFilter } = useAccountsStore()
   const { t } = useTranslation()
   const stats = getStats()
 
@@ -51,9 +51,8 @@ export function HomePage() {
     return { banned, expiring, quotaHigh }
   }, [accounts])
 
-  // 点击告警 → 应用筛选并跳转到账号页（清掉分组 Tab 限制，确保跨组可见）
+  // 点击告警 → 应用筛选并跳转到账号页
   const jumpToAccounts = (patch: AccountFilter): void => {
-    setActiveGroupTab('all')
     setFilter(patch)
     window.dispatchEvent(new CustomEvent('navigate-page', { detail: 'accounts' }))
   }
@@ -623,22 +622,6 @@ export function HomePage() {
                 <p className="font-medium text-sm">{isEn ? 'Machine ID' : '机器码管理'}</p>
                 <p className="text-xs text-muted-foreground mt-1">
                   {isEn ? 'Modify device ID, auto-switch, account binding' : '修改设备标识符，切号时自动更换，支持账户绑定'}
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="hover-lift">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 rounded-lg bg-primary/10">
-                <FolderPlus className="h-5 w-5 text-primary" />
-              </div>
-              <div>
-                <p className="font-medium text-sm">{isEn ? 'Groups' : '分组管理'}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {isEn ? 'Batch set groups for selected accounts' : '多选账户后可批量设置分组，一键移动账号'}
                 </p>
               </div>
             </div>

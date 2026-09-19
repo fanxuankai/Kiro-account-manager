@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select } from '../ui'
+import { Button, Card, CardContent, CardHeader, CardTitle, Input, Label } from '../ui'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import type { SubscriptionType } from '@/types/account'
@@ -63,7 +63,7 @@ type ImportMode = 'oidc' | 'sso' | 'login'
 type LoginType = 'builderid' | 'google' | 'github' | 'iamsso'
 
 export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccountDialogProps): React.ReactNode {
-  const { addAccount, accounts, batchImportConcurrency, loginPrivateMode, groups, activeGroupTab } = useAccountsStore()
+  const { addAccount, accounts, batchImportConcurrency, loginPrivateMode } = useAccountsStore()
 
   // 检查账户是否已存在（同userId 或 同邮箱+同provider 才算重复）
   const isAccountExists = (email: string, userId: string, provider?: string): boolean => {
@@ -80,8 +80,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
   // 导入模式
   const [importMode, setImportMode] = useState<ImportMode>('login')
 
-  // 添加到的目标分组（默认=当前打开的分组，可在弹窗内改）；undefined=未分组（默认分组）
-  const [selectedGroupId, setSelectedGroupId] = useState<string | undefined>(undefined)
 
   // OIDC 凭证输入
   const [refreshToken, setRefreshToken] = useState('')
@@ -140,13 +138,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
       }
     }
   }, [])
-
-  // 打开弹窗时默认选中"当前打开的分组"（activeGroupTab 为真实分组时），否则未分组
-  useEffect(() => {
-    if (!isOpen) return
-    const isRealGroup = activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)
-    setSelectedGroupId(isRealGroup ? activeGroupTab : undefined)
-  }, [isOpen, activeGroupTab, groups])
 
   // 监听 Social Auth 回调
   useEffect(() => {
@@ -226,7 +217,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
           userId,
           nickname: email ? email.split('@')[0] : undefined,
           idp: providerName as 'BuilderId' | 'Google' | 'Github',
-          groupId: selectedGroupId,
           credentials: {
             accessToken: result.data.accessToken,
             csrfToken: '',
@@ -578,7 +568,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
             userId: userId || '',
             nickname: email ? email.split('@')[0] : undefined,
             idp: 'BuilderId',
-            groupId: selectedGroupId,
             credentials: {
               accessToken: result.data.accessToken,
               csrfToken: '',
@@ -791,7 +780,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
             userId,
             nickname: email ? email.split('@')[0] : undefined,
             idp,
-            groupId: selectedGroupId,
             credentials: {
               accessToken: result.data.accessToken,
               csrfToken: '',
@@ -937,7 +925,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
           userId,
           nickname: email ? email.split('@')[0] : undefined,
           idp: providerName as 'BuilderId' | 'Github' | 'Google',
-          groupId: selectedGroupId,
           credentials: {
             accessToken: result.data.accessToken,
             csrfToken: '',
@@ -1031,21 +1018,6 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
         </CardHeader>
 
         <CardContent className="space-y-6 pt-6">
-          {/* 添加到分组（默认=当前打开的分组，可改）；无分组时不显示 */}
-          {groups.size > 0 && (
-            <div className="flex items-center gap-3">
-              <Label className="text-sm whitespace-nowrap">{isEn ? 'Add to group' : '添加到分组'}</Label>
-              <Select
-                className="flex-1"
-                value={selectedGroupId ?? '__default__'}
-                onChange={(v) => setSelectedGroupId(v === '__default__' ? undefined : v)}
-                options={[
-                  { value: '__default__', label: isEn ? 'Default (Ungrouped)' : '默认（未分组）' },
-                  ...Array.from(groups.values()).sort((a, b) => a.order - b.order).map(g => ({ value: g.id, label: g.name }))
-                ]}
-              />
-            </div>
-          )}
           {/* 导入模式切换 */}
           <div className="grid grid-cols-3 gap-1 p-1 bg-muted/50 rounded-xl border">
             <button

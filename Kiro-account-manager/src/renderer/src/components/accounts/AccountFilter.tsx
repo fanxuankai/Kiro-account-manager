@@ -121,7 +121,6 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
     filter.subscriptionTypes?.length ||
     filter.statuses?.length ||
     filter.idps?.length ||
-    filter.groupIds?.length ||
     filter.tagIds?.length ||
     filter.emailDomains?.length ||
     filter.usageMin !== undefined ||
@@ -130,8 +129,7 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
     filter.daysRemainingMax !== undefined ||
     filter.createdAtMin !== undefined ||
     filter.createdAtMax !== undefined ||
-    filter.bannedOnly ||
-    filter.pendingPaymentOnly
+    filter.bannedOnly
   )
 
   const toggleArrayFilter = <T extends string>(
@@ -274,7 +272,7 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
             </div>
           </div>
 
-          {/* 第二行：标签 + 范围筛选（分组改用顶部 Tab 互斥切换，不再多选筛选） */}
+          {/* 第二行：标签 + 范围筛选 */}
           <div className="flex flex-wrap items-start gap-x-6 gap-y-2 mt-2">
             {/* 标签 */}
             {tags.size > 0 && (

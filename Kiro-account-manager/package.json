@@ -22,7 +22,8 @@
     "build:linux": "electron-vite build && electron-builder --linux",
     "test:e2e": "node test/e2e-fullsuite/run.mjs",
     "fetch:singbox": "node scripts/fetch-singbox.mjs",
-    "test:e2e:only": "node test/e2e-fullsuite/run.mjs --only"
+    "test:e2e:only": "node test/e2e-fullsuite/run.mjs --only",
+    "test:lifecycle": "node --no-warnings --experimental-strip-types test/account-lifecycle.mjs"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

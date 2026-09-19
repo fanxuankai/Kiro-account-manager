@@ -99,7 +99,6 @@ const zh = {
     totalAccounts: '共 {count} 个账号',
     selectedCount: '已选 {count} 个',
     batchActions: '批量操作',
-    setGroup: '设置分组',
     setTags: '设置标签',
     batchRefresh: '批量刷新',
     batchCheck: '批量检查',

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Card, CardContent, Badge, Button } from '../ui'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
-import type { Account, AccountTag, AccountGroup } from '@/types/account'
+import type { Account, AccountTag } from '@/types/account'
 import {
   Check,
   RefreshCw,
@@ -14,7 +14,6 @@ import {
   Clock,
   Loader2,
   Info,
-  FolderOpen,
   Power,
   Calendar,
   AlertCircle,
@@ -78,7 +77,6 @@ function generateGlowStyle(tagColors: string[]): React.CSSProperties {
 interface AccountCardProps {
   account: Account
   tags: Map<string, AccountTag>
-  groups: Map<string, AccountGroup>
   isSelected: boolean
   onSelect: () => void
   onEdit: () => void
@@ -152,7 +150,6 @@ function formatTokenExpiry(expiresAt: number, isEn: boolean): string {
 export const AccountCard = memo(function AccountCard({
   account,
   tags,
-  groups,
   isSelected,
   onSelect,
   onEdit,
@@ -315,8 +312,6 @@ export const AccountCard = memo(function AccountCard({
     .map((id) => tags.get(id))
     .filter((t): t is AccountTag => t !== undefined)
 
-  // 获取分组信息
-  const accountGroup = account.groupId ? groups.get(account.groupId) : undefined
 
   // 生成光环样式
   const glowStyle = useMemo(() => {
@@ -586,14 +581,6 @@ export const AccountCard = memo(function AccountCard({
               </div>
               <div className="flex items-center gap-2 mt-1">
                   {account.nickname && <span className="text-xs text-muted-foreground truncate">{maskNickname(account.nickname)}</span>}
-                  {accountGroup && (
-                    <span
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground flex items-center gap-1"
-                      style={{ color: accountGroup.color, backgroundColor: accountGroup.color + '15' }}
-                    >
-                      <FolderOpen className="w-3 h-3" /> {accountGroup.name}
-                    </span>
-                  )}
               </div>
            </div>
         </div>

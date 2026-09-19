@@ -3,7 +3,7 @@ import { useIdleAccountsStore } from '@/store/idleAccounts'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import { Badge, Button } from '../ui'
-import type { Account, AccountTag, AccountGroup } from '@/types/account'
+import type { Account, AccountTag } from '@/types/account'
 import {
   Check,
   Trash2,
@@ -13,7 +13,6 @@ import {
   Archive,
   Clock,
   KeyRound,
-  FolderOpen,
   Copy,
   Undo2
 } from 'lucide-react'
@@ -34,7 +33,6 @@ import {
 interface IdleListRowProps {
   account: Account
   tags: Map<string, AccountTag>
-  groups: Map<string, AccountGroup>
   isSelected: boolean
   onEdit: () => void
   onShowDetail: () => void
@@ -46,7 +44,6 @@ interface IdleListRowProps {
 function IdleListRowComponent({
   account,
   tags,
-  groups,
   isSelected,
   onEdit,
   onShowDetail,
@@ -76,11 +73,6 @@ function IdleListRowComponent({
   )
   const tagColors = useMemo(() => accountTags.map(t => t.color), [accountTags])
 
-  // 分组（引用不存在时显示为未分组）
-  const accountGroup = useMemo(() => {
-    if (!account.groupId) return null
-    return groups.get(account.groupId) || null
-  }, [account.groupId, groups])
 
   // 显示名（昵称优先 + 隐私模式 mask）
   const displayName = useMemo(() => {
@@ -183,17 +175,8 @@ function IdleListRowComponent({
           )}
         </div>
 
-        {/* 下行：分组 + 标签 + 错误 + 复制 */}
+        {/* 下行：标签 + 错误 + 复制 */}
         <div className="flex items-center gap-1.5 min-w-0 text-[10px] overflow-hidden">
-          {accountGroup && (
-            <span
-              className="px-1.5 py-0.5 rounded flex items-center gap-1 flex-shrink-0"
-              style={{ color: accountGroup.color, backgroundColor: accountGroup.color + '15' }}
-            >
-              <FolderOpen className="w-3 h-3" />
-              {accountGroup.name}
-            </span>
-          )}
           {accountTags.slice(0, 4).map(tag => {
             const tagColor = toRgba(tag.color)
             return (

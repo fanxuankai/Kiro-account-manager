@@ -194,6 +194,9 @@ export function SettingsPage() {
     setPrivacyMode,
     usagePrecision,
     setUsagePrecision,
+    deprecatedUsageThreshold,
+    deprecatedUsagePercentThreshold,
+    setLifecycleThresholds,
     autoRefreshEnabled,
     autoRefreshInterval,
     autoRefreshConcurrency,
@@ -420,7 +423,7 @@ export function SettingsPage() {
 
   const handleClearData = () => {
     if (confirm('确定要清除所有账号数据吗？此操作不可恢复！')) {
-      if (confirm('再次确认：这将删除所有账号、分组和标签数据！')) {
+      if (confirm('再次确认：这将删除所有账号和标签数据！')) {
         // 清除所有数据
         Array.from(accounts.keys()).forEach(id => {
           useAccountsStore.getState().removeAccount(id)
@@ -612,6 +615,52 @@ export function SettingsPage() {
               <UserX className="h-4 w-4 mr-2" />
               {loginPrivateMode ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
             </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 账号生命周期设置 */}
+      <Card className="hover-lift">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Layers className="h-4 w-4 text-primary" />
+            </div>
+            {isEn ? 'Account Lifecycle' : '账号生命周期'}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium">{isEn ? 'Deprecated usage threshold' : '已废弃绝对用量阈值'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'Accounts with current usage at or above this value are deprecated' : '用量达到此值的账号归入“已废弃”（默认 60）'}</p>
+            </div>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className="w-28 px-2 py-1.5 text-sm rounded-md border bg-background"
+              value={deprecatedUsageThreshold}
+              onChange={(e) => setLifecycleThresholds(Number(e.target.value), deprecatedUsagePercentThreshold)}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 pt-2 border-t">
+            <div>
+              <p className="font-medium">{isEn ? 'Deprecated usage percentage' : '已废弃用量百分比阈值'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'Accounts at or above this usage percentage are deprecated' : '用量百分比达到此值的账号归入“已废弃”（默认 10%）'}</p>
+            </div>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                className="w-28 px-2 py-1.5 text-sm rounded-md border bg-background"
+                value={(deprecatedUsagePercentThreshold * 100).toFixed(2).replace(/\.00$/, '')}
+                onChange={(e) => setLifecycleThresholds(deprecatedUsageThreshold, Number(e.target.value) / 100)}
+              />
+              <span className="text-sm text-muted-foreground">%</span>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -1120,7 +1169,7 @@ export function SettingsPage() {
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
               <p className="font-medium text-destructive">{isEn ? 'Clear All Data' : '清除所有数据'}</p>
-              <p className="text-sm text-muted-foreground">{isEn ? 'Delete all accounts, groups and tags' : '删除所有账号、分组和标签'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'Delete all accounts and tags' : '删除所有账号和标签'}</p>
             </div>
             <Button variant="destructive" size="sm" onClick={handleClearData}>
               <Trash2 className="h-4 w-4 mr-2" />
@@ -1166,7 +1215,7 @@ function ConfigSyncCard({ isEn }: { isEn: boolean }): React.ReactNode {
     'kiro-register-mixed-sources',
     'kiro-webhooks',
     'accounts_viewMode',
-    'accounts_activeGroupTab',
+    'accounts_activeLifecycleTab',
     'systemLogs_displayLimit',
     'kiro-diagnose-moemail',
     'proxyLogs_timeRange',

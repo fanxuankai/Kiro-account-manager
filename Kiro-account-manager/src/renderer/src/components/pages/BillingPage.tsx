@@ -1,7 +1,7 @@
 // 账单页：按账号展示 Stripe 订阅门户回写的账单快照（计划单价 / 计费周期 / 本周期与下期金额 / 扣款卡 / 最近发票）。
 // 数据来源是「检查续费 / 切 Free」时的同一份门户响应（零额外请求），本页只读快照并提供
 // 「检查账单」入口触发同一只读链路刷新；汇总卡与列表随筛选实时重算。
-import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react'
+import { useState, useCallback, useRef, useMemo, memo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAccountsStore } from '@/store/accounts'
 import { Button, Card, CardContent } from '../ui'
@@ -17,10 +17,6 @@ import {
   AlarmClockCheck,
   HelpCircle,
   Search,
-  ChevronDown,
-  FolderOpen,
-  Users,
-  Inbox,
   Filter
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -137,13 +133,11 @@ const formatShortDate = (ms?: number): string => {
 }
 
 export function BillingPage(): React.ReactNode {
-  const { accounts, groups, tags, updateAccount, sort } = useAccountsStore()
+  const { accounts, tags, updateAccount, sort } = useAccountsStore()
   const { actualLanguage } = useTranslation()
   const isEn = actualLanguage === 'en'
 
   // ===== 页内筛选（不写入账号库的公共 filter，两页互不影响；交互对齐账号管理页） =====
-  const [activeGroupTab, setActiveGroupTab] = useState<'all' | 'ungrouped' | string>('all')
-  const [showGroupMenu, setShowGroupMenu] = useState(false)
   const [tagIds, setTagIds] = useState<Set<string>>(new Set())
   const [planFilter, setPlanFilter] = useState<Set<PlanKind>>(new Set())
   const [statusFilter, setStatusFilter] = useState<Set<NextStatus>>(new Set())
@@ -154,7 +148,6 @@ export function BillingPage(): React.ReactNode {
   const [showFilterPopover, setShowFilterPopover] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isChecking, setIsChecking] = useState(false)
-  const groupMenuRef = useRef<HTMLDivElement>(null)
 
   const toggleInSet = <T,>(set: Set<T>, value: T): Set<T> => {
     const next = new Set(set)
@@ -163,16 +156,6 @@ export function BillingPage(): React.ReactNode {
     return next
   }
 
-  // 点击外部收起分组下拉（与账号管理页同款交互）
-  useEffect(() => {
-    const onClick = (e: MouseEvent): void => {
-      if (groupMenuRef.current && !groupMenuRef.current.contains(e.target as Node)) {
-        setShowGroupMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', onClick)
-    return () => document.removeEventListener('mousedown', onClick)
-  }, [])
 
   // 数据集：付费账号（含已排期切 Free 的——本周期仍计费）+ 曾付费/有账单快照的账号；
   // 从未订阅的纯 Free 没有账单可言，排除
@@ -193,14 +176,6 @@ export function BillingPage(): React.ReactNode {
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
     const out = billingAccounts.filter((acc) => {
-      // 分组与账号管理页同款：顶部互斥单选（全部 / 未分组 / 具体分组）
-      if (activeGroupTab === 'ungrouped' && acc.groupId) return false
-      if (
-        activeGroupTab !== 'all' &&
-        activeGroupTab !== 'ungrouped' &&
-        acc.groupId !== activeGroupTab
-      )
-        return false
       if (tagIds.size > 0 && !(acc.tags ?? []).some((t) => tagIds.has(t))) return false
       if (planFilter.size > 0 && !planFilter.has(planKindOf(acc))) return false
       if (statusFilter.size > 0 && !statusFilter.has(nextStatusOf(acc))) return false
@@ -245,7 +220,7 @@ export function BillingPage(): React.ReactNode {
       }
     }
     return out.sort((a, b) => (sort.order === 'desc' ? -compare(a, b) : compare(a, b)))
-  }, [billingAccounts, activeGroupTab, tagIds, planFilter, statusFilter, emailDomains, keyword, sort])
+  }, [billingAccounts, tagIds, planFilter, statusFilter, emailDomains, keyword, sort])
 
   // ===== 汇总卡（随筛选重算） =====
   const summary = useMemo(() => {
@@ -398,11 +373,10 @@ export function BillingPage(): React.ReactNode {
     }
   }
 
-  // 气泡维度是否有激活（不含分组 tab 与搜索词——两者有各自的入口与高亮）
+  // 气泡维度是否有激活（不含搜索词，搜索框有独立高亮）
   const filterChipsActive =
     tagIds.size > 0 || planFilter.size > 0 || statusFilter.size > 0 || emailDomains.size > 0
   const clearFilters = (): void => {
-    setActiveGroupTab('all')
     setTagIds(new Set())
     setPlanFilter(new Set())
     setStatusFilter(new Set())
@@ -427,22 +401,6 @@ export function BillingPage(): React.ReactNode {
       counts.set(nextStatusOf(acc), (counts.get(nextStatusOf(acc)) ?? 0) + 1)
     return counts
   }, [billingAccounts])
-
-  // 分组 Tab 计数（全部 / 未分组 / 各分组），与账号管理页同口径
-  const groupTabCounts = useMemo(() => {
-    let ungrouped = 0
-    const byGroup = new Map<string, number>()
-    for (const acc of billingAccounts) {
-      if (!acc.groupId) ungrouped++
-      else byGroup.set(acc.groupId, (byGroup.get(acc.groupId) ?? 0) + 1)
-    }
-    return { all: billingAccounts.length, ungrouped, byGroup }
-  }, [billingAccounts])
-  const sortedGroups = useMemo(
-    () => Array.from(groups.values()).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
-    [groups]
-  )
-  const activeGroup = activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' ? groups.get(activeGroupTab) : undefined
 
   // 邮箱域名后缀及数量（按数量降序），与账号管理页筛选面板同款
   const DOMAIN_DISPLAY_LIMIT = 16
@@ -532,100 +490,7 @@ export function BillingPage(): React.ReactNode {
 
         <Card>
           <CardContent className="p-4 space-y-3">
-            {/* 工具栏：分组下拉（互斥单选，账号管理页同款）+ 搜索框 + 批量检查 */}
             <div className="flex flex-wrap items-center gap-3">
-              <div ref={groupMenuRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setShowGroupMenu((v) => !v)}
-                  className="flex items-center gap-1.5 h-9 px-3 text-sm rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md hover:bg-muted/50 transition-colors"
-                >
-                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                  <span>
-                    {activeGroup
-                      ? activeGroup.name
-                      : activeGroupTab === 'ungrouped'
-                        ? isEn
-                          ? 'Ungrouped'
-                          : '未分组'
-                        : isEn
-                          ? 'All Groups'
-                          : '全部分组'}
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    (
-                    {activeGroupTab === 'all'
-                      ? groupTabCounts.all
-                      : activeGroupTab === 'ungrouped'
-                        ? groupTabCounts.ungrouped
-                        : (groupTabCounts.byGroup.get(activeGroupTab) ?? 0)}
-                    )
-                  </span>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-                {showGroupMenu && (
-                  <div className="absolute left-0 top-full mt-1 z-20 w-52 max-h-72 overflow-y-auto rounded-xl border border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-md shadow-lg py-1">
-                    <button
-                      type="button"
-                      className={cn(
-                        'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors',
-                        activeGroupTab === 'all'
-                          ? 'text-primary font-medium'
-                          : 'text-foreground hover:bg-muted/50'
-                      )}
-                      onClick={() => {
-                        setActiveGroupTab('all')
-                        setShowGroupMenu(false)
-                      }}
-                    >
-                      <Users className="h-4 w-4" />
-                      {isEn ? 'All' : '全部'} ({groupTabCounts.all})
-                    </button>
-                    <button
-                      type="button"
-                      className={cn(
-                        'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors',
-                        activeGroupTab === 'ungrouped'
-                          ? 'text-primary font-medium'
-                          : 'text-foreground hover:bg-muted/50'
-                      )}
-                      onClick={() => {
-                        setActiveGroupTab('ungrouped')
-                        setShowGroupMenu(false)
-                      }}
-                    >
-                      <Inbox className="h-4 w-4" />
-                      {isEn ? 'Ungrouped' : '未分组'} ({groupTabCounts.ungrouped})
-                    </button>
-                    {sortedGroups.map((g) => (
-                      <button
-                        key={g.id}
-                        type="button"
-                        className={cn(
-                          'w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors',
-                          activeGroupTab === g.id
-                            ? 'text-primary font-medium'
-                            : 'text-foreground hover:bg-muted/50'
-                        )}
-                        onClick={() => {
-                          setActiveGroupTab(g.id)
-                          setShowGroupMenu(false)
-                        }}
-                      >
-                        <span
-                          className="h-2 w-2 rounded-full shrink-0"
-                          style={{ backgroundColor: toRgba(g.color || '#5b8cff') }}
-                        />
-                        <span className="truncate">{g.name}</span>
-                        <span className="text-xs text-muted-foreground ml-auto">
-                          {groupTabCounts.byGroup.get(g.id) ?? 0}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
               {/* 搜索框（账号管理页同款样式） */}
               <div className="relative flex-1 min-w-[200px] max-w-md">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />

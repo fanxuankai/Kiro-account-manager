@@ -183,7 +183,6 @@ export interface AccountFilter {
   subscriptionTypes?: SubscriptionType[]
   statuses?: AccountStatus[]
   idps?: IdpType[]
-  groupIds?: string[]
   tagIds?: string[]
   emailDomains?: string[] // 邮箱域名后缀（@ 之后的部分，小写）
   usageMin?: number // 使用量百分比
@@ -193,7 +192,6 @@ export interface AccountFilter {
   createdAtMin?: number // 添加日期下限（时间戳 ms，含当天 0 点起）
   createdAtMax?: number // 添加日期上限（时间戳 ms，含当天全天）
   bannedOnly?: boolean // 仅显示封禁账号
-  pendingPaymentOnly?: boolean // 仅显示待付款（发过升级支付链接且账号仍为 Free，未升级 = 未付款）
 }
 
 /**

@@ -99,7 +99,6 @@ const en = {
     totalAccounts: '{count} accounts',
     selectedCount: '{count} selected',
     batchActions: 'Batch Actions',
-    setGroup: 'Set Group',
     setTags: 'Set Tags',
     batchRefresh: 'Batch Refresh',
     batchCheck: 'Batch Check',

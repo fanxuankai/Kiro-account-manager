@@ -50,7 +50,6 @@ export function IdleGrid({ onAddAccount, onEditAccount, onRestoreAccount }: Idle
   const {
     getFilteredAccounts,
     tags,
-    groups,
     selectedIds,
     toggleSelection
   } = useIdleAccountsStore()
@@ -59,7 +58,7 @@ export function IdleGrid({ onAddAccount, onEditAccount, onRestoreAccount }: Idle
 
   const accounts = getFilteredAccounts()
 
-  // 将账号按行分组（包含添加按钮作为虚拟项）
+  // 将账号按行排列（包含添加按钮作为虚拟项）
   const rows = useMemo(() => {
     const result: (Account | 'add')[][] = []
     const allItems: (Account | 'add')[] = [...accounts, 'add']
@@ -125,7 +124,6 @@ export function IdleGrid({ onAddAccount, onEditAccount, onRestoreAccount }: Idle
                       <IdleCard
                         account={item}
                         tags={tags}
-                        groups={groups}
                         isSelected={selectedIds.has(item.id)}
                         onSelect={() => toggleSelection(item.id)}
                         onEdit={() => onEditAccount(item)}
