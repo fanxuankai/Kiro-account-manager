@@ -30,16 +30,19 @@ npm run build:linux   # Linux:  dist/ 下 AppImage / deb
 mac 命令行覆盖安装——用未打包产物直拷(比挂载 dmg 简单,不用拼版本号/卷名;应用开着会覆盖失败,先退出):
 
 ```bash
-cd Kiro-account-manager && npm run build:mac        # 产出 dist/mac-arm64/Kiro Account Manager.app
+cd Kiro-account-manager && npm run build:mac   # 双架构构建,产物在 dist/mac-arm64(Apple Silicon) 与 dist/mac(Intel)
+# 按本机架构选未打包产物目录
+SRC="dist/mac-arm64/Kiro Account Manager.app"
+[ "$(uname -m)" = "x86_64" ] && SRC="dist/mac/Kiro Account Manager.app"
 osascript -e 'tell application "Kiro Account Manager" to quit' 2>/dev/null; sleep 2
 pkill -f "Kiro Account Manager" 2>/dev/null; sleep 1
 rm -rf "/Applications/Kiro Account Manager.app"
-cp -R "dist/mac-arm64/Kiro Account Manager.app" "/Applications/Kiro Account Manager.app"
+cp -R "$SRC" "/Applications/Kiro Account Manager.app"
 xattr -cr "/Applications/Kiro Account Manager.app"  # 清除 quarantine 隔离属性(未签名应用必需,否则 Gatekeeper 拦截)
 open "/Applications/Kiro Account Manager.app"
 ```
 
-不要从 GitHub Release 下载安装——本地安装一律用本地构建产物。
+不要从 GitHub Release 下载安装——本地安装一律用本地构建产物。Windows/Linux 用各自 build:win / build:linux 的安装器双击安装。
 
 - 用户数据不受覆盖安装影响(mac 在 `~/Library/Application Support/kiro-account-manager`);本地验证可不 bump 版本,正式发布前再 bump。
 
