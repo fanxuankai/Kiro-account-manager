@@ -11,3 +11,5 @@ export { BillingPage } from './BillingPage'
 export { LogsPage } from './LogsPage'
 // 号池：GitHub 账号（账密+2FA）批量自动激活 Kiro
 export { LoginPagePool } from './LoginPagePool'
+// Google 号池：Gmail 卡密（邮箱+密码+2FA）手动授权激活 Kiro
+export { GooglePoolPage } from './GooglePoolPage'

@@ -107,6 +107,12 @@ export function registerLoginPoolIpc(opts: {
     return { success: true }
   })
 
+  // 批量删除勾选条目（running 条目由 store 跳过不删）
+  ipcMain.handle('login-pool:remove-many', (_e, ids: string[]) => {
+    const removed = store.removeMany(Array.isArray(ids) ? ids : [])
+    return { success: true, removed }
+  })
+
   /** 出口代理开关开启但配置不完整：启动即拒绝，别让批次逐号空转失败 */
   const proxyInvalid = (opts?: BatchOptions): string | null => {
     const proxy = opts?.proxy

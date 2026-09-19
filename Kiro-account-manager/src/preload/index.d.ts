@@ -433,6 +433,8 @@ interface KiroApi {
   loginPoolRemove: (id: string) => Promise<{ success: boolean }>
   loginPoolClearFinished: () => Promise<{ success: boolean }>
   loginPoolRestoreAll: () => Promise<{ success: boolean }>
+  /** 批量删除勾选条目（running 条目跳过不删），返回实际删除数 */
+  loginPoolRemoveMany: (ids: string[]) => Promise<{ success: boolean; removed: number }>
   loginPoolStart: (opts: {
     intervalSec: number | 'rand'
     manualPolicy: 'wait' | 'skip'
@@ -497,6 +499,96 @@ interface KiroApi {
     payload: {
       entryId: string
       username: string
+      accessToken: string
+      refreshToken: string
+      profileArn?: string
+      expiresIn?: number
+    }
+  }) => void) => () => void
+
+  // ─── Google 号池（Gmail 卡密 · 手动授权激活 Kiro）───
+  /** 全量快照：条目视图 + 授权窗口状态 + 最近日志（页面重挂恢复用） */
+  googlePoolList: () => Promise<{
+    entries: {
+      id: string
+      email: string
+      state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+      failReason?: string
+      kiroEmail?: string
+      exitIp?: string
+      proxyMode?: 'api' | 'pool' | 'direct'
+      secret?: string
+      recoveryEmail?: string
+      recoveryPassword?: string
+      country?: string
+      addedAt: number
+      takenAt?: number
+      doneAt?: number
+      password: string
+      passwordMasked: string
+      secretMasked?: string
+    }[]
+    running: boolean
+    logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
+  }>
+  googlePoolAddText: (text: string) => Promise<{ added: number; updated: number; bad: string[] }>
+  googlePoolMarkWasted: (id: string) => Promise<{ success: boolean }>
+  googlePoolRestore: (id: string) => Promise<{ success: boolean }>
+  googlePoolRemove: (id: string) => Promise<{ success: boolean }>
+  googlePoolRemoveMany: (ids: string[]) => Promise<{ success: boolean; removed: number }>
+  googlePoolClearFinished: () => Promise<{ success: boolean }>
+  googlePoolRestoreAll: () => Promise<{ success: boolean }>
+  /** 发起单号授权：主进程打开授权窗口；autofill=自动填邮箱/密码/2FA（默认开），挑战与授权确认人工 */
+  googlePoolAuthorize: (id: string, opts?: {
+    autofill?: boolean
+    proxy?: {
+      enabled: boolean
+      mode?: 'pool' | 'api'
+      entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
+      strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
+      upstreamProxy?: string
+      api?: { url: string; viaProxy?: string; batchSize?: number }
+    }
+  }) => Promise<{ success: boolean; error?: string }>
+  googlePoolFocusWindow: () => Promise<{ success: boolean }>
+  /** 本地算当前 6 位验证码（一键复制用；密钥不出主进程） */
+  googlePoolTotp: (id: string) => Promise<{
+    success: boolean
+    code?: string
+    remainSec?: number
+    error?: string
+  }>
+  googlePoolManualCallback: (code: string, state: string) => Promise<{ success: boolean }>
+  googlePoolMarkStored: (id: string, kiroEmail: string) => Promise<{ success: boolean }>
+  onGooglePoolUpdate: (callback: (update: {
+    kind: 'entry'
+    entry: {
+      id: string
+      email: string
+      state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+      failReason?: string
+      kiroEmail?: string
+      exitIp?: string
+      proxyMode?: 'api' | 'pool' | 'direct'
+      secret?: string
+      recoveryEmail?: string
+      recoveryPassword?: string
+      country?: string
+      addedAt: number
+      takenAt?: number
+      doneAt?: number
+      password: string
+      passwordMasked: string
+      secretMasked?: string
+    }
+  } | {
+    kind: 'log'
+    line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }
+  } | {
+    kind: 'result'
+    payload: {
+      entryId: string
+      email: string
       accessToken: string
       refreshToken: string
       profileArn?: string

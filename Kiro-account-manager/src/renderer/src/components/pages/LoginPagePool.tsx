@@ -74,6 +74,8 @@ export function LoginPagePool(): React.ReactNode {
   const [addOpen, setAddOpen] = useState(false)
   const [filter, setFilter] = useState<'all' | PoolEntryView['state']>('all')
   const [query, setQuery] = useState('')
+  // 批量删除勾选（running 行不可选）
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   // 凭据明文显示开关（默认打码；记忆在 localStorage）
   const [showSecrets, setShowSecrets] = useState((): boolean => localStorage.getItem('loginpool_show_secrets') === 'true')
   const toggleShowSecrets = (): void => {
@@ -325,6 +327,34 @@ export function LoginPagePool(): React.ReactNode {
 
   const current = entries.find((e) => e.state === 'running') || null
   const list = entries.filter((e) => (filter === 'all' || e.state === filter) && (!query || e.username.includes(query)))
+  // 勾选逻辑只作用于当前筛选视图里的可选行（running 除外）
+  const selectableIds = list.filter((e) => e.state !== 'running').map((e) => e.id)
+  const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id))
+  const someSelected = selectableIds.some((id) => selected.has(id))
+  const toggleSelect = (id: string): void => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const toggleSelectAll = (): void => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (allSelected) selectableIds.forEach((id) => next.delete(id))
+      else selectableIds.forEach((id) => next.add(id))
+      return next
+    })
+  }
+  const handleRemoveSelected = (): void => {
+    if (!selected.size) return
+    if (!window.confirm(`确定删除所选 ${selected.size} 个条目？此操作不可恢复`)) return
+    void window.api.loginPoolRemoveMany([...selected]).then(() => {
+      setSelected(new Set())
+      refreshList()
+    })
+  }
   const summary = {
     total: entries.length,
     success: entries.filter((e) => e.state === 'used').length,
@@ -504,6 +534,16 @@ export function LoginPagePool(): React.ReactNode {
         <Button size="sm" variant="ghost" className="h-8 text-xs" title="已入库/失败/作废全部拨回未用，再轮一遍" onClick={() => { void window.api.loginPoolRestoreAll().then(() => refreshList()) }}>
           <Undo2 className="h-3.5 w-3.5" /> 全部恢复未用
         </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 text-xs text-destructive hover:text-destructive"
+          title="删除勾选的条目（不可恢复）"
+          disabled={!selected.size}
+          onClick={handleRemoveSelected}
+        >
+          <Trash2 className="h-3.5 w-3.5" /> 删除所选{selected.size ? `（${selected.size}）` : ''}
+        </Button>
       </div>
 
       {/* 表格 */}
@@ -512,7 +552,18 @@ export function LoginPagePool(): React.ReactNode {
           <table className="w-full text-xs">
             <thead className="sticky top-0 z-10">
               <tr className="text-muted-foreground border-b bg-muted/50 backdrop-blur">
-                <th className="text-left font-medium py-2 px-3 w-6"></th>
+                <th className="text-left font-medium py-2 px-3 w-8">
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3 accent-primary align-middle"
+                    checked={allSelected}
+                    disabled={!selectableIds.length}
+                    onChange={toggleSelectAll}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected && !allSelected
+                    }}
+                  />
+                </th>
                 <th className="text-left font-medium py-2 px-2">账号</th>
                 <th className="text-left font-medium py-2 px-2">密码</th>
                 <th className="text-left font-medium py-2 px-2">2FA</th>
@@ -534,7 +585,16 @@ export function LoginPagePool(): React.ReactNode {
               {list.map((e) => (
                 <tr key={e.id} className={cn('border-b last:border-0 hover:bg-muted/30', e.state === 'running' && 'bg-primary/[0.05]')}>
                   <td className="py-1.5 px-3">
-                    <span className={cn('block h-1 w-1 rounded-full', e.state === 'running' ? 'bg-primary animate-pulse' : 'bg-transparent')} />
+                    {e.state === 'running' ? (
+                      <span className="block h-1 w-1 rounded-full bg-primary animate-pulse" />
+                    ) : (
+                      <input
+                        type="checkbox"
+                        className="h-3 w-3 accent-primary align-middle"
+                        checked={selected.has(e.id)}
+                        onChange={() => toggleSelect(e.id)}
+                      />
+                    )}
                   </td>
                   <td className="py-1.5 px-2 font-mono">{e.username}</td>
                   <td className="py-1.5 px-2 font-mono">
@@ -594,30 +654,36 @@ export function LoginPagePool(): React.ReactNode {
                           <Undo2 className="h-3 w-3" /> 恢复
                         </Button>
                       )}
+                      {e.state !== 'running' && e.state !== 'wasted' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
+                          title="作废后不再参与取号"
+                          onClick={() => { void window.api.loginPoolMarkWasted(e.id).then(() => refreshList()) }}
+                        >
+                          <Ban className="h-3 w-3" /> 作废
+                        </Button>
+                      )}
                       {e.state !== 'running' && (
-                        e.state === 'wasted' ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-6 px-2 text-[11px] gap-1 rounded-md border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/20"
-                            title="从池中删除此条目"
-                            onClick={() => {
-                              void window.api.loginPoolRemove(e.id).then(() => setEntries((prev) => prev.filter((x) => x.id !== e.id)))
-                            }}
-                          >
-                            <Trash2 className="h-3 w-3" /> 删除
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-6 px-2 text-[11px] gap-1 rounded-md border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"
-                            title="作废后不再参与取号"
-                            onClick={() => { void window.api.loginPoolMarkWasted(e.id).then(() => refreshList()) }}
-                          >
-                            <Ban className="h-3 w-3" /> 作废
-                          </Button>
-                        )
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/20"
+                          title="从池中删除此条目"
+                          onClick={() => {
+                            void window.api.loginPoolRemove(e.id).then(() => {
+                              setEntries((prev) => prev.filter((x) => x.id !== e.id))
+                              setSelected((prev) => {
+                                const next = new Set(prev)
+                                next.delete(e.id)
+                                return next
+                              })
+                            })
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" /> 删除
+                        </Button>
                       )}
                     </div>
                   </td>

@@ -54,6 +54,7 @@ import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
 import { registerProxyPoolIpcHandlers } from './ipc/proxyPool'
 import { registerLoginPoolIpc } from './loginPool/ipc'
+import { registerGooglePoolIpc } from './googlePool/ipc'
 import { randomBytes, createHash } from 'node:crypto'
 import {
   createTray,
@@ -1887,69 +1888,97 @@ app.whenReady().then(async () => {
   registerRegistrationHandlers(() => mainWindow)
   registerProxyPoolIpcHandlers()
 
+  // ─── 号池共用的 Kiro OAuth 依赖（PKCE 构造 + token 交换，GitHub/Google 同一条链路）───
+  const buildSocialLoginUrl = (
+    idp: 'Github' | 'Google'
+  ): { url: string; codeVerifier: string; oauthState: string } => {
+    const codeVerifier = randomBytes(64).toString('base64url').substring(0, 128)
+    const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
+    const oauthState = randomBytes(32).toString('base64url')
+    const loginUrl = new URL(`${KIRO_AUTH_ENDPOINT}/login`)
+    loginUrl.searchParams.set('idp', idp)
+    loginUrl.searchParams.set('redirect_uri', 'kiro://kiro.kiroAgent/authenticate-success')
+    loginUrl.searchParams.set('code_challenge', codeChallenge)
+    loginUrl.searchParams.set('code_challenge_method', 'S256')
+    loginUrl.searchParams.set('state', oauthState)
+    return { url: loginUrl.toString(), codeVerifier, oauthState }
+  }
+  const exchangeSocialToken = async (
+    code: string,
+    codeVerifier: string
+  ): Promise<
+    | {
+        success: true
+        accessToken: string
+        refreshToken: string
+        profileArn?: string
+        expiresIn?: number
+      }
+    | { success: false; error: string }
+  > => {
+    const MAX_ATTEMPTS = 3
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const tokenRes = await fetchWithAppProxy(`${KIRO_AUTH_ENDPOINT}/oauth/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code,
+            code_verifier: codeVerifier,
+            redirect_uri: 'kiro://kiro.kiroAgent/authenticate-success'
+          })
+        })
+        if (!tokenRes.ok) {
+          const errText = await tokenRes.text()
+          console.error('[LoginPool] Token exchange failed:', tokenRes.status, errText)
+          return { success: false, error: `HTTP ${tokenRes.status}: ${errText}` }
+        }
+        const tokenData = (await tokenRes.json()) as {
+          accessToken: string
+          refreshToken: string
+          profileArn?: string
+          expiresIn?: number
+        }
+        return {
+          success: true,
+          accessToken: tokenData.accessToken,
+          refreshToken: tokenData.refreshToken,
+          profileArn: tokenData.profileArn,
+          expiresIn: tokenData.expiresIn
+        }
+      } catch (error) {
+        const detail = describeFetchError(error)
+        if (attempt >= MAX_ATTEMPTS) {
+          return {
+            success: false,
+            error: `token 交换失败（已重试 ${MAX_ATTEMPTS} 次）：${detail}`
+          }
+        }
+        console.warn(
+          `[LoginPool] Token exchange network error (attempt ${attempt}/${MAX_ATTEMPTS}), retry in 1s: ${detail}`
+        )
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+  }
+
   // ============ 号池（GitHub 账密+2FA 批量激活 Kiro）============
   registerLoginPoolIpc({
     userDataDir: app.getPath('userData'),
     getMainWindow: () => mainWindow,
     deps: {
-      buildGithubLoginUrl: () => {
-        const codeVerifier = randomBytes(64).toString('base64url').substring(0, 128)
-        const codeChallenge = createHash('sha256').update(codeVerifier).digest('base64url')
-        const oauthState = randomBytes(32).toString('base64url')
-        const loginUrl = new URL(`${KIRO_AUTH_ENDPOINT}/login`)
-        loginUrl.searchParams.set('idp', 'Github')
-        loginUrl.searchParams.set('redirect_uri', 'kiro://kiro.kiroAgent/authenticate-success')
-        loginUrl.searchParams.set('code_challenge', codeChallenge)
-        loginUrl.searchParams.set('code_challenge_method', 'S256')
-        loginUrl.searchParams.set('state', oauthState)
-        return { url: loginUrl.toString(), codeVerifier, oauthState }
-      },
-      exchangeSocialToken: async (code, codeVerifier) => {
-        const MAX_ATTEMPTS = 3
-        for (let attempt = 1; ; attempt++) {
-          try {
-            const tokenRes = await fetchWithAppProxy(`${KIRO_AUTH_ENDPOINT}/oauth/token`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                code,
-                code_verifier: codeVerifier,
-                redirect_uri: 'kiro://kiro.kiroAgent/authenticate-success'
-              })
-            })
-            if (!tokenRes.ok) {
-              const errText = await tokenRes.text()
-              console.error('[LoginPool] Token exchange failed:', tokenRes.status, errText)
-              return { success: false, error: `HTTP ${tokenRes.status}: ${errText}` }
-            }
-            const tokenData = (await tokenRes.json()) as {
-              accessToken: string
-              refreshToken: string
-              profileArn?: string
-              expiresIn?: number
-            }
-            return {
-              success: true,
-              accessToken: tokenData.accessToken,
-              refreshToken: tokenData.refreshToken,
-              profileArn: tokenData.profileArn,
-              expiresIn: tokenData.expiresIn
-            }
-          } catch (error) {
-            const detail = describeFetchError(error)
-            if (attempt >= MAX_ATTEMPTS) {
-              return {
-                success: false,
-                error: `token 交换失败（已重试 ${MAX_ATTEMPTS} 次）：${detail}`
-              }
-            }
-            console.warn(
-              `[LoginPool] Token exchange network error (attempt ${attempt}/${MAX_ATTEMPTS}), retry in 1s: ${detail}`
-            )
-            await new Promise((r) => setTimeout(r, 1000))
-          }
-        }
-      }
+      buildGithubLoginUrl: () => buildSocialLoginUrl('Github'),
+      exchangeSocialToken
+    }
+  })
+
+  // ============ Google 号池（Gmail 卡密 · 手动授权激活 Kiro）============
+  registerGooglePoolIpc({
+    userDataDir: app.getPath('userData'),
+    getMainWindow: () => mainWindow,
+    deps: {
+      buildGoogleLoginUrl: () => buildSocialLoginUrl('Google'),
+      exchangeSocialToken
     }
   })
 

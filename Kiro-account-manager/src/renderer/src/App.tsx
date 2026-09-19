@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { AccountManager } from './components/accounts'
 import { IdleManager } from './components/idle'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
-import { HomePage, AboutPage, SettingsPage, MachineIdPage, KProxyPage, ProxyPoolPage, ConfigSyncPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage, LoginPagePool } from './components/pages'
+import { HomePage, AboutPage, SettingsPage, MachineIdPage, KProxyPage, ProxyPoolPage, ConfigSyncPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage, LoginPagePool, GooglePoolPage } from './components/pages'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { TaskProgressWidget } from './components/layout/TaskProgressWidget'
@@ -294,6 +294,8 @@ function App(): React.JSX.Element {
         return <LogsPage />
       case 'loginPool':
         return <LoginPagePool />
+      case 'googlePool':
+        return <GooglePoolPage />
       case 'settings':
         return <SettingsPage />
       case 'about':

@@ -75,6 +75,56 @@ export type LoginPoolUpdate =
       }
     }
 
+/** Google 号池条目视图（含明文凭据：表格「显示明文」开关用 + 打码展示位） */
+export interface GooglePoolEntryView {
+  id: string
+  email: string
+  state: 'unused' | 'running' | 'used' | 'failed' | 'wasted'
+  failReason?: string
+  kiroEmail?: string
+  exitIp?: string
+  proxyMode?: 'api' | 'pool' | 'direct'
+  /** base32 TOTP 密钥（辅助邮箱版卡密没有） */
+  secret?: string
+  /** 辅助邮箱（无 2FA 密钥版卡密；Google 验证挑战发码到这里） */
+  recoveryEmail?: string
+  /** 辅助邮箱凭据（卡密第 4 段，仅记录展示） */
+  recoveryPassword?: string
+  country?: string
+  addedAt: number
+  takenAt?: number
+  doneAt?: number
+  password: string
+  passwordMasked: string
+  secretMasked?: string
+}
+
+/** Google 号池授权时的出口代理选项（与号池 LoginPoolBatchOptions.proxy 同构） */
+export interface GooglePoolProxyOptions {
+  enabled: boolean
+  mode?: 'pool' | 'api'
+  entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
+  strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
+  upstreamProxy?: string
+  api?: { url: string; viaProxy?: string; batchSize?: number }
+}
+
+/** Google 号池主进程 → 渲染事件（无 batch 批次态——手动授权单窗口串行） */
+export type GooglePoolUpdate =
+  | { kind: 'entry'; entry: GooglePoolEntryView }
+  | { kind: 'log'; line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string } }
+  | {
+      kind: 'result'
+      payload: {
+        entryId: string
+        email: string
+        accessToken: string
+        refreshToken: string
+        profileArn?: string
+        expiresIn?: number
+      }
+    }
+
 // Custom APIs for renderer
 const api = {
   // 打开外部链接
@@ -427,6 +477,10 @@ const api = {
   loginPoolRestoreAll: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('login-pool:restore-all')
   },
+  /** 批量删除勾选条目（running 条目跳过不删），返回实际删除数 */
+  loginPoolRemoveMany: (ids: string[]): Promise<{ success: boolean; removed: number }> => {
+    return ipcRenderer.invoke('login-pool:remove-many', ids)
+  },
   loginPoolStart: (opts: LoginPoolBatchOptions): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('login-pool:start', opts)
   },
@@ -452,6 +506,68 @@ const api = {
     ipcRenderer.on('login-pool-update', handler)
     return () => {
       ipcRenderer.removeListener('login-pool-update', handler)
+    }
+  },
+
+  // ─── Google 号池（Gmail 卡密 · 手动授权激活 Kiro）───
+  /** 全量快照：条目视图 + 授权窗口状态 + 最近日志（页面重挂恢复用） */
+  googlePoolList: (): Promise<{
+    entries: GooglePoolEntryView[]
+    running: boolean
+    logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
+  }> => {
+    return ipcRenderer.invoke('google-pool:list')
+  },
+  googlePoolAddText: (text: string): Promise<{ added: number; updated: number; bad: string[] }> => {
+    return ipcRenderer.invoke('google-pool:add-text', text)
+  },
+  googlePoolMarkWasted: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:mark-wasted', id)
+  },
+  googlePoolRestore: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:restore', id)
+  },
+  googlePoolRemove: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:remove', id)
+  },
+  googlePoolRemoveMany: (ids: string[]): Promise<{ success: boolean; removed: number }> => {
+    return ipcRenderer.invoke('google-pool:remove-many', ids)
+  },
+  googlePoolClearFinished: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:clear-finished')
+  },
+  googlePoolRestoreAll: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:restore-all')
+  },
+  /** 发起单号授权：主进程打开授权窗口；autofill=自动填邮箱/密码/2FA（默认开），挑战与授权确认人工 */
+  googlePoolAuthorize: (
+    id: string,
+    opts?: { autofill?: boolean; proxy?: GooglePoolProxyOptions }
+  ): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('google-pool:authorize', id, opts)
+  },
+  googlePoolFocusWindow: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:focus-window')
+  },
+  /** 本地算当前 6 位验证码（一键复制用；密钥不出主进程） */
+  googlePoolTotp: (
+    id: string
+  ): Promise<{ success: boolean; code?: string; remainSec?: number; error?: string }> => {
+    return ipcRenderer.invoke('google-pool:totp', id)
+  },
+  googlePoolManualCallback: (code: string, state: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:manual-callback', code, state)
+  },
+  googlePoolMarkStored: (id: string, kiroEmail: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:mark-stored', id, kiroEmail)
+  },
+  onGooglePoolUpdate: (callback: (update: GooglePoolUpdate) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, update: GooglePoolUpdate): void => {
+      callback(update)
+    }
+    ipcRenderer.on('google-pool-update', handler)
+    return () => {
+      ipcRenderer.removeListener('google-pool-update', handler)
     }
   },
 
