@@ -1,4 +1,4 @@
-// 登录窗口浏览器指纹对齐（移植自 KiroLuker browserManager/kiroPortalSession 的实践）
+// 登录窗口浏览器指纹对齐
 //
 // GitHub 登录风控（DataDome）做上百信号的一致性校验，任何一处自相矛盾都是
 // 自动化特征：UA 自称 Google Chrome 而 sec-ch-ua 品牌只有 Chromium、出口 IP

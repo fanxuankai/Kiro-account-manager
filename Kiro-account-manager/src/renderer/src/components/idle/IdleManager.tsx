@@ -7,8 +7,8 @@ import { IdleGrid } from './IdleGrid'
 import { IdleList } from './IdleList'
 import { IdleAddDialog } from './IdleAddDialog'
 import { IdleEditDialog } from './IdleEditDialog'
-import { GroupManageDialog, TagManageDialog, ExportDialog } from '../accounts'
-import { parseImportContent } from '@/lib/importParse'
+import { GroupManageDialog, TagManageDialog, ExportDialog, ImportDialog, type ImportResult } from '../accounts'
+import { type ParsedImport } from '@/lib/importParse'
 import type { Account } from '@/types/account'
 import { Loader2, Warehouse } from 'lucide-react'
 
@@ -33,6 +33,7 @@ export function IdleManager(): React.ReactNode {
   const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
   const [isFilterExpanded, setIsFilterExpanded] = useState(false)
   // 视图模式：grid（卡片，默认）/ list（紧凑列表），持久化到 localStorage（idle_ 前缀，与主界面互不干扰）
   const [viewMode, setViewMode] = useState<IdleViewMode>(() => {
@@ -47,7 +48,7 @@ export function IdleManager(): React.ReactNode {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog) return
+      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog || showImportDialog) return
       if (selectedIds.size > 0) {
         e.preventDefault()
         deselectAll()
@@ -61,6 +62,7 @@ export function IdleManager(): React.ReactNode {
     showGroupDialog,
     showTagDialog,
     showExportDialog,
+    showImportDialog,
     selectedIds,
     deselectAll
   ])
@@ -81,35 +83,32 @@ export function IdleManager(): React.ReactNode {
     setShowExportDialog(true)
   }
 
-  // 文件导入（与账号管理共用解析逻辑；数据进闲置库）
-  const handleImport = async (): Promise<void> => {
+  // 导入：打开弹窗（粘贴 / 选文件双入口，与账号管理共用解析逻辑；数据进闲置库）
+  const handleImport = (): void => {
+    setShowImportDialog(true)
+  }
+
+  // 执行导入弹窗解析结果的入库
+  const handleParsedImport = (parsed: ParsedImport): ImportResult => {
     const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
-    const groupName = currentGroupId ? (groups.get(currentGroupId)?.name ?? (isEn ? 'Ungrouped' : '未分组')) : (isEn ? 'Ungrouped' : '未分组')
-    const fileData = await window.api.importFromFile()
-
-    if (!fileData) return
-
-    const { content, format } = fileData
-
+    const groupName = currentGroupId ? groups.get(currentGroupId)?.name ?? (isEn ? 'Ungrouped' : '未分组') : (isEn ? 'Ungrouped' : '未分组')
     try {
-      const parsed = parseImportContent(content, format, currentGroupId)
+      // invalid 在 ImportDialog 内已被拦截，这里兜底返回（同时满足类型收窄）
       if (parsed.kind === 'invalid') {
-        alert(parsed.message)
-        return
+        return { ok: false, message: parsed.message }
       }
       if (parsed.kind === 'export') {
         const result = importFromExportData(parsed.data)
         const skippedInfo = result.errors.find(e => e.id === 'skipped')
         const skippedMsg = skippedInfo ? `，${skippedInfo.error}` : ''
-        alert(`导入完成：成功 ${result.success} 个${skippedMsg}`)
-        return
+        return { ok: result.success > 0, message: `导入完成：成功 ${result.success} 个${skippedMsg}` }
       }
       const result = importAccounts(parsed.items)
-      const label = parsed.format === 'kami' ? '卡密导入完成' : '导入完成'
-      alert(`${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）`)
+      const label = parsed.format === 'kami' ? '卡密导入完成' : parsed.format === 'oidc' ? 'OIDC 凭证导入完成' : '导入完成'
+      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）` }
     } catch (e) {
       console.error('Idle import error:', e)
-      alert('解析导入文件失败')
+      return { ok: false, message: '解析导入内容失败' }
     }
   }
 
@@ -265,6 +264,13 @@ export function IdleManager(): React.ReactNode {
         accounts={getExportAccounts()}
         selectedCount={selectedIds.size}
         useStore={useIdleAccountsStore}
+      />
+
+      {/* 导入对话框 */}
+      <ImportDialog
+        open={showImportDialog}
+        onClose={() => setShowImportDialog(false)}
+        onImport={handleParsedImport}
       />
     </div>
   )

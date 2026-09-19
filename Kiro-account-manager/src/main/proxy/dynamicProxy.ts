@@ -1,4 +1,4 @@
-// 动态提链代理：全局单例提链池 + 统一出口路由（主进程共享模块，对齐 KiroLuker proxyPool 形态）
+// 动态提链代理：全局单例提链池 + 统一出口路由（主进程共享模块）
 //
 // 面向 white.novproxy.com 这类白名单提链接口：GET 一次返回 N 行 IP:port 纯文本，
 // 每个端点是一个独立会话（同入口 IP 不同端口 = 不同出口 IP），按 URL 里的 time
@@ -30,7 +30,7 @@ const MAX_BATCH_ATTEMPTS = 2
 const EXIT_MAX_ATTEMPTS = 3
 /** 已用端点历史的磁盘保留条数（最近优先；端点本身约 10 分钟过期，历史只为防粘滞窗口内撞车） */
 const USED_HISTORY_MAX = 200
-/** 同一真实出口 IP 在窗口内的最大使用次数（KiroLuker 同款：同出口连续提链会被 Kiro 403） */
+/** 同一真实出口 IP 在窗口内的最大使用次数（同出口连续提链会被 Kiro 403） */
 export const MAX_USES_PER_IP = 2
 /** 出口计次窗口：24 小时 */
 const USAGE_WINDOW_MS = 24 * 60 * 60 * 1000

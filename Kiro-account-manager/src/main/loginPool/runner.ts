@@ -330,7 +330,7 @@ export class LoginPoolRunner {
     this.events = events
     // 应用内接管 kiro:// 导航：登录窗口里的授权跳转不经过 OS，不受系统层
     // 协议归属影响（Kiro IDE 同样注册了 kiro://，OS 可能把回调派给它导致
-    // 跳转链「断掉」——KiroLuker 注释里描述的同款坑）。state 不匹配的调用
+    // 跳转链「断掉」）。state 不匹配的调用
     // 一律忽略，落点统一渲染成功页。
     protocol.handle('kiro', (request) => {
       const run = this.activeRun
@@ -752,7 +752,7 @@ export class LoginPoolRunner {
 
     // 先显式建会话再开窗：setProxy 必须在 loadURL 之前完成，保证 GitHub 页面
     // 第一个请求就走池出口；partition 名不带 persist: 前缀 = 内存会话不落盘，
-    // 再显式禁 HTTP 缓存双保险（与 KiroLuker 的 browser-web partition 一致）
+    // 再显式禁 HTTP 缓存双保险
     const ses = session.fromPartition(partition, { cache: false })
     entrySession = ses
     if (proxy.kind === 'ok') {
@@ -862,7 +862,7 @@ export class LoginPoolRunner {
     const filled = { credentials: false, otp: false }
     /** Sign in 只点一次（提交后表单在慢代理下仍会滞留数秒，重复点击徒增风控特征） */
     let signinClicked = false
-    /** cookie 收割结果（KiroLuker 同款路径：授权后凭证种在 app.kiro.dev cookie，不依赖回调跳转） */
+    /** cookie 收割结果（授权后凭证种在 app.kiro.dev cookie，不依赖回调跳转） */
     let cookieCred: { accessToken: string; refreshToken: string; profileArn?: string } | null = null
     const notified = { signin: false, verify: false, authorize: false, safeLink: false }
     /** 授权实验：本号已用掉的程序攻招数（0=未攻, 2=已用完回退人工） */

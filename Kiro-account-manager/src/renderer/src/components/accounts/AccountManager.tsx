@@ -10,9 +10,10 @@ import { EditAccountDialog } from './EditAccountDialog'
 import { GroupManageDialog } from './GroupManageDialog'
 import { TagManageDialog } from './TagManageDialog'
 import { ExportDialog } from './ExportDialog'
+import { ImportDialog, type ImportResult } from './ImportDialog'
 import { Button } from '../ui'
 import type { Account } from '@/types/account'
-import { parseImportContent } from '@/lib/importParse'
+import { type ParsedImport } from '@/lib/importParse'
 import { ArrowLeft, Loader2, Users } from 'lucide-react'
 
 interface AccountManagerProps {
@@ -38,6 +39,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showExportDialog, setShowExportDialog] = useState(false)
+  const [showImportDialog, setShowImportDialog] = useState(false)
   const [isFilterExpanded, setIsFilterExpanded] = useState(false)
   // 视图模式：grid（卡片，默认）/ list（紧凑列表），持久化到 localStorage
   const [viewMode, setViewMode] = useState<AccountViewMode>(() => {
@@ -52,7 +54,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
-      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog) return
+      if (showAddDialog || editingAccount || showGroupDialog || showTagDialog || showExportDialog || showImportDialog) return
       if (selectedIds.size > 0) {
         e.preventDefault()
         deselectAll()
@@ -66,6 +68,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     showGroupDialog,
     showTagDialog,
     showExportDialog,
+    showImportDialog,
     selectedIds,
     deselectAll
   ])
@@ -86,36 +89,33 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
     setShowExportDialog(true)
   }
 
-  // 导入
-  const handleImport = async (): Promise<void> => {
-    // 文件导入归入"当前打开的分组"（activeGroupTab 为真实分组时），否则未分组
+  // 导入：打开弹窗（粘贴 / 选文件双入口，格式自动识别）
+  const handleImport = (): void => {
+    setShowImportDialog(true)
+  }
+
+  // 执行导入弹窗解析结果的入库
+  const handleParsedImport = (parsed: ParsedImport): ImportResult => {
+    // 导入归入"当前打开的分组"（activeGroupTab 为真实分组时），否则未分组
     const currentGroupId = (activeGroupTab !== 'all' && activeGroupTab !== 'ungrouped' && groups.has(activeGroupTab)) ? activeGroupTab : undefined
-    const groupName = currentGroupId ? (groups.get(currentGroupId)?.name ?? '未分组') : '未分组'
-    const fileData = await window.api.importFromFile()
-
-    if (!fileData) return
-
-    const { content, format } = fileData
-
+    const groupName = currentGroupId ? groups.get(currentGroupId)?.name ?? '未分组' : '未分组'
     try {
-      const parsed = parseImportContent(content, format, currentGroupId)
+      // invalid 在 ImportDialog 内已被拦截，这里兜底返回（同时满足类型收窄）
       if (parsed.kind === 'invalid') {
-        alert(parsed.message)
-        return
+        return { ok: false, message: parsed.message }
       }
       if (parsed.kind === 'export') {
         const result = importFromExportData(parsed.data)
         const skippedInfo = result.errors.find(e => e.id === 'skipped')
         const skippedMsg = skippedInfo ? `，${skippedInfo.error}` : ''
-        alert(`导入完成：成功 ${result.success} 个${skippedMsg}`)
-        return
+        return { ok: result.success > 0, message: `导入完成：成功 ${result.success} 个${skippedMsg}` }
       }
       const result = importAccounts(parsed.items)
-      const label = parsed.format === 'kami' ? '卡密导入完成' : '导入完成'
-      alert(`${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）`)
+      const label = parsed.format === 'kami' ? '卡密导入完成' : parsed.format === 'oidc' ? 'OIDC 凭证导入完成' : '导入完成'
+      return { ok: result.success > 0, message: `${label}：成功 ${result.success} 个，失败 ${result.failed} 个（分组：${groupName}）` }
     } catch (e) {
       console.error('Import error:', e)
-      alert('解析导入文件失败')
+      return { ok: false, message: '解析导入内容失败' }
     }
   }
 
@@ -283,6 +283,13 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
         onClose={() => setShowExportDialog(false)}
         accounts={getExportAccounts()}
         selectedCount={selectedIds.size}
+      />
+
+      {/* 导入对话框 */}
+      <ImportDialog
+        open={showImportDialog}
+        onClose={() => setShowImportDialog(false)}
+        onImport={handleParsedImport}
       />
     </div>
   )
