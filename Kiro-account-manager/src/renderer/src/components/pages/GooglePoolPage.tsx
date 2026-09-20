@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button, Card, CardContent, CardHeader, CardTitle, Badge, Input, Label } from '../ui'
 import {
   Play, Plus, Ban, ExternalLink, Loader2, EyeOff, Eye, Search,
-  ChevronRight, Terminal, Trash2, Undo2, X, ClipboardCopy, KeyRound
+  ChevronRight, Terminal, Trash2, Undo2, X, ClipboardCopy, KeyRound, CheckCircle2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAccountsStore } from '@/store/accounts'
@@ -595,7 +595,18 @@ export function GooglePoolPage(): React.ReactNode {
                           <Play className="h-3 w-3" /> {e.state === 'failed' ? '重试' : '授权'}
                         </Button>
                       )}
-                      {e.state !== 'running' && e.state !== 'wasted' && (
+                      {e.state !== 'running' && e.state !== 'used' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                          title="已在「添加账号」等其他途径入库？标记为已用，防止重复授权"
+                          onClick={() => { void window.api.googlePoolMarkUsed(e.id).then(() => refreshList()) }}
+                        >
+                          <CheckCircle2 className="h-3 w-3" /> 已用
+                        </Button>
+                      )}
+                      {e.state !== 'running' && (
                         <Button
                           size="sm"
                           variant="outline"

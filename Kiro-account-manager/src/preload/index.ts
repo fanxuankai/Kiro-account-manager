@@ -465,6 +465,10 @@ const api = {
   loginPoolMarkWasted: (id: string): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('login-pool:mark-wasted', id)
   },
+  /** 手动标记已用（账号已经其他途径入库，防重复激活） */
+  loginPoolMarkUsed: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('login-pool:mark-used', id)
+  },
   loginPoolRestore: (id: string): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('login-pool:restore', id)
   },
@@ -523,6 +527,10 @@ const api = {
   },
   googlePoolMarkWasted: (id: string): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('google-pool:mark-wasted', id)
+  },
+  /** 手动标记已用（账号已经其他途径入库，防重复授权） */
+  googlePoolMarkUsed: (id: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:mark-used', id)
   },
   googlePoolRestore: (id: string): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('google-pool:restore', id)

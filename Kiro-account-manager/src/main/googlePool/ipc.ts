@@ -68,6 +68,15 @@ export function registerGooglePoolIpc(opts: {
     return { success: true }
   })
 
+  // 手动标记已用：账号已从「添加账号」等其他途径入库，拨离授权队列防重复
+  ipcMain.handle('google-pool:mark-used', (_e, id: string) => {
+    const entry = store.get(id)
+    if (entry && entry.state !== 'running') store.patch(id, { state: 'used' })
+    const fresh = store.get(id)
+    if (fresh) send({ kind: 'entry', entry: store.toView(fresh) })
+    return { success: true }
+  })
+
   ipcMain.handle('google-pool:restore', (_e, id: string) => {
     store.restore(id)
     const entry = store.get(id)

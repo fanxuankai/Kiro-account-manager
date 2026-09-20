@@ -643,6 +643,17 @@ export function LoginPagePool(): React.ReactNode {
                           <RotateCcw className="h-3 w-3" /> 重试
                         </Button>
                       )}
+                      {e.state !== 'running' && e.state !== 'used' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px] gap-1 rounded-md border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                          title="已在「添加账号」等其他途径入库？标记为已用，防止批次重复激活"
+                          onClick={() => { void window.api.loginPoolMarkUsed(e.id).then(() => refreshList()) }}
+                        >
+                          <CheckCircle2 className="h-3 w-3" /> 已用
+                        </Button>
+                      )}
                       {e.state !== 'running' && (
                         <Button
                           size="sm"

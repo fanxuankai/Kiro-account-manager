@@ -429,6 +429,8 @@ interface KiroApi {
   }>
   loginPoolAddText: (text: string) => Promise<{ added: number; updated: number; bad: string[] }>
   loginPoolMarkWasted: (id: string) => Promise<{ success: boolean }>
+  /** 手动标记已用（账号已经其他途径入库，防重复激活） */
+  loginPoolMarkUsed: (id: string) => Promise<{ success: boolean }>
   loginPoolRestore: (id: string) => Promise<{ success: boolean }>
   loginPoolRemove: (id: string) => Promise<{ success: boolean }>
   loginPoolClearFinished: () => Promise<{ success: boolean }>
@@ -533,6 +535,8 @@ interface KiroApi {
   }>
   googlePoolAddText: (text: string) => Promise<{ added: number; updated: number; bad: string[] }>
   googlePoolMarkWasted: (id: string) => Promise<{ success: boolean }>
+  /** 手动标记已用（账号已经其他途径入库，防重复授权） */
+  googlePoolMarkUsed: (id: string) => Promise<{ success: boolean }>
   googlePoolRestore: (id: string) => Promise<{ success: boolean }>
   googlePoolRemove: (id: string) => Promise<{ success: boolean }>
   googlePoolRemoveMany: (ids: string[]) => Promise<{ success: boolean; removed: number }>

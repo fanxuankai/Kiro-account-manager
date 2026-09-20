@@ -85,6 +85,15 @@ export function registerLoginPoolIpc(opts: {
     return { success: true }
   })
 
+  // 手动标记已用：账号已从「添加账号」等其他途径入库，拨离取号队列防重复激活
+  ipcMain.handle('login-pool:mark-used', (_e, id: string) => {
+    const entry = store.get(id)
+    if (entry && entry.state !== 'running') store.patch(id, { state: 'used' })
+    const fresh = store.get(id)
+    if (fresh) send({ kind: 'entry', entry: store.toView(fresh) })
+    return { success: true }
+  })
+
   ipcMain.handle('login-pool:restore', (_e, id: string) => {
     store.restore(id)
     const entry = store.get(id)
