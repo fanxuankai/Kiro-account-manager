@@ -144,8 +144,9 @@ interface OverageItem {
 let _links: SubscriptionLink[] = []
 let _linksNotify: ((links: SubscriptionLink[]) => void) | null = null
 
+// 倒排：新链接插到列表最前（最前面的才是要去付款的），旧链接沉底
 export function appendSubscriptionLink(link: SubscriptionLink): void {
-  _links = [..._links, link]
+  _links = [link, ..._links]
   _linksNotify?.(_links)
 }
 
@@ -278,7 +279,8 @@ export function SubscriptionPage() {
           planName: sub.paymentLinkPlan
         })
       }
-      return restored.length ? [...prev, ...restored] : prev
+      // 倒排：恢复出的待付款链接放最前
+      return restored.length ? [...restored, ...prev] : prev
     })
     // 仅挂载时执行一次；setLinks 是组件内稳定包装
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -480,14 +482,15 @@ export function SubscriptionPage() {
     setIsFetching(true)
 
     // 初始化状态：只重置本批次账号的条目，保留其他账号已获取的链接；条目更新一律按 accountId 定位
+    // 倒排：本批次（要去付款的）插到列表最前，旧链接沉底
     const batchIds = new Set(upgradeableAccounts.map(a => a!.id))
     setLinks(prev => [
-      ...prev.filter(l => !batchIds.has(l.accountId)),
       ...upgradeableAccounts.map(acc => ({
         accountId: acc!.id,
         email: acc!.email || 'Unknown',
         status: 'pending' as const
-      }))
+      })),
+      ...prev.filter(l => !batchIds.has(l.accountId))
     ])
     setSelectedLinkIds(prev => {
       const next = new Set(prev)
@@ -642,7 +645,7 @@ export function SubscriptionPage() {
     setQuickPickCursor(start + picked.length)
   }
 
-  // 批量导入外部链接：解析后以 success 状态追加进列表（按 url 去重）；
+  // 批量导入外部链接：解析后以 success 状态插到列表最前（按 url 去重）；
   // 邮箱能对上库内账号的链接会绑回真实账号并回写 paymentLink（徽章点亮 + 重启可恢复）
   const handleImportLinks = (text: string): number => {
     const parsed = parseImportedLinks(text)
@@ -688,13 +691,14 @@ export function SubscriptionPage() {
     if (added.length > 0) {
       setLinks(prev => {
         const next = [...prev]
+        const fresh: SubscriptionLink[] = []
         for (const row of added) {
           const i = next.findIndex(l => l.accountId === row.accountId)
-          // 同账号已有一行时整行替换（换新链接），否则追加
+          // 同账号已有一行时整行替换（换新链接，位置不动），否则作为新链接插到最前（倒排）
           if (i >= 0) next[i] = row
-          else next.push(row)
+          else fresh.push(row)
         }
-        return next
+        return fresh.length > 0 ? [...fresh, ...next] : next
       })
     }
     return added.length
