@@ -99,12 +99,20 @@ export interface ProxyPoolConfig {
   autoValidateConcurrency: number
   /** 上游中转代理（可选）：配合"目标代理要求非大陆来源 IP"的场景串联代理链；支持 http/socks5 */
   upstreamProxy?: string
-  /** 动态提链源接口地址：批量提取一次性端点（号池注册/批量订阅取链接可选接入）；空=未配置 */
+  /** 动态出口源类型：extract-api=白名单提链接口（默认）；kiro-pool=Kiro IP 池服务（socks5 固定入口+登录锁） */
+  dynamicSourceType?: 'extract-api' | 'kiro-pool'
+  /** 提链源接口地址：批量提取一次性端点（号池注册/批量订阅取链接可选接入）；空=未配置 */
   dynamicApiUrl?: string
   /** 提链端点与提链请求的本地中转；留空自动取系统代理 */
   dynamicViaProxy?: string
   /** 单次批量提取数量（num 参数），1~20 */
   dynamicBatchSize?: number
+  /** kiro-pool：服务 API 地址，如 http://host:4721（socks5 代理 = 同主机 4722 端口） */
+  kiroPoolApiBase?: string
+  /** kiro-pool：平台管理员账号（= socks5 代理账号） */
+  kiroPoolUsername?: string
+  /** kiro-pool：平台登录密码（= socks5 代理密码） */
+  kiroPoolPassword?: string
 }
 
 export const DEFAULT_PROXY_POOL_CONFIG: ProxyPoolConfig = {
@@ -116,9 +124,13 @@ export const DEFAULT_PROXY_POOL_CONFIG: ProxyPoolConfig = {
   testUrl: 'https://api.ipify.org?format=json',
   testTimeoutMs: 8000,
   autoValidateIntervalMin: 0,
+  dynamicSourceType: 'extract-api',
   dynamicApiUrl: '',
   dynamicViaProxy: '',
   dynamicBatchSize: 5,
+  kiroPoolApiBase: '',
+  kiroPoolUsername: '',
+  kiroPoolPassword: '',
   autoValidateConcurrency: 5,
   upstreamProxy: ''
 }

@@ -91,6 +91,14 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
   const isEn = t('common.unknown') === 'Unknown'
   const StatusOptions = isEn ? StatusOptionsEn : StatusOptionsZh
   const [showAllDomains, setShowAllDomains] = useState(false)
+  // 使用量两个输入框的本地文本：回显原文不经 ×100 换算，避免浮点长尾；
+  // filter 里对应值被清成 undefined（点「清除筛选」等）时输入框随之清空
+  const [usageMinText, setUsageMinText] = useState(() =>
+    filter.usageMin !== undefined ? String(Number((filter.usageMin * 100).toFixed(2))) : ''
+  )
+  const [usageMaxText, setUsageMaxText] = useState(() =>
+    filter.usageMax !== undefined ? String(Number((filter.usageMax * 100).toFixed(2))) : ''
+  )
 
   const stats = getStats()
 
@@ -310,15 +318,17 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
                 max="100"
                 placeholder="min"
                 className="w-14 px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
-                value={filter.usageMin ?? ''}
-                onChange={(e) =>
+                value={filter.usageMin === undefined ? '' : usageMinText}
+                onChange={(e) => {
+                  // 回显用户输入原文：÷100 存、×100 显的浮点往返会产生 8.000000000000002 长尾并打断输入
+                  setUsageMinText(e.target.value)
                   setRangeFilter(
                     'usageMin',
                     'usageMax',
-                    e.target.value ? Number(e.target.value) / 100 : undefined,
+                    e.target.value === '' ? undefined : Number(e.target.value) / 100,
                     filter.usageMax
                   )
-                }
+                }}
               />
               <span className="text-muted-foreground text-xs">-</span>
               <input
@@ -327,15 +337,16 @@ export function AccountFilterPanel({ useStore = useAccountsStore }: AccountFilte
                 max="100"
                 placeholder="max"
                 className="w-14 px-1.5 py-0.5 text-xs rounded-md border border-[var(--glass-border)] bg-[var(--glass-bg-subtle)] backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-primary/40"
-                value={filter.usageMax !== undefined ? filter.usageMax * 100 : ''}
-                onChange={(e) =>
+                value={filter.usageMax === undefined ? '' : usageMaxText}
+                onChange={(e) => {
+                  setUsageMaxText(e.target.value)
                   setRangeFilter(
                     'usageMin',
                     'usageMax',
                     filter.usageMin,
-                    e.target.value ? Number(e.target.value) / 100 : undefined
+                    e.target.value === '' ? undefined : Number(e.target.value) / 100
                   )
-                }
+                }}
               />
               <span className="text-xs text-muted-foreground">%</span>
             </div>

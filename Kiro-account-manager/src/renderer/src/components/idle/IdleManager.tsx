@@ -207,6 +207,7 @@ export function IdleManager(): React.ReactNode {
           onManageTags={() => setShowTagDialog(true)}
           isFilterExpanded={isFilterExpanded}
           onToggleFilter={() => setIsFilterExpanded(!isFilterExpanded)}
+          onCloseFilter={() => setIsFilterExpanded(false)}
         />
       </header>
 

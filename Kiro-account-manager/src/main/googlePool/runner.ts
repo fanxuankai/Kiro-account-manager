@@ -26,6 +26,7 @@ import {
   onDynamicSourceLog,
   resolveViaProxy
 } from '../proxy/dynamicProxy'
+import { acquireKiroPoolExit } from '../proxy/kiroPool'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
 import { resolveProxyUrl } from '../proxy/proxyBridge'
 import { injectProxySession } from '../loginPool/proxySession'
@@ -62,6 +63,10 @@ export interface GoogleAuthorizeOptions {
   /** 自动填表（默认开）：拟人节奏填邮箱/密码，2FA 密钥版自动填 TOTP；
    *  验证码/手机验证等挑战与 OAuth 确认仍由人工处理 */
   autofill?: boolean
+  /** 批次模式号间冷却秒数；'rand' = 每次随机 60–180s */
+  batchIntervalSec?: number | 'rand'
+  /** 勾选批次：只跑这些 id（须为未用状态）；缺省跑全部未用 */
+  ids?: string[]
   proxy?: LoginPoolProxyOptions
 }
 
@@ -79,6 +84,7 @@ export interface GooglePoolResultPayload {
 export interface GooglePoolEvents {
   onEntry: (entry: GooglePoolEntryView) => void
   onLog: (line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }) => void
+  onBatch: (state: { active: boolean; paused: boolean; unused: number }) => void
   onResult: (payload: GooglePoolResultPayload) => void
 }
 
@@ -87,6 +93,8 @@ const PROXY_MAX_ATTEMPTS = 3
 /** 授权窗口空闲超时：手动登录慢（密码 + 2FA + 可能的挑战页），
  *  每次页面导航续命——用户只要还在操作就不会被掐 */
 const IDLE_TIMEOUT_MS = 10 * 60_000
+/** 批次（挂机）模式超时：无人值守，无解挑战等不了人——缩短到 4 分钟跳下一个 */
+const BATCH_IDLE_TIMEOUT_MS = 4 * 60_000
 /** 用户关窗后等系统协议兜底回调的宽限（OAuth 完成页可能 self-close 后回调才到） */
 const CLOSED_GRACE_MS = 10_000
 /** 四路拦截命中后统一等回调结果的上限 */
@@ -207,8 +215,14 @@ export class GooglePoolRunner {
   private events: GooglePoolEvents
   private opts: GoogleAuthorizeOptions = {}
 
-  /** 是否有授权窗口在跑（同一时刻只允许一个，串行手动授权） */
+  /** 是否有授权窗口在跑（单号授权或批次中的当前号） */
   running = false
+  /** 批次进行中（冷却间隙无窗口时也为 true） */
+  batchActive = false
+  paused = false
+
+  /** 勾选批次的待跑队列（null = 全部未用模式） */
+  private batchQueue: string[] | null = null
 
   /** 当前授权窗口（观察按钮置前用） */
   private win: BrowserWindow | null = null
@@ -237,11 +251,18 @@ export class GooglePoolRunner {
   private emitEntry(entry: GooglePoolEntry): void {
     this.events.onEntry(this.store.toView(entry))
   }
+  private emitBatch(): void {
+    this.events.onBatch({
+      active: this.batchActive,
+      paused: this.paused,
+      unused: this.batchQueue ? this.batchQueue.length : this.store.countUnused()
+    })
+  }
 
-  /** 发起单号授权（已有窗口在跑则拒绝）；打开授权窗口等人工登录 */
+  /** 发起单号授权（批次进行中或已有窗口在跑则拒绝）；打开授权窗口等人工/自动登录 */
   authorize(id: string, opts?: GoogleAuthorizeOptions): void {
-    if (this.running) {
-      this.log('warn', '已有授权窗口在执行，请先完成或关闭当前窗口')
+    if (this.running || this.batchActive) {
+      this.log('warn', '已有授权窗口/批次在执行，请先完成或暂停当前任务')
       return
     }
     const entry = this.store.get(id)
@@ -258,6 +279,86 @@ export class GooglePoolRunner {
         this.running = false
       }
     })()
+  }
+
+  /** 批次：串行授权全部未用号（或勾选的 ids），号间冷却（挂机模式——无人值守，超时缩短、失败跳号） */
+  startBatch(opts?: GoogleAuthorizeOptions): void {
+    if (this.batchActive || this.running) {
+      this.log('warn', '已有批次/授权窗口在执行')
+      return
+    }
+    // 勾选模式：只保留当前仍为未用的 id；空队列=没得跑
+    this.batchQueue = opts?.ids ? opts.ids.filter((id) => this.store.get(id)?.state === 'unused') : null
+    const total = this.batchQueue ? this.batchQueue.length : this.store.countUnused()
+    if (total === 0) {
+      this.log('warn', '没有可跑的未用账号')
+      this.batchQueue = null
+      return
+    }
+    if (opts) this.opts = opts
+    this.batchActive = true
+    this.paused = false
+    this.log(
+      'info',
+      `批次开始：${this.batchQueue ? `勾选 ${total} 个` : `未用 ${total} 个`}，号间冷却 ${this.opts.batchIntervalSec === 'rand' ? '随机 60–180s' : (this.opts.batchIntervalSec ?? 60) + 's'}；无解挑战超时 4 分钟跳下一个`
+    )
+    this.emitBatch()
+    void this.runBatch()
+  }
+
+  pauseBatch(): void {
+    if (!this.batchActive || this.paused) return
+    this.paused = true
+    this.log('info', '批次暂停：当前号跑完后不再取下一号')
+    this.emitBatch()
+  }
+
+  resumeBatch(): void {
+    if (!this.batchActive || !this.paused) return
+    this.paused = false
+    this.log('info', '批次继续')
+    this.emitBatch()
+  }
+
+  private async runBatch(): Promise<void> {
+    while (this.batchActive && !this.paused) {
+      // 勾选模式：按队列取（id 已非未用则跳过取下一个）；全部模式：取任意未用
+      let entry: GooglePoolEntry | null = null
+      if (this.batchQueue) {
+        while (!entry && this.batchQueue!.length) {
+          entry = this.store.takeNextById(this.batchQueue!.shift()!)
+        }
+      } else {
+        entry = this.store.takeNextUnused()
+      }
+      if (!entry) break
+      this.emitEntry(entry)
+      const left = this.batchQueue ? this.batchQueue.length : this.store.countUnused()
+      this.log('info', `${entry.email} 开始授权（还剩 ${left} 个待跑）`)
+      this.running = true
+      try {
+        await this.runEntry(entry, true)
+      } finally {
+        this.running = false
+      }
+      this.emitBatch()
+      if (!this.batchActive || this.paused) break
+      const cd =
+        this.opts.batchIntervalSec === 'rand'
+          ? randInt(60, 180)
+          : (this.opts.batchIntervalSec ?? 60)
+      this.log('info', `冷却 ${cd}s 后取下一个号（可暂停）`)
+      for (let left = cd; left > 0 && this.batchActive && !this.paused; left--) {
+        await sleep(1000)
+      }
+    }
+    if (!this.paused) {
+      this.log('ok', '批次完成：队列已跑完')
+    }
+    this.batchActive = false
+    this.paused = false
+    this.batchQueue = null
+    this.emitBatch()
   }
 
   /** 系统协议兜底：窗口内四路拦截漏掉、OS 把 kiro:// 转回本应用时，渲染进程转发到这里 */
@@ -280,7 +381,7 @@ export class GooglePoolRunner {
 
   // ── 单号授权：窗口 + 回调等待 ──
 
-  private async runEntry(entry: GooglePoolEntry): Promise<void> {
+  private async runEntry(entry: GooglePoolEntry, batchMode = false): Promise<void> {
     const partition = `googlepool-${Date.now()}-${randomBytes(3).toString('hex')}`
     const login = this.deps.buildGoogleLoginUrl()
 
@@ -344,6 +445,10 @@ export class GooglePoolRunner {
     this.win = win
     // 页面级指纹对齐（CDP：navigator.language、Intl 时区、client hints、WebRTC）。
     // 失败不阻断登录，退回请求头级的旧行为
+    // CDP 页面级对齐必须保留（含直连）：除时区/语言外，更重要的是
+    // Emulation.setUserAgentOverride 会把 Electron 内核的 UA/品牌（navigator.userAgentData、
+    // UA-CH 头里的 "Electron"）洗成纯 Chrome——跳过它 Google 会直接出
+    // 「此浏览器或应用可能不安全」拦截页（2026-09-20 实测）。
     const fpApplied = await applyWindowFingerprint(win, fp)
     if (fpApplied.ok) {
       this.log('info', `${entry.email} 指纹已对齐：${describeFingerprint(fp)}`)
@@ -405,10 +510,11 @@ export class GooglePoolRunner {
       // 由主循环后的统一宽限等待兜住
     })
 
-    // 空闲超时：每次页面导航（用户在操作）续命
-    let deadline = Date.now() + IDLE_TIMEOUT_MS
+    // 空闲超时：每次页面导航（用户在操作）续命；批次模式缩短（无人值守）
+    const idleTimeoutMs = batchMode ? BATCH_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS
+    let deadline = Date.now() + idleTimeoutMs
     win.webContents.on('did-navigate', () => {
-      deadline = Date.now() + IDLE_TIMEOUT_MS
+      deadline = Date.now() + idleTimeoutMs
     })
     win.webContents.on('render-process-gone', (_e, details) => {
       this.log(
@@ -423,6 +529,8 @@ export class GooglePoolRunner {
     // 自动填表去重标记：同页重复探测不重复填/点
     const filled = { email: false, password: false, recovery: false }
     let otpFilled = false
+    /** 授权确认页已程序点击（防重复点） */
+    let consentClicked = false
     /** TOTP 填错重试上限（码错页面会清空重出，重填最多 2 次） */
     let otpAttempts = 0
     /** 人工提醒与错误日志去重 */
@@ -446,7 +554,11 @@ export class GooglePoolRunner {
         await sleep(1000)
         if (windowClosed) break
         if (Date.now() > deadline) {
-          this.fail(entry, 'timeout', '授权窗口长时间无操作（10 分钟），已停止')
+          this.fail(
+            entry,
+            'timeout',
+            `授权窗口长时间无操作（${batchMode ? '4 分钟（批次模式）' : '10 分钟'}），已停止`
+          )
           aborted = true
           break
         }
@@ -492,7 +604,7 @@ export class GooglePoolRunner {
                 this.log('warn', `${entry.email} 页面报错：${detect.error}，请在窗口中人工处理`)
                 this.focusWindow()
               }
-              deadline = Date.now() + IDLE_TIMEOUT_MS
+              deadline = Date.now() + idleTimeoutMs
               // 2FA 码错会清空重出输入框——允许重填（受 otpAttempts 限制）
               if (detect.totp && otpAttempts >= 1) otpFilled = false
               continue
@@ -505,7 +617,7 @@ export class GooglePoolRunner {
                 dumpedUrl = detect.url
                 void this.dumpChallengePage(win, entry, detect.url)
               }
-              deadline = Date.now() + IDLE_TIMEOUT_MS
+              deadline = Date.now() + idleTimeoutMs
               continue
             }
 
@@ -540,7 +652,7 @@ export class GooglePoolRunner {
               if (entry.secret) {
                 if (otpAttempts >= 2) {
                   notifyOnce('otp-limit', 'warn', `${entry.email} 2FA 码多次未过，请人工处理`)
-                  deadline = Date.now() + IDLE_TIMEOUT_MS
+                  deadline = Date.now() + idleTimeoutMs
                   continue
                 }
                 otpAttempts += 1
@@ -564,7 +676,7 @@ export class GooglePoolRunner {
                   'warn',
                   `${entry.email} 需要 2FA 验证（辅助邮箱版）：请到辅助邮箱 ${entry.recoveryEmail || ''} 收码后填入窗口（等待不计时）`
                 )
-                deadline = Date.now() + IDLE_TIMEOUT_MS
+                deadline = Date.now() + idleTimeoutMs
               }
               continue
             }
@@ -600,7 +712,7 @@ export class GooglePoolRunner {
                 }
               } else {
                 notifyOnce('recovery-manual', 'warn', `${entry.email} 需要确认辅助邮箱但卡密未提供，请人工填写`)
-                deadline = Date.now() + IDLE_TIMEOUT_MS
+                deadline = Date.now() + idleTimeoutMs
               }
               continue
             }
@@ -619,13 +731,38 @@ export class GooglePoolRunner {
                 dumpedUrl = detect.url
                 void this.dumpChallengePage(win, entry, detect.url)
               }
-              deadline = Date.now() + IDLE_TIMEOUT_MS
+              deadline = Date.now() + idleTimeoutMs
               continue
             }
 
-            // OAuth 确认页（consent）：人工点继续（与 GitHub 号池授权页策略一致）
-            if (detect.url.includes('/signin/oauth/consent')) {
-              notifyOnce('consent', 'info', `${entry.email} 请在窗口中点「继续」完成授权确认`)
+            // OAuth 确认页：/signin/oauth/id（确认账号+继续按钮，最常见落点）或
+            // /signin/oauth/consent（权限同意）。程序点「继续/允许」，点不到降人工并存档
+            if (
+              (detect.url.includes('/signin/oauth/id') ||
+                detect.url.includes('/signin/oauth/consent')) &&
+              !consentClicked
+            ) {
+              const clicked = await this.clickCenter(win, [
+                { text: '继续' },
+                { text: 'continue' },
+                { text: '允许' },
+                { text: 'allow' },
+                { text: 'accept' },
+                // 兜底：确认页的账号卡片本身可点（选此账号继续）
+                { text: entry.email }
+              ])
+              if (clicked) {
+                consentClicked = true
+                lastSubmitAt = Date.now()
+                this.log('ok', `${entry.email} 已自动点击授权确认`)
+              } else {
+                notifyOnce('consent', 'warn', `${entry.email} 授权确认页未能自动点击，请人工点「继续」`)
+                if (detect.url !== dumpedUrl) {
+                  dumpedUrl = detect.url
+                  void this.dumpChallengePage(win, entry, detect.url)
+                }
+                deadline = Date.now() + idleTimeoutMs
+              }
             }
           }
         }
@@ -654,10 +791,15 @@ export class GooglePoolRunner {
       const cb = await Promise.race([callbackPromise, sleep(waitMs).then(() => null)])
       if (!cb) {
         if (windowClosed) {
-          // 用户中途关窗 = 正常取消，拨回未用而不是标失败
-          this.store.patch(entry.id, { state: 'unused', failReason: '窗口已关闭（可再次授权）' })
-          this.emitEntry(this.store.get(entry.id)!)
-          this.log('warn', `${entry.email} 授权窗口被关闭，条目已拨回未用`)
+          if (batchMode) {
+            // 批次模式关窗标失败（回未用会被批次立刻重取，死循环）；单号模式属正常取消拨回未用
+            this.fail(entry, 'window-closed', '授权窗口被关闭（批次模式标失败，可恢复后重跑）')
+          } else {
+            // 用户中途关窗 = 正常取消，拨回未用而不是标失败
+            this.store.patch(entry.id, { state: 'unused', failReason: '窗口已关闭（可再次授权）' })
+            this.emitEntry(this.store.get(entry.id)!)
+            this.log('warn', `${entry.email} 授权窗口被关闭，条目已拨回未用`)
+          }
         } else {
           this.fail(entry, 'timeout', '等待授权回调超时')
         }
@@ -866,11 +1008,36 @@ export class GooglePoolRunner {
     }
   }
 
-  /** 提链 API 模式：从全局共享池消费一个一次性端点（同入口不同端口 = 不同出口） */
+  /** 动态出口 API 模式：extract-api=共享池一次性端点；kiro-pool=登录锁冻结出口 + 固定 socks5 入口 */
   private async setupEntryProxyFromApi(
     entry: GooglePoolEntry,
     cfg: LoginPoolProxyOptions
   ): Promise<EntryProxySetup> {
+    if (cfg.api?.source === 'kiro-pool') {
+      const kiro = cfg.api.kiroPool
+      if (!kiro?.apiBase?.trim() || !kiro.username?.trim() || !kiro.password) {
+        return { kind: 'failed', error: 'Kiro IP 池服务未配置完整（地址/账号/密码），未直连' }
+      }
+      try {
+        const route = await acquireKiroPoolExit(kiro, (level, msg) =>
+          this.log(level, `${entry.email} ${msg}`)
+        )
+        return {
+          kind: 'ok',
+          proxyRules: route.proxyRules,
+          exitIp: route.exitIp,
+          latencyMs: route.latencyMs,
+          sourceKey: route.sourceKey,
+          mode: 'api',
+          release: route.release
+        }
+      } catch (err) {
+        return {
+          kind: 'failed',
+          error: `${err instanceof Error ? err.message : String(err)}，未直连`
+        }
+      }
+    }
     const resolved = {
       url: cfg.api?.url || '',
       viaProxy: resolveViaProxy(cfg.api?.viaProxy),

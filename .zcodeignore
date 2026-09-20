@@ -1,0 +1,84 @@
+kiro网页解码分析/2cee0feff6bd91b6cb21.js
+kiro网页解码分析/5fc29c15ad252c0cd4c1.js
+kiro网页解码分析/6b22da50a77e5b477c7c.js
+kiro网页解码分析/36f7e9e4dc3a99855283.js
+kiro网页解码分析/61a6485cd7fd5f4edf23.js
+kiro网页解码分析/70c9ee36465cebc8ae79.js
+kiro网页解码分析/079b243476c702d0c8bc.js
+kiro网页解码分析/80d1c66fc0410347940b.js
+kiro网页解码分析/656ffd87a448474eb636a22ae4e6db975f9c64f25b154ae38035db04fbb3677d.js
+kiro网页解码分析/3858af3eb422fc9ff23d.js
+kiro网页解码分析/4230973e1dcf99c7f8f8.js
+kiro网页解码分析/auth.js
+kiro网页解码分析/b84fa5923c23578c3ccc.js
+kiro网页解码分析/be0bf1555584b8a5f7fd.js
+kiro网页解码分析/bfe741df70a85ebf5586.js
+kiro网页解码分析/c7884003de1bad6da336.js
+kiro网页解码分析/cf876673391b3559eb63.js
+kiro网页解码分析/client-kiro-internal.js
+kiro网页解码分析/d78cf78333f69e09aaea.js
+kiro网页解码分析/dbd685f96aa7960412bb.js
+kiro网页解码分析/eb09d127e3c32cae3e2a.js
+kiro网页解码分析/efa5af3cf91b1c5f80a3.js
+kiro网页解码分析/main.js
+kiro网页解码分析/main.js.back
+kiro网页解码分析/panorama-nav-init.js
+kiro网页解码分析/sdk.js
+kiro网页解码分析/shortbread.js
+kiro网页解码分析/vendor.js
+test/kiro_client_auth.py
+test/kiro_full_auth.py
+test/kiro_oauth_login.py
+test/kiro_sso_auth.py
+test/kiro_usage_api.py
+test/__pycache__/kiro_full_auth.cpython-39.pyc
+test/__pycache__/kiro_sso_auth.cpython-39.pyc
+docs/CodeWhispererRuntimeService API.md
+docs/Kiro API.md
+kiro_token.json
+Kiro.code-workspace
+Kiro register.code-workspace
+Kiro-account-manager/.kiro
+Kiro register
+
+# 抓包数据（可能含 token/cookie 等敏感信息，不入库）
+docs/mail.chatgpt.org.uk.har
+docs/mail.chatgpt.org.uk/
+
+# 编辑器/工具本地目录
+.zcode/
+
+# macOS 系统文件
+.DS_Store
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

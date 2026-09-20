@@ -44,12 +44,13 @@ import {
 } from './proxy'
 import { switchSubscriptionToFree, checkRenewalStatus } from './proxy/stripePortal'
 import { openAccountPortal } from './kiroPortal'
-import { openPaymentWindow } from './payment/paymentWindow'
+import { openPaymentWindow, fillCardDetails } from './payment/paymentWindow'
 import { generateBillingAddress, listProvinces, isValidProvince } from './payment/addressGen'
 import { getSystemProxy, safeCreateProxyAgent } from './proxy/systemProxy'
 import { resolveProxyUrl, shutdownProxyBridge } from './proxy/proxyBridge'
 import { probeExitIp } from './proxy/proxyTools'
 import { acquireDynamicExit, getSharedDynamicSource, resolveViaProxy } from './proxy/dynamicProxy'
+import { acquireKiroPoolExit } from './proxy/kiroPool'
 import { proxyLogStore, interceptConsole } from './proxy/logger'
 import { registerIPCHandlers as registerRegistrationHandlers } from './registration/ipc-handlers'
 import { registerProxyPoolIpcHandlers } from './ipc/proxyPool'
@@ -4813,12 +4814,18 @@ app.whenReady().then(async () => {
       provider?: string,
       authMethod?: string,
       accountId?: string,
-      dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number },
+      dynamicProxy?: {
+        source?: 'extract-api' | 'kiro-pool'
+        url: string
+        viaProxy?: string
+        batchSize?: number
+        kiroPool?: { apiBase: string; username: string; password: string }
+      },
       exitProxyUrl?: string
     ) => {
-      // 提链出口路由（可选）：探测确认后返回，用完释放本地中继
+      // 动态出口路由（可选）：探测确认后返回，用完释放（提链=停本地中继；IP 池=解锁登录锁）
       let releaseExit: (() => Promise<void>) | null = null
-      // 本条链接实际使用的提链出口 IP（回传给订阅页展示；直连/账号代理时为空）
+      // 本条链接实际使用的出口 IP（回传给订阅页展示；直连/账号代理时为空）
       let exitIp: string | undefined
       try {
         const account = {
@@ -4830,7 +4837,15 @@ app.whenReady().then(async () => {
           provider,
           authMethod
         } as ProxyAccount
-        if (dynamicProxy?.url) {
+        if (dynamicProxy?.source === 'kiro-pool' && dynamicProxy.kiroPool?.apiBase?.trim()) {
+          // Kiro IP 池出口：上锁冻结出口 IP → 固定 socks5 入口（中继剥凭据）→ 探测
+          const route = await acquireKiroPoolExit(dynamicProxy.kiroPool, (level, msg) =>
+            console.log(`[订阅IP池 ${level}] ${msg}`)
+          )
+          releaseExit = route.release
+          exitIp = route.exitIp
+          account.proxyUrl = route.proxyRules
+        } else if (dynamicProxy?.url) {
           const cfg = {
             url: dynamicProxy.url,
             viaProxy: resolveViaProxy(dynamicProxy.viaProxy),
@@ -4963,6 +4978,21 @@ app.whenReady().then(async () => {
           success: false,
           error: error instanceof Error ? error.message : 'Failed to open payment window'
         }
+      }
+    }
+  )
+
+  // IPC: 快捷填入卡信息（粘贴解析后传入；内存直填支付窗口，不落盘不保存）
+  ipcMain.handle(
+    'payment-fill-card',
+    async (_event, card: { number: string; expiry: string; cvc: string }) => {
+      try {
+        if (!/^\d{12,19}$/.test(card?.number || '')) return { success: false, error: '卡号格式不正确' }
+        if (!/^\d{4}$/.test(card?.expiry || '')) return { success: false, error: '有效期格式不正确' }
+        if (!/^\d{3,4}$/.test(card?.cvc || '')) return { success: false, error: '安全码格式不正确' }
+        return await fillCardDetails(card)
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Failed to fill card' }
       }
     }
   )

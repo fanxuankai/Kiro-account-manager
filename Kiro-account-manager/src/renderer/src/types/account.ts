@@ -176,11 +176,6 @@ export interface AccountGroup {
 }
 
 /**
- * 账号生命周期档位（纯推导，无状态字段）：分类逻辑见 lib/accountLifecycle.ts
- */
-export type AccountLifecycle = 'unused' | 'pendingPayment' | 'subscribed' | 'deprecated'
-
-/**
  * 筛选条件
  */
 export interface AccountFilter {
@@ -199,7 +194,6 @@ export interface AccountFilter {
   createdAtMax?: number // 添加日期上限（时间戳 ms，含当天全天）
   bannedOnly?: boolean // 仅显示封禁账号
   pendingPaymentOnly?: boolean // 仅显示待付款（发过升级支付链接且账号仍为 Free，未升级 = 未付款）
-  lifecycle?: AccountLifecycle // 生命周期档位（与分组/其他筛选叠加生效）
 }
 
 /**

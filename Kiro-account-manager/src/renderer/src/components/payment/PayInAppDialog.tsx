@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '../ui'
+import { parseCardInfo, maskCardInfo, type CardInfo } from '../../lib/cardParse'
 import {
   X,
   CreditCard,
   RefreshCw,
+  ClipboardPaste,
   ExternalLink,
   Loader2,
   CheckCircle,
@@ -47,6 +49,10 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     provinceEn: string
   } | null>(null)
   const [opening, setOpening] = useState(false)
+  const [cardText, setCardText] = useState('')
+  const [cardFilled, setCardFilled] = useState(false)
+  // 粘贴即解析：卡号/有效期(0934、09/34、9/34、MMYYYY)/安全码，特征识别不依赖行序
+  const card: CardInfo | null = parseCardInfo(cardText)
   const [phase, setPhase] = useState<Phase>('idle')
   const [opened, setOpened] = useState(false)
 
@@ -65,6 +71,8 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     refreshAddress(localStorage.getItem(PROVINCE_LS_KEY) || undefined)
     setPhase('idle')
     setOpened(false)
+    setCardText('')
+    setCardFilled(false)
   }, [target, refreshAddress])
 
   // 支付窗口状态回流（只认当前账号）
@@ -112,6 +120,15 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
       setPhase('idle')
     } else {
       setPhase('error')
+    }
+  }
+
+  const handleFillCard = async (): Promise<void> => {
+    if (!card) return
+    const res = await window.api.paymentFillCard(card)
+    if (res.success) {
+      setCardText('')
+      setCardFilled(true)
     }
   }
 
@@ -182,6 +199,52 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
               </div>
             )}
+          </div>
+
+          {/* 卡信息快捷填入：粘贴解析后拟人填入支付窗口（仅内存，不落盘不保存） */}
+          <div className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <ClipboardPaste className="h-3.5 w-3.5" />
+                {isEn ? 'Card quick fill (paste, not saved)' : '卡信息快捷填入（粘贴解析，不保存）'}
+              </span>
+              {card && (
+                <span className="text-[10px] font-mono text-green-600">{maskCardInfo(card)}</span>
+              )}
+            </div>
+            <textarea
+              value={cardText}
+              onChange={(e) => { setCardText(e.target.value); setCardFilled(false) }}
+              rows={3}
+              spellCheck={false}
+              placeholder={isEn
+                ? 'Paste card info, one per line:\n4234 1234 1234 9562\n09/34 (or 0934)\n123'
+                : '粘贴卡信息，每行一项：\n4234 1234 1234 9562\n09/34（或 0934）\n123'}
+              className="w-full rounded-lg border border-foreground/15 bg-[var(--glass-bg)] px-3 py-2 text-xs font-mono focus-visible:outline-none focus-visible:border-primary/50 resize-none"
+            />
+            {cardText && !card && (
+              <p className="text-[10px] text-amber-600 mt-1.5">
+                {isEn ? 'Cannot parse card number / expiry / CVC yet' : '还没识别出完整的卡号 / 有效期 / 安全码'}
+              </p>
+            )}
+            {cardFilled && (
+              <p className="text-[10px] text-green-600 mt-1.5">
+                {isEn ? 'Card filled — verify in the payment window, then click Pay' : '卡信息已填入，请在支付窗口核对后点击 Pay'}
+              </p>
+            )}
+            <div className="flex justify-end mt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                disabled={!card || !opened || cardFilled}
+                onClick={() => void handleFillCard()}
+                title={!opened ? (isEn ? 'Open the payment window first' : '请先打开支付窗口') : undefined}
+              >
+                <CreditCard className="h-3 w-3 mr-1" />
+                {isEn ? 'Fill card' : '填入卡信息'}
+              </Button>
+            </div>
           </div>
 
           {/* 状态区 */}

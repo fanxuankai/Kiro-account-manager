@@ -44,6 +44,7 @@ interface IdleToolbarProps {
   onManageTags: () => void
   isFilterExpanded: boolean
   onToggleFilter: () => void
+  onCloseFilter: () => void
 }
 
 // 闲置库工具栏：与账号管理工具栏视觉一致，去掉保活/刷新/检查/测活/代理绑定等联网入口，
@@ -58,7 +59,8 @@ export function IdleToolbar({
   onManageGroups,
   onManageTags,
   isFilterExpanded,
-  onToggleFilter
+  onToggleFilter,
+  onCloseFilter
 }: IdleToolbarProps): React.ReactNode {
   const {
     filter,
@@ -86,6 +88,8 @@ export function IdleToolbar({
 
   const groupMenuRef = useRef<HTMLDivElement>(null)
   const tagMenuRef = useRef<HTMLDivElement>(null)
+  // 筛选气泡容器（含触发按钮）：点外部 / Esc 收起
+  const filterMenuRef = useRef<HTMLDivElement>(null)
 
   // 点击外部关闭菜单
   useEffect(() => {
@@ -96,10 +100,25 @@ export function IdleToolbar({
       if (tagMenuRef.current && !tagMenuRef.current.contains(e.target as Node)) {
         setShowTagMenu(false)
       }
+      // 已收起时再调一次是 no-op；wrapper 含按钮，点按钮不会误触（交给 toggle 切换）
+      if (filterMenuRef.current && !filterMenuRef.current.contains(e.target as Node)) {
+        onCloseFilter()
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Esc 收起筛选面板
+  useEffect(() => {
+    if (!isFilterExpanded) return
+    const handleEsc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onCloseFilter()
+    }
+    document.addEventListener('keydown', handleEsc)
+    return () => document.removeEventListener('keydown', handleEsc)
+  }, [isFilterExpanded, onCloseFilter])
 
   // 获取选中账户的分组状态（useMemo 缓存，避免每次渲染重算 O(N)）
   const selectedGroupStatus = useMemo(() => {
@@ -606,7 +625,7 @@ export function IdleToolbar({
             {privacyMode ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
           {/* 筛选按钮与气泡 */}
-          <div className="relative">
+          <div className="relative" ref={filterMenuRef}>
             <Button
               variant={isFilterExpanded ? "default" : "ghost"}
               size="icon"

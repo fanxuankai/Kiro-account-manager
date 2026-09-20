@@ -27,6 +27,7 @@ import {
   penalizeExitUse,
   resolveViaProxy
 } from '../proxy/dynamicProxy'
+import { KIRO_POOL_SOURCE_PREFIX, acquireKiroPoolExit } from '../proxy/kiroPool'
 import { maskProxyUrl, probeExitIp, proxyUrlHasCredentials } from '../proxy/proxyTools'
 import { resolveProxyUrl } from '../proxy/proxyBridge'
 import { injectProxySession } from './proxySession'
@@ -106,12 +107,20 @@ export interface LoginPoolProxyOptions {
   upstreamProxy?: string
   /** api 模式配置 */
   api?: {
+    /** 动态出口源：extract-api=提链接口（默认）；kiro-pool=Kiro IP 池服务（socks5 固定入口+登录锁） */
+    source?: 'extract-api' | 'kiro-pool'
     /** 提链接口地址（num 参数会被批量值覆盖） */
     url: string
     /** 本地可信中转；留空自动取系统代理 */
     viaProxy?: string
     /** 单次批量提取数量，默认 5 */
     batchSize?: number
+    /** kiro-pool 源配置（source=kiro-pool 时生效） */
+    kiroPool?: {
+      apiBase: string
+      username: string
+      password: string
+    }
   }
 }
 
@@ -593,14 +602,41 @@ export class LoginPoolRunner {
   }
 
   /**
-   * 提链 API 模式：每个号从全局共享池消费一个一次性端点（同入口不同端口 = 不同出口），
-   * 走共享的「端点→中继→探测→计次」出口路由；提链接口本身不可用则直接失败该号
-   * （内部已重试，换端点无意义）。
+   * 动态出口 API 模式：按来源分流——
+   *   extract-api=每个号从全局共享池消费一个一次性端点（同入口不同端口 = 不同出口），
+   *     走共享的「端点→中继→探测→计次」出口路由；提链接口本身不可用则直接失败该号
+   *     （内部已重试，换端点无意义）。
+   *   kiro-pool=上登录锁冻结出口 IP → 固定 socks5 入口探测；窗口关闭 release 时解锁。
    */
   private async setupEntryProxyFromApi(
     entry: PoolEntry,
     cfg: LoginPoolProxyOptions
   ): Promise<EntryProxySetup> {
+    if (cfg.api?.source === 'kiro-pool') {
+      const kiro = cfg.api.kiroPool
+      if (!kiro?.apiBase?.trim() || !kiro.username?.trim() || !kiro.password) {
+        return { kind: 'failed', error: 'Kiro IP 池服务未配置完整（地址/账号/密码），该号已跳过，未直连' }
+      }
+      try {
+        const route = await acquireKiroPoolExit(kiro, (level, msg) =>
+          this.log(level, `${entry.username} ${msg}`)
+        )
+        return {
+          kind: 'ok',
+          proxyRules: route.proxyRules,
+          exitIp: route.exitIp,
+          latencyMs: route.latencyMs,
+          sourceKey: route.sourceKey,
+          mode: 'api',
+          release: route.release
+        }
+      } catch (err) {
+        return {
+          kind: 'failed',
+          error: `${err instanceof Error ? err.message : String(err)}，该号已跳过，未直连`
+        }
+      }
+    }
     const resolved = {
       url: cfg.api?.url || '',
       viaProxy: resolveViaProxy(cfg.api?.viaProxy),
@@ -642,11 +678,16 @@ export class LoginPoolRunner {
   }
 
   /** GitHub 反滥用拒绝（"You can't perform that action at this time."）后的出口止损：
-   *  api 出口补计一次 24h 用量（立即用满，本轮不再分配给任何号）；
+   *  api 提链出口补计一次 24h 用量（立即用满，本轮不再分配给任何号）；
+   *  kiro-pool 出口换绑由服务端锁计数驱动，客户端只记日志不动计数；
    *  pool 条目拉黑 30 分钟；直连无出口可换，由重试前的冷却等待缓解。 */
   private penalizeEgress(proxy: EntryProxySetup): void {
     if (proxy.kind !== 'ok') return
     if (proxy.mode === 'api') {
+      if (proxy.sourceKey.startsWith(KIRO_POOL_SOURCE_PREFIX)) {
+        this.log('warn', `出口 ${proxy.exitIp} 被 GitHub 风控拒绝（IP 池出口换绑由服务端驱动，客户端不干预）`)
+        return
+      }
       penalizeExitUse(proxy.exitIp)
       this.log('warn', `出口 ${proxy.exitIp} 被 GitHub 风控拒绝，已计满 24h 用量，本轮不再分配`)
     } else {

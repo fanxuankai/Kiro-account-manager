@@ -286,20 +286,32 @@ export function LoginPagePool(): React.ReactNode {
   // ── 操作 ──
 
   // 出口代理参数：pool 模式只取「启用 + 验活可用」的池条目快照；
-  // api 模式带代理池页维护的提链源配置（num 由主进程按批量值覆盖）
+  // api 模式带代理池页维护的动态出口源配置（extract-api 的 num 由主进程按批量值覆盖）
   const buildProxyOpts = useCallback(() => {
     if (proxyMode === 'off') return undefined
     if (proxyMode === 'api') {
+      const apiCommon = {
+        url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
+        viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
+        batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
+      }
       return {
         enabled: true,
         mode: 'api' as const,
         entries: [] as Array<{ url: string; usedCount: number; latencyMs?: number }>,
         strategy: proxyPoolConfig.strategy,
-        api: {
-          url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
-          viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
-          batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
-        }
+        api:
+          (proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool'
+            ? {
+                source: 'kiro-pool' as const,
+                ...apiCommon,
+                kiroPool: {
+                  apiBase: (proxyPoolConfig.kiroPoolApiBase || '').trim(),
+                  username: (proxyPoolConfig.kiroPoolUsername || '').trim(),
+                  password: proxyPoolConfig.kiroPoolPassword || ''
+                }
+              }
+            : apiCommon
       }
     }
     const usable = Array.from(proxyPool.values()).filter((p) => p.enabled && p.status === 'alive')
@@ -442,7 +454,14 @@ export function LoginPagePool(): React.ReactNode {
               <option value="off">关闭</option>
               <option value="pool">代理池{usablePoolCount > 0 ? `（${usablePoolCount} 可用）` : '（池空）'}</option>
               <option value="api">
-                提链 API{!(proxyPoolConfig.dynamicApiUrl || '').trim() ? '（未配置）' : ''}
+                {(proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool' ? 'IP 池服务' : '提链 API'}
+                {((proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool'
+                  ? !(proxyPoolConfig.kiroPoolApiBase || '').trim() ||
+                    !(proxyPoolConfig.kiroPoolUsername || '').trim() ||
+                    !proxyPoolConfig.kiroPoolPassword
+                  : !(proxyPoolConfig.dynamicApiUrl || '').trim())
+                  ? '（未配置）'
+                  : ''}
               </option>
             </select>
           </div>

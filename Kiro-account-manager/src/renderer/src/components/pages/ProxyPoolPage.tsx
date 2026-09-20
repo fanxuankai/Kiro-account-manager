@@ -367,6 +367,49 @@ export function ProxyPoolPage(): React.ReactNode {
     }
   }, [proxyPool, proxyPoolConfig.upstreamProxy])
 
+  // Kiro IP 池测试连接状态
+  const [kiroTesting, setKiroTesting] = useState(false)
+  const [kiroTestResult, setKiroTestResult] = useState<
+    | {
+        success: true
+        exitIp: string
+        latencyMs: number
+        lockCount?: number
+        lockThreshold?: number
+        warnings: string[]
+      }
+    | { success: false; error: string }
+    | null
+  >(null)
+
+  const runKiroPoolTest = useCallback(async () => {
+    const apiBase = proxyPoolConfig.kiroPoolApiBase?.trim() || ''
+    const username = proxyPoolConfig.kiroPoolUsername?.trim() || ''
+    const password = proxyPoolConfig.kiroPoolPassword || ''
+    if (!apiBase || !username || !password) return
+    setKiroTesting(true)
+    setKiroTestResult(null)
+    try {
+      const res = await window.api.proxyPoolTestKiroPool({ apiBase, username, password })
+      if (res.success) {
+        setKiroTestResult({
+          success: true,
+          exitIp: res.exitIp ?? '?',
+          latencyMs: res.latencyMs ?? 0,
+          lockCount: res.lockCount,
+          lockThreshold: res.lockThreshold,
+          warnings: res.warnings ?? []
+        })
+      } else {
+        setKiroTestResult({ success: false, error: res.error || '未知错误' })
+      }
+    } catch (err) {
+      setKiroTestResult({ success: false, error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setKiroTesting(false)
+    }
+  }, [proxyPoolConfig.kiroPoolApiBase, proxyPoolConfig.kiroPoolUsername, proxyPoolConfig.kiroPoolPassword])
+
   const proxies = useMemo(() => Array.from(proxyPool.values()), [proxyPool])
   const poolHealth = useMemo(() => computePoolHealth(proxies), [proxies])
 
@@ -800,57 +843,160 @@ export function ProxyPoolPage(): React.ReactNode {
         </CardContent>
       </Card>
 
-      {/* 动态提链源：一次性端点的批量提取配置（与上方静态池条目互不影响） */}
+      {/* 动态出口源：号池/批量订阅「api 出口」模式的数据源（与上方静态池条目互不影响） */}
       <Card className="hover-lift">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Link2 className="h-4 w-4 text-primary" />
-            {isEn ? 'Dynamic Extract Source' : '动态提链源'}
+            {isEn ? 'Dynamic Exit Source' : '动态出口源'}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-[11px] text-muted-foreground leading-relaxed">
-            {isEn
-              ? 'Batch-extract one-time endpoints from a whitelist API (plain-text IP:port per line, e.g. novproxy). Consumers opt in: login-pool windows and batch subscription link fetching, one endpoint each. Independent of the static entries above.'
-              : '从白名单提链接口批量提取一次性端点（纯文本每行一个 IP:port，如 novproxy）。号池注册、批量订阅获取链接可选接入，每个窗口/链接消费一个独立出口；与上方静态池条目互不影响。'}
-          </p>
           <div className="space-y-1">
-            <Label className="text-xs">{isEn ? 'Extract API URL' : '提链接口地址'}</Label>
-            <Input
-              value={proxyPoolConfig.dynamicApiUrl || ''}
-              onChange={(e) => setProxyPoolConfig({ dynamicApiUrl: e.target.value })}
-              placeholder="https://white.example.com/white/api?region=US&num=1&time=10&format=1&type=txt"
-              className="h-8 text-xs font-mono"
-            />
-            <p className="text-[11px] text-muted-foreground">
-              {isEn
-                ? 'num is overridden by batch size below; time (minutes) sets endpoint TTL; region etc. stay as written.'
-                : 'num 会按下方提取数量覆盖；time（分钟）决定端点有效期；region 等参数按 URL 原样生效。'}
-            </p>
+            <Label className="text-xs">{isEn ? 'Source type' : '来源类型'}</Label>
+            <select
+              value={proxyPoolConfig.dynamicSourceType || 'extract-api'}
+              onChange={(e) =>
+                setProxyPoolConfig({ dynamicSourceType: e.target.value as 'extract-api' | 'kiro-pool' })
+              }
+              className="h-8 w-full max-w-sm rounded-lg border border-input bg-background px-2 text-xs"
+            >
+              <option value="extract-api">{isEn ? 'Whitelist extract API (one-time endpoints)' : '白名单提链接口（一次性端点）'}</option>
+              <option value="kiro-pool">{isEn ? 'Kiro IP pool service (fixed socks5 + login locks)' : 'Kiro IP 池服务（固定 socks5 + 登录锁）'}</option>
+            </select>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">{isEn ? 'Local relay' : '本地中转'}</Label>
-              <Input
-                value={proxyPoolConfig.dynamicViaProxy || ''}
-                onChange={(e) => setProxyPoolConfig({ dynamicViaProxy: e.target.value })}
-                placeholder={isEn ? 'empty = system proxy' : '留空=自动取系统代理'}
-                className="h-8 text-xs font-mono"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">{isEn ? 'Batch size (num)' : '提取数量（num）'}</Label>
-              <Input
-                type="number" min={1} max={20}
-                value={proxyPoolConfig.dynamicBatchSize ?? 5}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10)
-                  if (!isNaN(v) && v >= 1 && v <= 20) setProxyPoolConfig({ dynamicBatchSize: v })
-                }}
-                className="h-8 text-xs"
-              />
-            </div>
-          </div>
+          {(proxyPoolConfig.dynamicSourceType || 'extract-api') === 'extract-api' ? (
+            <>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                {isEn
+                  ? 'Batch-extract one-time endpoints from a whitelist API (plain-text IP:port per line, e.g. novproxy). Consumers opt in: login-pool windows and batch subscription link fetching, one endpoint each.'
+                  : '从白名单提链接口批量提取一次性端点（纯文本每行一个 IP:port，如 novproxy）。号池注册、批量订阅获取链接可选接入，每个窗口/链接消费一个独立出口。'}
+              </p>
+              <div className="space-y-1">
+                <Label className="text-xs">{isEn ? 'Extract API URL' : '提链接口地址'}</Label>
+                <Input
+                  value={proxyPoolConfig.dynamicApiUrl || ''}
+                  onChange={(e) => setProxyPoolConfig({ dynamicApiUrl: e.target.value })}
+                  placeholder="https://white.example.com/white/api?region=US&num=1&time=10&format=1&type=txt"
+                  className="h-8 text-xs font-mono"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {isEn
+                    ? 'num is overridden by batch size below; time (minutes) sets endpoint TTL; region etc. stay as written.'
+                    : 'num 会按下方提取数量覆盖；time（分钟）决定端点有效期；region 等参数按 URL 原样生效。'}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">{isEn ? 'Local relay' : '本地中转'}</Label>
+                  <Input
+                    value={proxyPoolConfig.dynamicViaProxy || ''}
+                    onChange={(e) => setProxyPoolConfig({ dynamicViaProxy: e.target.value })}
+                    placeholder={isEn ? 'empty = system proxy' : '留空=自动取系统代理'}
+                    className="h-8 text-xs font-mono"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">{isEn ? 'Batch size (num)' : '提取数量（num）'}</Label>
+                  <Input
+                    type="number" min={1} max={20}
+                    value={proxyPoolConfig.dynamicBatchSize ?? 5}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10)
+                      if (!isNaN(v) && v >= 1 && v <= 20) setProxyPoolConfig({ dynamicBatchSize: v })
+                    }}
+                    className="h-8 text-xs"
+                  />
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                {isEn
+                  ? 'The socks5 proxy runs on the current exit IP (returned by the IP API, rotates with server-side rebinding): socks5://username:password@<exitIP>:4722. Every proxied operation is wrapped in a login lock (lock before, unlock after); while held the server never rotates, so requests cannot be cut mid-flight. After N locks (all released) the server rotates automatically.'
+                  : 'socks5 服务在当前出口 IP 上（由查 IP 接口返回，随服务端换绑自动换主机）：socks5://账号:密码@<出口IP>:4722。每个走此代理的操作整体包在登录锁里（先 lock 后 unlock），持锁期间服务端不换 IP、请求不会中途被断；累计 N 把锁全部释放后服务端自动换绑。'}
+              </p>
+              <div className="space-y-1">
+                <Label className="text-xs">{isEn ? 'Service API base' : '服务 API 地址'}</Label>
+                <Input
+                  value={proxyPoolConfig.kiroPoolApiBase || ''}
+                  onChange={(e) => setProxyPoolConfig({ kiroPoolApiBase: e.target.value })}
+                  placeholder="http://<服务器IP>:4721"
+                  className="h-8 text-xs font-mono"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  {isEn
+                    ? 'socks5 proxy auto-connects to <exitIP>:4722 from the IP API; do NOT use the control server as proxy.'
+                    : 'socks5 代理自动连「查 IP 接口返回的出口IP:4722」；注意不能用控制服务器当代理（出口会是服务器本机 IP）。'}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">{isEn ? 'Admin username' : '管理员账号'}</Label>
+                  <Input
+                    value={proxyPoolConfig.kiroPoolUsername || ''}
+                    onChange={(e) => setProxyPoolConfig({ kiroPoolUsername: e.target.value })}
+                    placeholder={isEn ? 'platform admin account = proxy username' : '平台管理员账号（= 代理账号）'}
+                    className="h-8 text-xs font-mono"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">{isEn ? 'Login password' : '登录密码'}</Label>
+                  <Input
+                    type="password"
+                    value={proxyPoolConfig.kiroPoolPassword || ''}
+                    onChange={(e) => setProxyPoolConfig({ kiroPoolPassword: e.target.value })}
+                    placeholder={isEn ? 'platform password = proxy password' : '平台登录密码（= 代理密码）'}
+                    className="h-8 text-xs font-mono"
+                    autoComplete="new-password"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm" variant="outline"
+                  className="h-8 px-3 text-xs"
+                  disabled={
+                    kiroTesting ||
+                    !proxyPoolConfig.kiroPoolApiBase?.trim() ||
+                    !proxyPoolConfig.kiroPoolUsername?.trim() ||
+                    !proxyPoolConfig.kiroPoolPassword
+                  }
+                  onClick={() => void runKiroPoolTest()}
+                  title={isEn ? 'Full drill: query IP → lock → probe exit → unlock (consumes one lock count)' : '全链路演练：查 IP → 上锁 → 探测出口 → 解锁（消耗服务端一次锁计数）'}
+                >
+                  {kiroTesting
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Activity className="h-3.5 w-3.5" />}
+                  <span className="ml-1">{isEn ? 'Test connection' : '测试连接'}</span>
+                </Button>
+                {kiroTestResult?.success && (
+                  <span className="text-[11px] text-green-600 dark:text-green-400">
+                    {isEn ? 'Exit IP ' : '出口 '}
+                    <span className="font-mono">{kiroTestResult.exitIp}</span>
+                    （{kiroTestResult.latencyMs}ms
+                    {kiroTestResult.lockCount !== undefined && kiroTestResult.lockThreshold !== undefined
+                      ? isEn
+                        ? ` · lock ${kiroTestResult.lockCount}/${kiroTestResult.lockThreshold}`
+                        : ` · 锁 ${kiroTestResult.lockCount}/${kiroTestResult.lockThreshold}`
+                      : ''}）
+                  </span>
+                )}
+                {kiroTestResult && !kiroTestResult.success && (
+                  <span className="text-[11px] text-red-600 dark:text-red-400 break-all">{kiroTestResult.error}</span>
+                )}
+              </div>
+              {kiroTestResult?.success && kiroTestResult.warnings.length > 0 && (
+                <div className="text-[11px] text-amber-600 dark:text-amber-400 space-y-0.5">
+                  {kiroTestResult.warnings.map((w, i) => (
+                    <div key={i} className="break-all">⚠ {w}</div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
 

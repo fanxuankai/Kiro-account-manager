@@ -451,12 +451,25 @@ export function SubscriptionPage() {
     setExitMode(mode)
     localStorage.setItem('sublink_exit_mode', mode)
   }
+  // api 出口的来源就绪判断 + 配置快照（extract-api=提链接口；kiro-pool=IP 池服务）
+  const dynamicSourceIsKiro = (proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool'
+  const dynamicApiReady = dynamicSourceIsKiro
+    ? !!(proxyPoolConfig.kiroPoolApiBase || '').trim() &&
+      !!(proxyPoolConfig.kiroPoolUsername || '').trim() &&
+      !!proxyPoolConfig.kiroPoolPassword
+    : !!(proxyPoolConfig.dynamicApiUrl || '').trim()
   const dynamicProxyCfg =
-    exitMode === 'api' && (proxyPoolConfig.dynamicApiUrl || '').trim()
+    exitMode === 'api' && dynamicApiReady
       ? {
+          source: (proxyPoolConfig.dynamicSourceType || 'extract-api') as 'extract-api' | 'kiro-pool',
           url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
           viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
-          batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
+          batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5)),
+          kiroPool: {
+            apiBase: (proxyPoolConfig.kiroPoolApiBase || '').trim(),
+            username: (proxyPoolConfig.kiroPoolUsername || '').trim(),
+            password: proxyPoolConfig.kiroPoolPassword || ''
+          }
         }
       : undefined
   // pool 模式的轮换源：启用 + 验活可用的池条目（含 hy2）。
@@ -1765,10 +1778,10 @@ export function SubscriptionPage() {
                       ? `Proxy pool (${usablePool.length} usable)`
                       : `代理池（轮换，${usablePool.length} 条可用）`}
                   </option>
-                  <option value="api" disabled={!(proxyPoolConfig.dynamicApiUrl || '').trim()}>
+                  <option value="api" disabled={!dynamicApiReady}>
                     {isEn
-                      ? 'Dynamic extract endpoints'
-                      : '提链出口'}
+                      ? (dynamicSourceIsKiro ? 'Kiro IP pool exit' : 'Dynamic extract endpoints')
+                      : (dynamicSourceIsKiro ? 'IP 池出口' : '提链出口')}
                   </option>
                 </select>
               </div>

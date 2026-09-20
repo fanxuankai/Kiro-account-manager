@@ -68,19 +68,21 @@ export class ChainProxyRelay {
   private server: net.Server | null = null
   /** 跟踪所有活跃的入站连接，stop() 时强制销毁，避免 server.close() 等 Keep-Alive 超时（~60s）*/
   private sockets = new Set<net.Socket>()
-  private readonly upstream: ParsedChainProxy
+  private readonly upstream: ParsedChainProxy | null
   private readonly target: ParsedChainProxy
   private readonly log: (m: string) => void
   port = 0
 
   constructor(upstreamUrl: string, targetUrl: string, log?: (m: string) => void) {
-    const up = parseChainProxy(upstreamUrl)
+    // 空上游 = 无中转：直连目标入口（目标可以是 http 或 socks 代理，见 dialChain）
+    const trimmedUpstream = (upstreamUrl || '').trim()
+    const up = trimmedUpstream ? parseChainProxy(trimmedUpstream) : null
+    if (trimmedUpstream && !up) throw new Error(`上游中转代理无效: ${upstreamUrl}`)
     const tg = parseChainProxy(targetUrl)
-    if (!up) throw new Error(`上游中转代理无效: ${upstreamUrl}`)
     if (!tg) throw new Error(`目标代理无效: ${targetUrl}`)
     this.upstream = up
     this.target = tg
-    this.log = log || ((): void => {})
+    this.log = log || ((): void => undefined)
   }
 
   /** 启动本地中继，返回可直接作为代理使用的 http://127.0.0.1:port */
@@ -151,37 +153,87 @@ export class ChainProxyRelay {
     })
   }
 
-  /** 经上游中转连到目标代理入口，再在该连接上对目标代理做 CONNECT 抵达最终目标 */
+  /** 抵达最终目标：先连到目标代理入口（无上游=直连；有上游=经上游 CONNECT/socks），
+   *  再按目标协议完成最后一跳——http 目标发 CONNECT，socks 目标做 SOCKS5(4) 握手 */
   private async dialChain(host: string, port: number): Promise<net.Socket> {
     const sock = await this.connectViaUpstream(this.target.host, this.target.port)
     try {
+      if (this.target.protocol === 'socks5' || this.target.protocol === 'socks4') {
+        return await this.socksHandshakeOver(sock, host, port)
+      }
       const resp = await this.sendConnectRequest(sock, host, port, this.target)
       if (resp.status !== 200) {
         throw new Error(this.formatConnectError('目标代理', resp))
       }
+      return sock
     } catch (err) {
       sock.destroy()
       throw err
     }
-    return sock
   }
 
   private connectViaUpstream(host: string, port: number): Promise<net.Socket> {
+    if (!this.upstream) return this.connectDirect(host, port)
     if (this.upstream.protocol === 'socks5' || this.upstream.protocol === 'socks4') {
       return this.connectViaSocks(host, port)
     }
     return this.connectViaHttpUpstream(host, port)
   }
 
+  /** 无上游：直接 TCP 连目标代理入口 */
+  private connectDirect(host: string, port: number): Promise<net.Socket> {
+    return new Promise((resolve, reject) => {
+      const sock = net.connect(port, host)
+      sock.setTimeout(20000)
+      sock.once('timeout', () => { sock.destroy(); reject(new Error('目标代理连接超时')) })
+      sock.once('error', reject)
+      sock.once('connect', () => {
+        sock.setTimeout(0)
+        sock.setNoDelay(true)
+        resolve(sock)
+      })
+    })
+  }
+
+  /** 在已连到目标入口的 socket 上完成 SOCKS5(4) 握手（带目标账密），抵达最终目标。
+   *  与 connectViaSocks 不同：这里 socket 是现成的（可能是经上游中转的隧道），握手完成即可用 */
+  private socksHandshakeOver(sock: net.Socket, host: string, port: number): Promise<net.Socket> {
+    const t = this.target
+    return SocksClient.createConnection({
+      existing_socket: sock,
+      proxy: {
+        host: t.host,
+        port: t.port,
+        type: t.protocol === 'socks4' ? 4 : 5,
+        userId: t.username,
+        password: t.password
+      },
+      command: 'connect',
+      destination: { host, port },
+      timeout: 20000
+    }).then(({ socket }) => {
+      // socks 包返回的 socket 默认开启了 30s timeout，会在空闲后触发 'end'，导致我们误判为"被对端关闭"
+      socket.setTimeout(0)
+      socket.setNoDelay(true)
+      socket.setKeepAlive(true, 30000)
+      return socket
+    })
+  }
+
   private connectViaHttpUpstream(host: string, port: number): Promise<net.Socket> {
     return new Promise((resolve, reject) => {
-      const sock = net.connect(this.upstream.port, this.upstream.host)
+      const up = this.upstream
+      if (!up) {
+        reject(new Error('connectViaHttpUpstream 无上游可用'))
+        return
+      }
+      const sock = net.connect(up.port, up.host)
       sock.setTimeout(20000)
       sock.once('timeout', () => { sock.destroy(); reject(new Error('上游中转连接超时')) })
       sock.once('error', reject)
       sock.once('connect', () => {
         sock.setNoDelay(true)
-        this.sendConnectRequest(sock, host, port, this.upstream)
+        this.sendConnectRequest(sock, host, port, up)
           .then((resp) => {
             sock.setTimeout(0)
             if (resp.status === 200) resolve(sock)
@@ -194,13 +246,18 @@ export class ChainProxyRelay {
 
   private connectViaSocks(host: string, port: number): Promise<net.Socket> {
     return new Promise((resolve, reject) => {
+      const up = this.upstream
+      if (!up) {
+        reject(new Error('connectViaSocks 无上游可用'))
+        return
+      }
       void SocksClient.createConnection({
         proxy: {
-          host: this.upstream.host,
-          port: this.upstream.port,
-          type: this.upstream.protocol === 'socks4' ? 4 : 5,
-          userId: this.upstream.username,
-          password: this.upstream.password
+          host: up.host,
+          port: up.port,
+          type: up.protocol === 'socks4' ? 4 : 5,
+          userId: up.username,
+          password: up.password
         },
         command: 'connect',
         destination: { host, port },
@@ -317,8 +374,10 @@ export class ChainProxyRelay {
   async diagnose(testHost = 'www.gstatic.com', testPort = 443): Promise<ChainDiagnose> {
     const result: ChainDiagnose = { upstreamReachable: false, targetReachable: false }
     const t0 = Date.now()
+    // 无上游（直连目标模式）：第一层直接探测目标入口
+    const up = this.upstream ?? this.target
     try {
-      await this.tcpProbe(this.upstream.host, this.upstream.port, 8000)
+      await this.tcpProbe(up.host, up.port, 8000)
       result.upstreamReachable = true
       result.upstreamRtMs = Date.now() - t0
     } catch (err) {

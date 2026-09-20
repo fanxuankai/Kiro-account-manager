@@ -176,7 +176,10 @@ const FILL_RULES: Record<string, string[]> = {
   line1: ['#billingAddressLine1', 'input[autocomplete*="address-line1" i]', 'input[name="billingAddressLine1"]'],
   city: ['#billingLocality', 'input[autocomplete*="address-level2" i]', 'input[name="billingLocality"]'],
   district: ['#billingDependentLocality', 'input[autocomplete*="address-level3" i]', 'input[name="billingDependentLocality"]'],
-  zip: ['#billingPostalCode', 'input[autocomplete*="postal-code" i]', 'input[name="billingPostalCode"]']
+  zip: ['#billingPostalCode', 'input[autocomplete*="postal-code" i]', 'input[name="billingPostalCode"]'],
+  cardNumber: ['#cardNumber', 'input[autocomplete="cc-number"]'],
+  cardExpiry: ['#cardExpiry', 'input[autocomplete="cc-exp"]'],
+  cardCvc: ['#cardCvc', 'input[autocomplete="cc-csc"]']
 }
 
 // ─── 状态机 ─────────────────────────────────────────────────────────
@@ -422,6 +425,36 @@ async function fillTextFields(win: BrowserWindow, address: BillingAddress): Prom
     .executeJavaScript(`(${PAY_FILL_JS})(${JSON.stringify({ fields })})`, true)
     .catch(() => null)) as Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }> | null
   console.log('[Payment] 填文本字段 →', JSON.stringify(r))
+}
+
+/**
+ * 快捷填入卡信息（用户粘贴解析后传入；仅内存使用不落盘）。
+ * 窗口须已打开。有效期按 4 位 MMYY 逐字符输入，由页面自行格式化成 MM/YY。
+ * 返回各字段填写结果供 UI 判读。
+ */
+export async function fillCardDetails(card: {
+  number: string
+  expiry: string
+  cvc: string
+}): Promise<{ success: boolean; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }>; error?: string }> {
+  const win = paymentWindow
+  if (!win || win.isDestroyed()) return { success: false, error: 'payment-window-not-open' }
+  const fields = [
+    { key: 'cardNumber', rules: FILL_RULES.cardNumber, value: card.number },
+    { key: 'cardExpiry', rules: FILL_RULES.cardExpiry, value: card.expiry },
+    { key: 'cardCvc', rules: FILL_RULES.cardCvc, value: card.cvc }
+  ]
+  try {
+    const results = (await win.webContents.executeJavaScript(
+      `(${PAY_FILL_JS})(${JSON.stringify({ fields })})`,
+      true
+    )) as Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }>
+    console.log('[Payment] 填卡信息 →', JSON.stringify(results))
+    return { success: results.every((r) => r.ok), results }
+  } catch (e) {
+    console.log('[Payment] 填卡信息异常:', String(e).slice(0, 120))
+    return { success: false, error: String(e).slice(0, 120) }
+  }
 }
 
 /** 复核全部地址字段非空（filled 上报依据） */

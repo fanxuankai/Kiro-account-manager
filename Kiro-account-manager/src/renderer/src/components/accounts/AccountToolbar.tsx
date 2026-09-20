@@ -3,14 +3,9 @@ import { Button, Badge } from '../ui'
 import { useAccountsStore } from '@/store/accounts'
 import { useTranslation } from '@/hooks/useTranslation'
 import { AccountFilterPanel } from './AccountFilter'
-import { toRgba } from './_helpers'
+import { toRgba, isPendingPayment } from './_helpers'
 import { cn } from '@/lib/utils'
-import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon } from 'lucide-react'
-import {
-  countLifecycle,
-  LIFECYCLE_LABELS,
-  LIFECYCLE_ORDER
-} from '@/lib/accountLifecycle'
+import { Network as NetworkIcon, Link2 as Link2Icon, Unlink as UnlinkIcon, Wallet } from 'lucide-react'
 import {
   Search,
   Plus,
@@ -36,11 +31,7 @@ import {
   ArrowRightLeft,
   Activity,
   KeyRound,
-  Archive,
-  Layers,
-  CircleDashed,
-  Clock,
-  CheckCircle2
+  Archive
 } from 'lucide-react'
 
 export type AccountViewMode = 'grid' | 'list'
@@ -59,6 +50,7 @@ interface AccountToolbarProps {
   onManageTags: () => void
   isFilterExpanded: boolean
   onToggleFilter: () => void
+  onCloseFilter: () => void
 }
 
 export function AccountToolbar({
@@ -72,7 +64,8 @@ export function AccountToolbar({
   onManageGroups,
   onManageTags,
   isFilterExpanded,
-  onToggleFilter
+  onToggleFilter,
+  onCloseFilter
 }: AccountToolbarProps): React.ReactNode {
   const {
     filter,
@@ -111,6 +104,8 @@ export function AccountToolbar({
   const groupMenuRef = useRef<HTMLDivElement>(null)
   const tagMenuRef = useRef<HTMLDivElement>(null)
   const proxyMenuRef = useRef<HTMLDivElement>(null)
+  // 筛选气泡容器（含触发按钮）：点外部 / Esc 收起
+  const filterMenuRef = useRef<HTMLDivElement>(null)
 
   // 点击外部关闭菜单
   useEffect(() => {
@@ -124,10 +119,25 @@ export function AccountToolbar({
       if (proxyMenuRef.current && !proxyMenuRef.current.contains(e.target as Node)) {
         setShowProxyMenu(false)
       }
+      // 已收起时再调一次是 no-op；wrapper 含按钮，点按钮不会误触（交给 toggle 切换）
+      if (filterMenuRef.current && !filterMenuRef.current.contains(e.target as Node)) {
+        onCloseFilter()
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Esc 收起筛选面板
+  useEffect(() => {
+    if (!isFilterExpanded) return
+    const handleEsc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onCloseFilter()
+    }
+    document.addEventListener('keydown', handleEsc)
+    return () => document.removeEventListener('keydown', handleEsc)
+  }, [isFilterExpanded, onCloseFilter])
 
   // 选中账号已绑定到每个代理的统计
   const getSelectedProxyBindingStatus = useCallback(() => {
@@ -245,8 +255,14 @@ export function AccountToolbar({
   )
 
 
-  // 生命周期各档计数（未使用/待支付/已订阅/已废弃，纯推导）
-  const lifecycleCounts = useMemo(() => countLifecycle(accounts.values()), [accounts])
+  // 待付款账号数（发过升级支付链接且仍为 Free）——独立于分组/筛选维度的快捷视图开关
+  const pendingPaymentCount = useMemo(() => {
+    let n = 0
+    for (const a of accounts.values()) {
+      if (isPendingPayment(a)) n++
+    }
+    return n
+  }, [accounts])
 
   // 当前激活 Tab 的展示信息（用于按钮文字 + 颜色圆点）
   const activeTabInfo = useMemo(() => {
@@ -408,82 +424,6 @@ export function AccountToolbar({
         {/* 右侧：选择操作和管理 - 缩小间距 */}
         <div className="flex items-center gap-1">
           {/* 分组按钮 — 切换视图 + 批量移动 + 管理 三合一 */}
-          {/* 分隔：视图操作 与 生命周期/分组视图 之间 */}
-          <div className="w-px h-6 bg-border mx-2" />
-
-          {/* 生命周期 Tab（按订阅/用量实时推导，与分组视图及其他筛选叠加） */}
-          <div className="flex items-center gap-0.5">
-            <Button
-              variant={!filter.lifecycle ? 'default' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setFilter({ ...filter, lifecycle: undefined })}
-              title={isEn ? 'All accounts' : '全部账号'}
-            >
-              <Layers className="h-3 w-3" />
-              {isEn ? 'All' : '全部'}
-              <Badge variant="secondary" className="ml-1.5 h-4 px-1 text-[10px] tabular-nums">{accounts.size}</Badge>
-            </Button>
-            {LIFECYCLE_ORDER.map((k) => {
-              const isActive = filter.lifecycle === k
-              const icon = k === 'unused'
-                ? <CircleDashed className="h-3 w-3" />
-                : k === 'pendingPayment'
-                  ? <Clock className="h-3 w-3" />
-                  : k === 'subscribed'
-                    ? <CheckCircle2 className="h-3 w-3" />
-                    : <Archive className="h-3 w-3" />
-              // 各档淡色标识（底/文字都压在低饱和度，不与主色抢眼）；选中=同色系淡底
-              const tone = k === 'unused'
-                ? 'slate'
-                : k === 'pendingPayment'
-                  ? 'amber'
-                  : k === 'subscribed'
-                    ? 'green'
-                    : 'rose'
-              const toneCls: Record<string, { off: string; on: string; badge: string }> = {
-                slate: {
-                  off: 'text-slate-500 dark:text-slate-400 hover:bg-slate-500/10',
-                  on: 'bg-slate-500/15 text-slate-700 dark:text-slate-300 hover:bg-slate-500/20',
-                  badge: 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
-                },
-                amber: {
-                  off: 'text-amber-600 dark:text-amber-400 hover:bg-amber-500/10',
-                  on: 'bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20',
-                  badge: 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                },
-                green: {
-                  off: 'text-green-600 dark:text-green-400 hover:bg-green-500/10',
-                  on: 'bg-green-500/15 text-green-700 dark:text-green-300 hover:bg-green-500/20',
-                  badge: 'bg-green-500/15 text-green-700 dark:text-green-300'
-                },
-                rose: {
-                  off: 'text-rose-500 dark:text-rose-400 hover:bg-rose-500/10',
-                  on: 'bg-rose-500/15 text-rose-600 dark:text-rose-300 hover:bg-rose-500/20',
-                  badge: 'bg-rose-500/15 text-rose-600 dark:text-rose-300'
-                }
-              }
-              const t = toneCls[tone]
-              return (
-                <Button
-                  key={k}
-                  variant="ghost"
-                  size="sm"
-                  className={cn('h-7 px-2 text-xs', isActive ? t.on : t.off)}
-                  onClick={() => setFilter({ ...filter, lifecycle: isActive ? undefined : k })}
-                  title={isEn
-                    ? `Filter: ${LIFECYCLE_LABELS[k].en} (stacks with group view & filters)`
-                    : `筛选：${LIFECYCLE_LABELS[k].zh}（与分组视图及其他筛选叠加）`}
-                >
-                  {icon}
-                  {LIFECYCLE_LABELS[k][isEn ? 'en' : 'zh']}
-                  <Badge className={cn('ml-1 h-3.5 min-w-[1.25rem] px-1 text-[10px] tabular-nums border-0', t.badge)}>
-                    {lifecycleCounts[k]}
-                  </Badge>
-                </Button>
-              )
-            })}
-          </div>
           <div className="relative" ref={groupMenuRef}>
             <Button
               variant={showGroupMenu ? "default" : "ghost"}
@@ -509,7 +449,26 @@ export function AccountToolbar({
               <ChevronDown className="h-3 w-3 ml-1" />
             </Button>
 
-
+            {/* 待付款快捷视图：发过升级支付链接且仍为 Free 的账号（与分组视图叠加生效） */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                filter.pendingPaymentOnly
+                  ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                  : 'text-amber-600 dark:text-amber-400 hover:bg-amber-500/10'
+              )}
+              onClick={() => setFilter({ ...filter, pendingPaymentOnly: !filter.pendingPaymentOnly })}
+              title={isEn
+                ? 'Accounts with a fetched payment link but still on Free plan (stacks with group view)'
+                : '已获取支付链接但账号仍为 Free（未升级 = 未付款）；可与分组视图叠加'}
+            >
+              <Wallet className="h-3.5 w-3.5" />
+              {isEn ? 'Pending Pay' : '待付款'}
+              <Badge className={cn('ml-1.5 h-4 px-1 text-[10px] tabular-nums border-0', filter.pendingPaymentOnly ? 'bg-white/20 text-white' : 'bg-amber-500/15 text-amber-700 dark:text-amber-300')}>
+                {pendingPaymentCount}
+              </Badge>
+            </Button>
 
             {showGroupMenu && (() => {
               const { groupCounts: selGroupCounts, selectedAccounts: selAccs } = selectedCount > 0
@@ -891,7 +850,7 @@ export function AccountToolbar({
             {privacyMode ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </Button>
           {/* 筛选按钮与气泡 */}
-          <div className="relative">
+          <div className="relative" ref={filterMenuRef}>
             <Button
               variant={isFilterExpanded ? "default" : "ghost"}
               size="icon"

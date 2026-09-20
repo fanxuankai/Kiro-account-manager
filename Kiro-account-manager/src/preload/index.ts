@@ -54,7 +54,13 @@ export interface LoginPoolBatchOptions {
     entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
     strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
     upstreamProxy?: string
-    api?: { url: string; viaProxy?: string; batchSize?: number }
+    api?: {
+      source?: 'extract-api' | 'kiro-pool'
+      url: string
+      viaProxy?: string
+      batchSize?: number
+      kiroPool?: { apiBase: string; username: string; password: string }
+    }
   }
 }
 
@@ -106,13 +112,20 @@ export interface GooglePoolProxyOptions {
   entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
   strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
   upstreamProxy?: string
-  api?: { url: string; viaProxy?: string; batchSize?: number }
+  api?: {
+    source?: 'extract-api' | 'kiro-pool'
+    url: string
+    viaProxy?: string
+    batchSize?: number
+    kiroPool?: { apiBase: string; username: string; password: string }
+  }
 }
 
-/** Google 号池主进程 → 渲染事件（无 batch 批次态——手动授权单窗口串行） */
+/** Google 号池主进程 → 渲染事件 */
 export type GooglePoolUpdate =
   | { kind: 'entry'; entry: GooglePoolEntryView }
   | { kind: 'log'; line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string } }
+  | { kind: 'batch'; state: { active: boolean; paused: boolean; unused: number } }
   | {
       kind: 'result'
       payload: {
@@ -519,6 +532,7 @@ const api = {
   googlePoolList: (): Promise<{
     entries: GooglePoolEntryView[]
     running: boolean
+    batch: { active: boolean; paused: boolean; unused: number }
     logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
     pending: Array<{
       resultId: string
@@ -570,6 +584,23 @@ const api = {
   },
   googlePoolFocusWindow: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('google-pool:focus-window')
+  },
+  /** 批次：串行授权全部未用号（传 ids 则只跑勾选的，挂机模式，无解挑战超时跳号） */
+  googlePoolStartBatch: (
+    opts?: {
+      autofill?: boolean
+      batchIntervalSec?: number | 'rand'
+      ids?: string[]
+      proxy?: GooglePoolProxyOptions
+    }
+  ): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:start-batch', opts)
+  },
+  googlePoolPauseBatch: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:pause-batch')
+  },
+  googlePoolResumeBatch: (): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:resume-batch')
   },
   /** 本地算当前 6 位验证码（一键复制用；密钥不出主进程） */
   googlePoolTotp: (
@@ -755,7 +786,7 @@ const api = {
   },
 
   // 获取订阅管理/支付链接（dynamicProxy 传入时该请求经提链出口发出，见代理池页「动态提链源」）
-  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { url: string; viaProxy?: string; batchSize?: number }, exitProxyUrl?: string): Promise<{ success: boolean; error?: string; url?: string; status?: string; exitIp?: string }> => {
+  accountGetSubscriptionUrl: (accessToken: string, subscriptionType?: string, region?: string, profileArn?: string, machineId?: string, provider?: string, authMethod?: string, accountId?: string, dynamicProxy?: { source?: 'extract-api' | 'kiro-pool'; url: string; viaProxy?: string; batchSize?: number; kiroPool?: { apiBase: string; username: string; password: string } }, exitProxyUrl?: string): Promise<{ success: boolean; error?: string; url?: string; status?: string; exitIp?: string }> => {
     return ipcRenderer.invoke('account-get-subscription-url', accessToken, subscriptionType, region, profileArn, machineId, provider, authMethod, accountId, dynamicProxy, exitProxyUrl)
   },
 
@@ -806,6 +837,11 @@ const api = {
     }
   }): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('payment-open', payload)
+  },
+
+  // 快捷填入卡信息（粘贴解析后传入；内存直填支付窗口，不落盘）
+  paymentFillCard: (card: { number: string; expiry: string; cvc: string }): Promise<{ success: boolean; error?: string; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }> }> => {
+    return ipcRenderer.invoke('payment-fill-card', card)
   },
 
   // 支付窗口状态推送（filling/filled/success/expired/closed/error）
@@ -1298,6 +1334,23 @@ const api = {
     }
   }> => {
     return ipcRenderer.invoke('proxy-pool:diagnose-chain', params)
+  },
+
+  /** Kiro IP 池服务全链路测试：查 IP → 上锁 → 探测出口 → 解锁（消耗服务端一次锁计数） */
+  proxyPoolTestKiroPool: (cfg: {
+    apiBase: string
+    username: string
+    password: string
+  }): Promise<{
+    success: boolean
+    error?: string
+    exitIp?: string
+    latencyMs?: number
+    lockCount?: number
+    lockThreshold?: number
+    warnings?: string[]
+  }> => {
+    return ipcRenderer.invoke('proxy-pool:test-kiro-pool', cfg)
   },
 
   // ============ 诊断 API ============

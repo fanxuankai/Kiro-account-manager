@@ -136,6 +136,28 @@ export class GooglePoolStore {
     return added
   }
 
+  /** 取下一个未用号（取号即标 running，防批次重入重复消耗） */
+  takeNextUnused(): GooglePoolEntry | null {
+    const next = this.entries.find((e) => e.state === 'unused')
+    if (!next) return null
+    next.state = 'running'
+    next.failReason = undefined
+    next.takenAt = Date.now()
+    this.save()
+    return next
+  }
+
+  /** 从指定 id 取未用号（勾选批次用）：该 id 已非未用（被作废/删除）则返回 null */
+  takeNextById(id: string): GooglePoolEntry | null {
+    const e = this.get(id)
+    if (!e || e.state !== 'unused') return null
+    e.state = 'running'
+    e.failReason = undefined
+    e.takenAt = Date.now()
+    this.save()
+    return e
+  }
+
   patch(
     id: string,
     patch: Partial<

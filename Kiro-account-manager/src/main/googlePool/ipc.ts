@@ -11,6 +11,7 @@ import { totpNow } from '../loginPool/totp'
 export type GooglePoolUpdate =
   | { kind: 'entry'; entry: GooglePoolEntryView }
   | { kind: 'log'; line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string } }
+  | { kind: 'batch'; state: { active: boolean; paused: boolean; unused: number } }
   | { kind: 'result'; payload: GooglePoolResultPayload }
 
 export function registerGooglePoolIpc(opts: {
@@ -30,6 +31,7 @@ export function registerGooglePoolIpc(opts: {
   // 未消费的入库结果缓存：token 交换成功时用户可能已切走页面（组件卸载=事件退订），
   // result 事件会丢——这里缓存，页面重挂时经 list 快照补投，消费完 ack
   const pendingResults: GooglePoolResultPayload[] = []
+  let lastBatch = { active: false, paused: false, unused: 0 }
 
   const runner = new GooglePoolRunner(store, opts.deps, {
     onEntry: (entry) => send({ kind: 'entry', entry }),
@@ -39,6 +41,10 @@ export function registerGooglePoolIpc(opts: {
       recentLogs.push(line)
       if (recentLogs.length > 200) recentLogs.splice(0, recentLogs.length - 200)
       send({ kind: 'log', line })
+    },
+    onBatch: (state) => {
+      lastBatch = state
+      send({ kind: 'batch', state })
     },
     onResult: (payload) => {
       pendingResults.push(payload)
@@ -54,10 +60,11 @@ export function registerGooglePoolIpc(opts: {
     send({ kind: 'log', line })
   }
 
-  // 返回全量快照：条目 + 最近日志 + 待补投的入库结果（页面重挂时恢复/消费用）
+  // 返回全量快照：条目 + 最近日志 + 批次状态 + 待补投的入库结果（页面重挂时恢复/消费用）
   ipcMain.handle('google-pool:list', () => ({
     entries: store.listViews(),
     running: runner.running,
+    batch: lastBatch,
     logs: [...recentLogs],
     pending: [...pendingResults]
   }))
@@ -134,6 +141,22 @@ export function registerGooglePoolIpc(opts: {
 
   ipcMain.handle('google-pool:focus-window', () => {
     runner.focusWindow()
+    return { success: true }
+  })
+
+  // 批次：串行授权全部未用号（挂机模式）；pause 当前号跑完后停
+  ipcMain.handle('google-pool:start-batch', (_e, opts?: Parameters<GooglePoolRunner['startBatch']>[0]) => {
+    runner.startBatch(opts)
+    return { success: true }
+  })
+
+  ipcMain.handle('google-pool:pause-batch', () => {
+    runner.pauseBatch()
+    return { success: true }
+  })
+
+  ipcMain.handle('google-pool:resume-batch', () => {
+    runner.resumeBatch()
     return { success: true }
   })
 

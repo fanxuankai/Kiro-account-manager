@@ -531,6 +531,7 @@ interface KiroApi {
       secretMasked?: string
     }[]
     running: boolean
+    batch: { active: boolean; paused: boolean; unused: number }
     logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
     pending: Array<{
       resultId: string
@@ -566,6 +567,22 @@ interface KiroApi {
     }
   }) => Promise<{ success: boolean; error?: string }>
   googlePoolFocusWindow: () => Promise<{ success: boolean }>
+  /** 批次：串行授权全部未用号（传 ids 则只跑勾选的，挂机模式，无解挑战超时跳号） */
+  googlePoolStartBatch: (opts?: {
+    autofill?: boolean
+    batchIntervalSec?: number | 'rand'
+    ids?: string[]
+    proxy?: {
+      enabled: boolean
+      mode?: 'pool' | 'api'
+      entries: Array<{ url: string; usedCount: number; latencyMs?: number }>
+      strategy: 'round_robin' | 'random' | 'least_used' | 'fastest'
+      upstreamProxy?: string
+      api?: { url: string; viaProxy?: string; batchSize?: number }
+    }
+  }) => Promise<{ success: boolean }>
+  googlePoolPauseBatch: () => Promise<{ success: boolean }>
+  googlePoolResumeBatch: () => Promise<{ success: boolean }>
   /** 本地算当前 6 位验证码（一键复制用；密钥不出主进程） */
   googlePoolTotp: (id: string) => Promise<{
     success: boolean
@@ -599,6 +616,9 @@ interface KiroApi {
   } | {
     kind: 'log'
     line: { time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }
+  } | {
+    kind: 'batch'
+    state: { active: boolean; paused: boolean; unused: number }
   } | {
     kind: 'result'
     payload: {
@@ -747,6 +767,9 @@ interface KiroApi {
       provinceEn: string
     }
   }) => Promise<{ success: boolean; error?: string }>
+
+  // 快捷填入卡信息（粘贴解析后传入；内存直填支付窗口，不落盘）
+  paymentFillCard: (card: { number: string; expiry: string; cvc: string }) => Promise<{ success: boolean; error?: string; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }> }>
 
   // 支付窗口状态推送（filling/filled/success/expired/closed/error）
   onPaymentUpdate: (callback: (update: {
@@ -1024,6 +1047,21 @@ interface KiroApi {
     timeoutMs?: number
     upstreamProxy?: string
   }) => Promise<{ success: boolean; latencyMs?: number; externalIp?: string; error?: string }>
+
+  /** Kiro IP 池服务全链路测试：查 IP → 上锁 → 探测出口 → 解锁（消耗服务端一次锁计数） */
+  proxyPoolTestKiroPool: (cfg: {
+    apiBase: string
+    username: string
+    password: string
+  }) => Promise<{
+    success: boolean
+    error?: string
+    exitIp?: string
+    latencyMs?: number
+    lockCount?: number
+    lockThreshold?: number
+    warnings?: string[]
+  }>
 
   proxyPoolDiagnoseChain: (params: {
     targetUrl: string

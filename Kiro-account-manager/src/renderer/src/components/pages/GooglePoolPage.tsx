@@ -8,7 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Button, Card, CardContent, CardHeader, CardTitle, Badge, Input, Label } from '../ui'
 import {
-  Play, Plus, Ban, ExternalLink, Loader2, EyeOff, Eye, Search,
+  Play, Pause, Plus, Ban, ExternalLink, Loader2, EyeOff, Eye, Search,
   ChevronRight, Terminal, Trash2, Undo2, X, ClipboardCopy, KeyRound, CheckCircle2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -57,6 +57,11 @@ export function GooglePoolPage(): React.ReactNode {
 
   const [entries, setEntries] = useState<GooglePoolView[]>([])
   const [running, setRunning] = useState(false)
+  const [batch, setBatch] = useState<{ active: boolean; paused: boolean; unused: number }>({
+    active: false,
+    paused: false,
+    unused: 0
+  })
   const [logs, setLogs] = useState<LogLine[]>([])
   const [showLogs, setShowLogs] = useState(true)
   const [followEnd, setFollowEnd] = useState(true)
@@ -86,6 +91,12 @@ export function GooglePoolPage(): React.ReactNode {
   const updateAutofill = (v: boolean): void => {
     setAutofill(v)
     localStorage.setItem('googlepool_autofill', String(v))
+  }
+  // 批次号间冷却（防风控）：'rand' = 随机 60–180s
+  const [batchInterval, setBatchInterval] = useState<string>(() => localStorage.getItem('googlepool_batch_interval') || '90')
+  const updateBatchInterval = (v: string): void => {
+    setBatchInterval(v)
+    localStorage.setItem('googlepool_batch_interval', v)
   }
   const usablePoolCount = Array.from(proxyPool.values()).filter(
     (p) => p.enabled && p.status === 'alive'
@@ -201,16 +212,18 @@ export function GooglePoolPage(): React.ReactNode {
     void window.api.googlePoolList().then((snap) => {
       setEntries(snap.entries)
       setRunning(snap.running)
+      setBatch(snap.batch)
       if (restoreLogs) setLogs(snap.logs)
     })
   }, [])
 
   // 初始化 + 订阅主进程事件
   useEffect(() => {
-    // 挂载即拉快照：恢复列表/日志，并补投切页期间积压的入库结果
+    // 挂载即拉快照：恢复列表/日志/批次状态，并补投切页期间积压的入库结果
     void window.api.googlePoolList().then((snap) => {
       setEntries(snap.entries)
       setRunning(snap.running)
+      setBatch(snap.batch)
       setLogs(snap.logs)
       for (const p of snap.pending) void handleResult(p)
     })
@@ -223,6 +236,8 @@ export function GooglePoolPage(): React.ReactNode {
         })
       } else if (update.kind === 'log') {
         setLogs((prev) => [...prev.slice(-200), update.line])
+      } else if (update.kind === 'batch') {
+        setBatch(update.state)
       } else if (update.kind === 'result') {
         void handleResult(update.payload)
       }
@@ -251,20 +266,32 @@ export function GooglePoolPage(): React.ReactNode {
   // ── 操作 ──
 
   // 出口代理参数：pool 模式只取「启用 + 验活可用」的池条目快照；
-  // api 模式带代理池页维护的提链源配置
+  // api 模式带代理池页维护的动态出口源配置
   const buildProxyOpts = useCallback(() => {
     if (proxyMode === 'off') return undefined
     if (proxyMode === 'api') {
+      const apiCommon = {
+        url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
+        viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
+        batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
+      }
       return {
         enabled: true,
         mode: 'api' as const,
         entries: [] as Array<{ url: string; usedCount: number; latencyMs?: number }>,
         strategy: proxyPoolConfig.strategy,
-        api: {
-          url: (proxyPoolConfig.dynamicApiUrl || '').trim(),
-          viaProxy: (proxyPoolConfig.dynamicViaProxy || '').trim(),
-          batchSize: Math.min(20, Math.max(1, Number(proxyPoolConfig.dynamicBatchSize) || 5))
-        }
+        api:
+          (proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool'
+            ? {
+                source: 'kiro-pool' as const,
+                ...apiCommon,
+                kiroPool: {
+                  apiBase: (proxyPoolConfig.kiroPoolApiBase || '').trim(),
+                  username: (proxyPoolConfig.kiroPoolUsername || '').trim(),
+                  password: proxyPoolConfig.kiroPoolPassword || ''
+                }
+              }
+            : apiCommon
       }
     }
     const usable = Array.from(proxyPool.values()).filter((p) => p.enabled && p.status === 'alive')
@@ -377,9 +404,55 @@ export function GooglePoolPage(): React.ReactNode {
           </p>
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          {batch.active ? (
+            batch.paused ? (
+              <Button size="sm" onClick={() => { void window.api.googlePoolResumeBatch() }}>
+                <Play className="h-4 w-4" /> 继续批次
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={() => { void window.api.googlePoolPauseBatch() }}>
+                <Pause className="h-4 w-4" /> 暂停批次
+              </Button>
+            )
+          ) : (
+            <Button
+              size="sm"
+              disabled={running || (selected.size === 0 && summary.unused === 0)}
+              title={selected.size > 0 ? '只跑勾选的号（挂机模式）' : '串行授权全部未用号（挂机模式）：自动填表+自动过验证+自动点授权确认，无解挑战 4 分钟超时跳下一个'}
+              onClick={() => {
+                void window.api.googlePoolStartBatch({
+                  autofill,
+                  batchIntervalSec: batchInterval === 'rand' ? ('rand' as const) : Number(batchInterval),
+                  ...(selected.size > 0 ? { ids: [...selected] } : {}),
+                  proxy: buildProxyOpts()
+                })
+                setSelected(new Set())
+              }}
+            >
+              <Play className="h-4 w-4" /> 开始批次{selected.size > 0 ? `（勾选 ${selected.size}）` : `（${summary.unused}）`}
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" /> 粘贴入池
           </Button>
+          <div
+            className="flex items-center gap-1.5"
+            title="批次相邻两号之间的冷却秒数，防风控"
+          >
+            <Label className="text-xs text-muted-foreground whitespace-nowrap">号间隔</Label>
+            <select
+              value={batchInterval}
+              onChange={(e) => updateBatchInterval(e.target.value)}
+              disabled={batch.active}
+              className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
+            >
+              <option value="60">60s</option>
+              <option value="90">90s</option>
+              <option value="120">120s</option>
+              <option value="180">180s</option>
+              <option value="rand">随机 60–180s</option>
+            </select>
+          </div>
           <div
             className="flex items-center gap-1.5"
             title="自动拟人填写邮箱/密码（2FA 密钥版连验证码一起填）；图形验证码、手机验证等挑战与最终授权确认仍由人工在窗口中处理"
@@ -409,7 +482,14 @@ export function GooglePoolPage(): React.ReactNode {
               <option value="off">关闭（直连）</option>
               <option value="pool">代理池{usablePoolCount > 0 ? `（${usablePoolCount} 可用）` : '（池空）'}</option>
               <option value="api">
-                提链 API{!(proxyPoolConfig.dynamicApiUrl || '').trim() ? '（未配置）' : ''}
+                {(proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool' ? 'IP 池服务' : '提链 API'}
+                {((proxyPoolConfig.dynamicSourceType || 'extract-api') === 'kiro-pool'
+                  ? !(proxyPoolConfig.kiroPoolApiBase || '').trim() ||
+                    !(proxyPoolConfig.kiroPoolUsername || '').trim() ||
+                    !proxyPoolConfig.kiroPoolPassword
+                  : !(proxyPoolConfig.dynamicApiUrl || '').trim())
+                  ? '（未配置）'
+                  : ''}
               </option>
             </select>
           </div>
@@ -604,7 +684,7 @@ export function GooglePoolPage(): React.ReactNode {
                           size="sm"
                           variant="outline"
                           className="h-6 px-2 text-[11px] gap-1 rounded-md border-primary/25 bg-primary/10 text-primary hover:bg-primary/20 hover:text-primary"
-                          disabled={running}
+                          disabled={running || batch.active}
                           title={e.state === 'failed' ? '再次发起授权' : '打开授权窗口，登录由人工完成'}
                           onClick={() => handleAuthorize(e.id)}
                         >
@@ -672,10 +752,14 @@ export function GooglePoolPage(): React.ReactNode {
           </table>
         </div>
         {/* 状态条 */}
-        {running && (
+        {(running || batch.active) && (
           <div className="border-t px-4 py-2 flex items-center gap-3 text-xs text-muted-foreground shrink-0">
             <Loader2 className="h-3 w-3 animate-spin" />
-            授权窗口执行中 · 手动登录完成后自动入库（中途关窗 = 取消，条目拨回未用）
+            {batch.active
+              ? batch.paused
+                ? <>批次已暂停 · 当前号跑完后停</>
+                : <>批次执行中 · 待跑 {batch.unused} · 自动填表+自动过验证，无解挑战 4 分钟跳号</>
+              : <>授权窗口执行中 · 手动登录完成后自动入库（中途关窗 = 取消，条目拨回未用）</>}
           </div>
         )}
       </Card>

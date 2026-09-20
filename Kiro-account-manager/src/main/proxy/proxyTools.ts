@@ -53,9 +53,14 @@ export async function probeExitIp(proxyUrl: string, timeoutMs = 12_000): Promise
     if (resp.status === 200 && m) return { ok: true, ip: m[0], ms: Date.now() - start }
     return { ok: false, error: `探测服务返回 HTTP ${resp.status}` }
   } catch (e) {
+    // undici 的传输层错误是 TypeError: fetch failed，真正的连接错误（ECONNREFUSED 等）挂在 cause 上
+    const cause = e instanceof Error && e.cause instanceof Error ? `（${e.cause.message}）` : ''
     return {
       ok: false,
-      error: controller.signal.aborted ? `超时 ${timeoutMs}ms` : e instanceof Error ? e.message : String(e)
+      error:
+        controller.signal.aborted
+          ? `超时 ${timeoutMs}ms`
+          : `${e instanceof Error ? e.message : String(e)}${cause}`
     }
   } finally {
     clearTimeout(timer)

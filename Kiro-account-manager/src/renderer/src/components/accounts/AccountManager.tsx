@@ -365,6 +365,7 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
           onManageTags={handleManageTags}
           isFilterExpanded={isFilterExpanded}
           onToggleFilter={() => setIsFilterExpanded(!isFilterExpanded)}
+          onCloseFilter={() => setIsFilterExpanded(false)}
         />
       </header>
 

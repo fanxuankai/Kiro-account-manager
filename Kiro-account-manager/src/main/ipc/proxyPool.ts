@@ -8,6 +8,7 @@ import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'und
 import { safeCreateProxyAgent, destroyCachedProxyAgent } from '../proxy/systemProxy'
 import { resolveProxyUrl, resetProxyBridge, isBridgeableUrl } from '../proxy/proxyBridge'
 import { ChainProxyRelay } from '../registration/chainProxy'
+import { testKiroPoolConnection, type KiroPoolSourceConfig } from '../proxy/kiroPool'
 
 /**
  * 通过指定代理 URL 请求测试地址，返回延迟与出口 IP。
@@ -130,8 +131,24 @@ function registerDiagnoseChainHandler(): void {
   })
 }
 
+/**
+ * Kiro IP 池服务全链路测试：查 IP → 上锁 → socks5 中继 → 探测出口 → 解锁。
+ * 一次完整演练（会消耗服务端一次锁计数），用于「测试连接」按钮。
+ */
+function registerTestKiroPoolHandler(): void {
+  ipcMain.handle('proxy-pool:test-kiro-pool', async (_event, cfg: KiroPoolSourceConfig) => {
+    try {
+      const summary = await testKiroPoolConnection(cfg)
+      return { success: true, ...summary }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+}
+
 /** 注册"代理池"模块下的全部 IPC handler */
 export function registerProxyPoolIpcHandlers(): void {
   registerValidateHandler()
   registerDiagnoseChainHandler()
+  registerTestKiroPoolHandler()
 }
