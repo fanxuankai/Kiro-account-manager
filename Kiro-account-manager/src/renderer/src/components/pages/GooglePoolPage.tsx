@@ -46,6 +46,10 @@ interface LogLine {
   msg: string
 }
 
+// 已处理过的授权结果（模块级，跨页面挂载保留）：实时事件与挂载重放可能并发到达
+// 同一结果，验证入库前的判重查不到彼此——按 resultId 先到先得，只处理一次
+const handledResults = new Set<string>()
+
 // ─── 页面 ────────────────────────────────────────────────────────────
 
 export function GooglePoolPage(): React.ReactNode {
@@ -101,9 +105,11 @@ export function GooglePoolPage(): React.ReactNode {
     [accounts]
   )
 
-  // 授权成功后的入库（复用 LoginPagePool handleResult 的 social 分支，provider=Google）
+  // 授权成功后的入库（复用 LoginPagePool handleResult 的 social 分支，provider=Google）；
+  // finally 回执 ack：无论入库成败都把主进程的 pending 补投清掉（切页丢事件场景）
   const handleResult = useCallback(
     async (payload: {
+      resultId: string
       entryId: string
       email: string
       accessToken: string
@@ -111,6 +117,8 @@ export function GooglePoolPage(): React.ReactNode {
       profileArn?: string
       expiresIn?: number
     }) => {
+      if (handledResults.has(payload.resultId)) return
+      handledResults.add(payload.resultId)
       try {
         const result = await window.api.verifyAccountCredentials({
           refreshToken: payload.refreshToken,
@@ -181,6 +189,8 @@ export function GooglePoolPage(): React.ReactNode {
         }
       } catch (e) {
         pushLog({ time: nowTime(), level: 'err', msg: `${payload.email} 入库异常：${e instanceof Error ? e.message : String(e)}` })
+      } finally {
+        void window.api.googlePoolAckResult(payload.resultId)
       }
     },
     [addAccount, isAccountExists, pushLog]
@@ -197,7 +207,13 @@ export function GooglePoolPage(): React.ReactNode {
 
   // 初始化 + 订阅主进程事件
   useEffect(() => {
-    refreshList(true)
+    // 挂载即拉快照：恢复列表/日志，并补投切页期间积压的入库结果
+    void window.api.googlePoolList().then((snap) => {
+      setEntries(snap.entries)
+      setRunning(snap.running)
+      setLogs(snap.logs)
+      for (const p of snap.pending) void handleResult(p)
+    })
     const unsubscribe = window.api.onGooglePoolUpdate((update) => {
       if (update.kind === 'entry') {
         setEntries((prev) => {
