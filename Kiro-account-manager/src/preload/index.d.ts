@@ -532,7 +532,18 @@ interface KiroApi {
     }[]
     running: boolean
     logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
+    pending: Array<{
+      resultId: string
+      entryId: string
+      email: string
+      accessToken: string
+      refreshToken: string
+      profileArn?: string
+      expiresIn?: number
+    }>
   }>
+  /** 消费完一条入库结果后回执清除（按 resultId，无论入库成败） */
+  googlePoolAckResult: (resultId: string) => Promise<{ success: boolean }>
   googlePoolAddText: (text: string) => Promise<{ added: number; updated: number; bad: string[] }>
   googlePoolMarkWasted: (id: string) => Promise<{ success: boolean }>
   /** 手动标记已用（账号已经其他途径入库，防重复授权） */
@@ -591,6 +602,7 @@ interface KiroApi {
   } | {
     kind: 'result'
     payload: {
+      resultId: string
       entryId: string
       email: string
       accessToken: string

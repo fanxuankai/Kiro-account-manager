@@ -116,6 +116,7 @@ export type GooglePoolUpdate =
   | {
       kind: 'result'
       payload: {
+        resultId: string
         entryId: string
         email: string
         accessToken: string
@@ -514,13 +515,26 @@ const api = {
   },
 
   // ─── Google 号池（Gmail 卡密 · 手动授权激活 Kiro）───
-  /** 全量快照：条目视图 + 授权窗口状态 + 最近日志（页面重挂恢复用） */
+  /** 全量快照：条目视图 + 授权窗口状态 + 最近日志 + 待补投的入库结果（页面重挂恢复用） */
   googlePoolList: (): Promise<{
     entries: GooglePoolEntryView[]
     running: boolean
     logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
+    pending: Array<{
+      resultId: string
+      entryId: string
+      email: string
+      accessToken: string
+      refreshToken: string
+      profileArn?: string
+      expiresIn?: number
+    }>
   }> => {
     return ipcRenderer.invoke('google-pool:list')
+  },
+  /** 消费完一条入库结果后回执清除（按 resultId，无论入库成败） */
+  googlePoolAckResult: (resultId: string): Promise<{ success: boolean }> => {
+    return ipcRenderer.invoke('google-pool:ack-result', resultId)
   },
   googlePoolAddText: (text: string): Promise<{ added: number; updated: number; bad: string[] }> => {
     return ipcRenderer.invoke('google-pool:add-text', text)

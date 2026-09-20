@@ -8,8 +8,10 @@
 // 四路拦截（will-navigate / did-start-navigation / did-fail-load / setWindowOpenHandler）
 // + manual-callback IPC 兜底，回调一律按 oauthState 匹配，两池并行互不误收。
 
-import { BrowserWindow, session, type Session } from 'electron'
+import { BrowserWindow, app, session, type Session } from 'electron'
 import { randomBytes } from 'node:crypto'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type { GooglePoolStore, GooglePoolEntry, GooglePoolEntryView } from './store'
 import type {
   EntryProxySetup,
@@ -64,6 +66,8 @@ export interface GoogleAuthorizeOptions {
 }
 
 export interface GooglePoolResultPayload {
+  /** 本次授权结果的唯一 id（时间戳+条目）：渲染层据此去重，防实时事件与挂载重放并发重复入库 */
+  resultId: string
   entryId: string
   email: string
   accessToken: string
@@ -96,6 +100,10 @@ interface GooglePageDetect {
   email: boolean
   pass: boolean
   totp: boolean
+  /** 辅助邮箱确认挑战（kpe）：完整输入辅助邮箱地址即通过，无需收码 */
+  recovery: boolean
+  /** 挑战方式选择页：列出可选验证方式（含「确认您的辅助邮箱」） */
+  selection: boolean
   captcha: boolean
   emailNext: boolean
   passNext: boolean
@@ -112,6 +120,8 @@ const PROBE_GOOGLE_JS = `(() => {
     (el) => el.name !== 'hiddenPassword' && vis(el)
   )
   const totpEl = q('input[name="totpPin"]') || q('input#totpPin')
+  const kpeEl = q('input[name="knowledgePreregisteredEmailResponse"]')
+  const selEl = q('div[data-action="selectchallenge"]')
   const captchaEl = q('input[name="ca"]')
   let error = null
   const errEl = q('.o6cuMc, [role="alert"], [jsname="B34EJ"]')
@@ -121,7 +131,8 @@ const PROBE_GOOGLE_JS = `(() => {
   }
   return {
     url: location.href,
-    email: vis(emailEl), pass: !!passEl, totp: vis(totpEl), captcha: vis(captchaEl),
+    email: vis(emailEl), pass: !!passEl, totp: vis(totpEl), recovery: vis(kpeEl),
+    selection: vis(selEl), captcha: vis(captchaEl),
     emailNext: vis(q('#identifierNext')), passNext: vis(q('#passwordNext')), totpNext: vis(q('#totpNext')),
     error
   }
@@ -143,16 +154,34 @@ const TYPE_FIELD_JS = `(async (sel, text) => {
   return { ok: true }
 })`
 
-/** 取可点元素视口中心坐标（容器选择器 → 内部真实按钮优先）；主进程用 sendInputEvent 点击 */
-const CLICK_GOOGLE_JS = `((sel) => {
-  const el = document.querySelector(sel)
-  if (!el || el.offsetParent === null) return null
-  const btn = el.querySelector('button, [role="button"]') || el
-  const target = btn.offsetParent === null ? el : btn
-  target.scrollIntoView({ block: 'center' })
-  const rect = target.getBoundingClientRect()
-  if (rect.width > 0 && rect.height > 0) {
-    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+/** 取可点元素视口中心坐标。规则数组：字符串=CSS 选择器（容器内部真实按钮优先）；
+ *  { text } = 按可见可点元素（button/[role=button]/[role=link]，挑战选项是 role=link div）
+ *  的文本包含匹配（如「下一步」「确认您的辅助邮箱」）。 */
+const CLICK_GOOGLE_JS = `((rulesJson) => {
+  const rules = JSON.parse(rulesJson)
+  const vis = (el) => !!el && el.offsetParent !== null
+  const clickables = [...document.querySelectorAll('button, [role="button"], [role="link"], input[type="submit"]')]
+  for (const r of rules) {
+    let el = null
+    if (typeof r === 'string') {
+      const c = document.querySelector(r)
+      if (vis(c)) el = c
+    } else if (r && r.text) {
+      const want = String(r.text).toLowerCase()
+      el = clickables.find((b) => {
+        const label = ((b.textContent || b.value || '') + '').trim().toLowerCase()
+        return label.includes(want) && vis(b)
+      })
+    }
+    if (el) {
+      const btn = el.querySelector('button, [role="button"]') || el
+      const target = vis(btn) ? btn : el
+      target.scrollIntoView({ block: 'center' })
+      const rect = target.getBoundingClientRect()
+      if (rect.width > 0 && rect.height > 0) {
+        return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }
+      }
+    }
   }
   return null
 })`
@@ -392,13 +421,18 @@ export class GooglePoolRunner {
     let cookieCred: { accessToken: string; refreshToken: string; profileArn?: string } | null = null
     let aborted = false
     // 自动填表去重标记：同页重复探测不重复填/点
-    const filled = { email: false, password: false }
+    const filled = { email: false, password: false, recovery: false }
     let otpFilled = false
     /** TOTP 填错重试上限（码错页面会清空重出，重填最多 2 次） */
     let otpAttempts = 0
     /** 人工提醒与错误日志去重 */
     let lastNotified = ''
     let lastErrorMsg = ''
+    /** 挑战页存档去重：同一 URL 只存一份 */
+    let dumpedUrl = ''
+    /** 最近一次表单提交时间：提交后的验证过渡页（无输入框、URL 仍含 /challenge/）
+     *  不是新挑战——观察期内不报人工不存档，等跳转 */
+    let lastSubmitAt = 0
 
     try {
       this.log(
@@ -467,6 +501,10 @@ export class GooglePoolRunner {
 
             if (detect.captcha) {
               notifyOnce('captcha', 'warn', `${entry.email} 触发图形验证码，请在窗口中人工完成后自动继续（等待不计时）`)
+              if (detect.url !== dumpedUrl) {
+                dumpedUrl = detect.url
+                void this.dumpChallengePage(win, entry, detect.url)
+              }
               deadline = Date.now() + IDLE_TIMEOUT_MS
               continue
             }
@@ -476,8 +514,9 @@ export class GooglePoolRunner {
               const typed = await this.typeField(win, 'input[name="identifier"]', entry.email)
               if (typed) {
                 await sleep(randInt(300, 900))
-                await this.clickCenter(win, '#identifierNext')
+                await this.clickCenter(win, ['#identifierNext', { text: '下一步' }, { text: 'next' }])
                 filled.email = true
+                lastSubmitAt = Date.now()
                 this.log('ok', `${entry.email} 已自动填写邮箱并提交`)
               }
               continue
@@ -488,8 +527,9 @@ export class GooglePoolRunner {
               const typed = await this.typeField(win, 'input[name="Passwd"]', entry.password)
               if (typed) {
                 await sleep(randInt(300, 900))
-                await this.clickCenter(win, '#passwordNext')
+                await this.clickCenter(win, ['#passwordNext', { text: '下一步' }, { text: 'next' }])
                 filled.password = true
+                lastSubmitAt = Date.now()
                 this.log('ok', `${entry.email} 已自动填写密码并提交`)
               }
               continue
@@ -513,8 +553,9 @@ export class GooglePoolRunner {
                 const typed = await this.typeField(win, 'input[name="totpPin"], input#totpPin', code.code)
                 if (typed) {
                   await sleep(randInt(300, 900))
-                  await this.clickCenter(win, '#totpNext')
+                  await this.clickCenter(win, ['#totpNext', { text: '下一步' }, { text: 'next' }])
                   otpFilled = true
+                  lastSubmitAt = Date.now()
                   this.log('ok', `${entry.email} 已自动填写 2FA 验证码并提交`)
                 }
               } else {
@@ -528,9 +569,56 @@ export class GooglePoolRunner {
               continue
             }
 
-            // 未知挑战页（/challenge/ 路径且无已识别输入框）：人工
-            if (detect.url.includes('/challenge/') && !detect.email && !detect.pass && !detect.totp) {
-              notifyOnce('challenge', 'warn', `${entry.email} 触发二次验证挑战（手机号等），需人工处理；无解挑战可直接关窗取消`)
+            // 挑战方式选择页：自动选「确认您的辅助邮箱」（无需收码的那条路；
+            // 输入卡密里有地址，选完进 kpe 输入页由下个分支自动填）
+            if (detect.selection && entry.recoveryEmail) {
+              const clicked = await this.clickCenter(win, [
+                { text: '确认您的辅助邮箱' },
+                { text: 'confirm your recovery email' }
+              ])
+              if (clicked) {
+                this.log('ok', `${entry.email} 已自动选择「确认您的辅助邮箱」验证方式`)
+                await sleep(randInt(500, 1200))
+              }
+              continue
+            }
+
+            // 辅助邮箱确认挑战（kpe）：完整输入辅助邮箱地址即通过，无需收码——卡密里有，自动填
+            if (detect.recovery && !filled.recovery) {
+              if (entry.recoveryEmail) {
+                const typed = await this.typeField(
+                  win,
+                  'input[name="knowledgePreregisteredEmailResponse"]',
+                  entry.recoveryEmail
+                )
+                if (typed) {
+                  await sleep(randInt(300, 900))
+                  await this.clickCenter(win, [{ text: '下一步' }, { text: 'next' }])
+                  filled.recovery = true
+                  lastSubmitAt = Date.now()
+                  this.log('ok', `${entry.email} 已自动填写辅助邮箱确认并提交`)
+                }
+              } else {
+                notifyOnce('recovery-manual', 'warn', `${entry.email} 需要确认辅助邮箱但卡密未提供，请人工填写`)
+                deadline = Date.now() + IDLE_TIMEOUT_MS
+              }
+              continue
+            }
+
+            // 未知挑战页（/challenge/ 路径且无已识别输入框）：人工 + 自动存档。
+            // 提交后 10s 观察期内的过渡页不算（等跳转）
+            if (
+              detect.url.includes('/challenge/') &&
+              !detect.email &&
+              !detect.pass &&
+              !detect.totp
+            ) {
+              if (Date.now() - lastSubmitAt < 10_000) continue
+              notifyOnce('challenge', 'warn', `${entry.email} 触发二次验证挑战，需人工处理；无解挑战可直接关窗取消`)
+              if (detect.url !== dumpedUrl) {
+                dumpedUrl = detect.url
+                void this.dumpChallengePage(win, entry, detect.url)
+              }
               deadline = Date.now() + IDLE_TIMEOUT_MS
               continue
             }
@@ -550,6 +638,7 @@ export class GooglePoolRunner {
         this.store.patch(entry.id, { state: 'used', failReason: undefined })
         this.emitEntry(this.store.get(entry.id)!)
         this.events.onResult({
+          resultId: `${Date.now()}-${entry.id}`,
           entryId: entry.id,
           email: entry.email,
           accessToken: cookieCred.accessToken,
@@ -589,6 +678,7 @@ export class GooglePoolRunner {
         this.emitEntry(this.store.get(entry.id)!)
         this.log('ok', `${entry.email} token 交换成功，交给界面验证入库`)
         this.events.onResult({
+          resultId: `${Date.now()}-${entry.id}`,
           entryId: entry.id,
           email: entry.email,
           accessToken: token.accessToken,
@@ -637,11 +727,14 @@ export class GooglePoolRunner {
     }
   }
 
-  /** 点击元素中心（容器选择器 → 内部按钮优先；sendInputEvent 走 OS 输入管线） */
-  private async clickCenter(win: BrowserWindow, selector: string): Promise<boolean> {
+  /** 点击元素中心（规则：选择器或文本；sendInputEvent 走 OS 输入管线） */
+  private async clickCenter(
+    win: BrowserWindow,
+    rules: Array<string | { text: string }>
+  ): Promise<boolean> {
     try {
       const rect = (await win.webContents.executeJavaScript(
-        `(${CLICK_GOOGLE_JS})(${JSON.stringify(selector)})`,
+        `(${CLICK_GOOGLE_JS})(${JSON.stringify(JSON.stringify(rules))})`,
         true
       )) as { x: number; y: number } | null
       if (!rect) return false
@@ -655,6 +748,27 @@ export class GooglePoolRunner {
       return true
     } catch {
       return false
+    }
+  }
+
+  /** 挑战页自动存档：窗口是 sandbox BrowserWindow 没法右键另存，遇到未知挑战
+   *  （辅助邮箱确认、验证码等）把整页 HTML 落盘，供离线分析选择器做自动化 */
+  private async dumpChallengePage(win: BrowserWindow, entry: GooglePoolEntry, url: string): Promise<void> {
+    try {
+      const html = (await win.webContents.executeJavaScript(
+        'document.documentElement.outerHTML',
+        true
+      )) as string
+      const dir = join(app.getPath('userData'), 'google-pool-challenges')
+      mkdirSync(dir, { recursive: true })
+      const file = join(
+        dir,
+        `${Date.now()}-${entry.email.replace(/[^a-zA-Z0-9]/g, '_')}.html`
+      )
+      writeFileSync(file, `<!-- url: ${url} -->\n${html}`)
+      this.log('warn', `挑战页已存档（发我分析即可）：${file}`)
+    } catch {
+      /* 存档失败不影响主流程 */
     }
   }
 

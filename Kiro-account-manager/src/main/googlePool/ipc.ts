@@ -27,6 +27,9 @@ export function registerGooglePoolIpc(opts: {
 
   // 页面级快照缓存：切页导致组件重挂时，进页面拉一次全量恢复
   const recentLogs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }> = []
+  // 未消费的入库结果缓存：token 交换成功时用户可能已切走页面（组件卸载=事件退订），
+  // result 事件会丢——这里缓存，页面重挂时经 list 快照补投，消费完 ack
+  const pendingResults: GooglePoolResultPayload[] = []
 
   const runner = new GooglePoolRunner(store, opts.deps, {
     onEntry: (entry) => send({ kind: 'entry', entry }),
@@ -37,7 +40,10 @@ export function registerGooglePoolIpc(opts: {
       if (recentLogs.length > 200) recentLogs.splice(0, recentLogs.length - 200)
       send({ kind: 'log', line })
     },
-    onResult: (payload) => send({ kind: 'result', payload })
+    onResult: (payload) => {
+      pendingResults.push(payload)
+      send({ kind: 'result', payload })
+    }
   })
 
   const log = (level: 'info' | 'ok' | 'err' | 'warn', msg: string): void => {
@@ -48,12 +54,20 @@ export function registerGooglePoolIpc(opts: {
     send({ kind: 'log', line })
   }
 
-  // 返回全量快照：条目 + 最近日志（页面重挂时恢复用）
+  // 返回全量快照：条目 + 最近日志 + 待补投的入库结果（页面重挂时恢复/消费用）
   ipcMain.handle('google-pool:list', () => ({
     entries: store.listViews(),
     running: runner.running,
-    logs: [...recentLogs]
+    logs: [...recentLogs],
+    pending: [...pendingResults]
   }))
+
+  // 渲染层消费完一条入库结果后回执清除（按 resultId，无论入库成败都算已消费）
+  ipcMain.handle('google-pool:ack-result', (_e, resultId: string) => {
+    const i = pendingResults.findIndex((p) => p.resultId === resultId)
+    if (i >= 0) pendingResults.splice(i, 1)
+    return { success: true }
+  })
 
   ipcMain.handle('google-pool:add-text', (_e, text: string) => {
     const { items, bad } = parseGooglePoolText(text)
