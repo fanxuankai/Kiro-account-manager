@@ -1,6 +1,8 @@
-// 卡信息快捷解析 —— 粘贴多行文本（卡号/有效期/安全码）智能识别。
+// 卡信息快捷解析 —— 粘贴文本智能识别，支持两类粘贴形态：
+// 1. 多行、每行一项（卡号/有效期/安全码各占一行，行序不限）；
+// 2. 每行一张卡：一行内用制表符/连续空格/逗号分隔（卡商常见导出格式），多行即多张卡。
 //
-// 兼容的常见形态（不依赖行序，按特征分类）：
+// 各字段兼容的形态（按特征分类）：
 // - 卡号：去空格/横线后 12–19 位纯数字（4234 1234 1234 9562 / 4234123412349562）
 // - 有效期：MM/YY、MM-YY、MM YY、M/YY（9/34）、MMYYYY（取后两位）、裸 MMYY（0934）
 // - 安全码：3–4 位纯数字
@@ -110,4 +112,53 @@ export function parseCardInfo(text: string): CardInfo | null {
 /** 掩码预览：尾 4 位卡号 + MM/YY + CVC 长度 */
 export function maskCardInfo(c: CardInfo): string {
   return `**** ${c.number.slice(-4)} · ${c.expiry.slice(0, 2)}/${c.expiry.slice(2)} · ${'*'.repeat(c.cvc.length)}`
+}
+
+/**
+ * 解析可能含多张卡的粘贴文本（每行一张卡的批量格式）。
+ * 单行内的段（制表符/连续空格/逗号分隔）先尝试独立成卡；
+ * 凑不成卡的行退回跨行组合（多行一项的旧形态）。
+ */
+export function parseCardInfos(text: string): CardInfo[] {
+  const cards: CardInfo[] = []
+  const leftovers: string[] = []
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = stripLabel(raw.trim())
+    if (!line) continue
+    // 行内多段（tab / 2+ 空格 / 逗号）→ 尝试整行组装一张卡
+    const segs = line.split(/[\t,]|\s{2,}/).map((x) => x.trim()).filter(Boolean)
+    if (segs.length >= 3) {
+      let number: string | null = null
+      let expiry: string | null = null
+      let cvc: string | null = null
+      for (const seg of segs) {
+        const digits = digitsOnly(seg)
+        if (!expiry && /^\d{1,2}[/\-. ]\d{2,4}$/.test(seg)) {
+          const p = parseExpiryLine(seg)
+          if (p) { expiry = p; continue }
+        }
+        if (!number && /^[\d\s-]{12,26}$/.test(seg) && digits.length >= 12 && digits.length <= 19) {
+          number = digits
+          continue
+        }
+        if (!cvc && /^\d{3}$/.test(seg)) { cvc = seg; continue }
+        if (!expiry && /^\d{4}$/.test(seg)) {
+          const p = parseExpiryLine(seg)
+          if (p) { expiry = p; continue }
+        }
+        if (!cvc && /^\d{3,4}$/.test(seg)) { cvc = seg }
+      }
+      if (number && expiry && cvc) {
+        cards.push({ number, expiry, cvc })
+        continue
+      }
+    }
+    leftovers.push(line)
+  }
+
+  // 凑不成整卡的行（含每行一项的旧形态）走跨行组合，最多凑一张
+  const single = parseCardInfo(leftovers.join('\n'))
+  if (single) cards.push(single)
+  return cards
 }

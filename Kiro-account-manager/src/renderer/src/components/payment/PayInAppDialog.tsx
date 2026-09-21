@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '../ui'
-import { parseCardInfo, maskCardInfo, type CardInfo } from '../../lib/cardParse'
+import { parseCardInfos, maskCardInfo, type CardInfo } from '../../lib/cardParse'
 import {
   X,
   CreditCard,
@@ -51,8 +51,10 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
   const [opening, setOpening] = useState(false)
   const [cardText, setCardText] = useState('')
   const [cardFilled, setCardFilled] = useState(false)
-  // 粘贴即解析：卡号/有效期(0934、09/34、9/34、MMYYYY)/安全码，特征识别不依赖行序
-  const card: CardInfo | null = parseCardInfo(cardText)
+  const [cardIdx, setCardIdx] = useState(0)
+  // 粘贴即解析：支持每行一项与一行一张卡（tab/空格/逗号分隔）两种形态，可含多张卡
+  const cards = parseCardInfos(cardText)
+  const card: CardInfo | null = cards[cardIdx] ?? cards[0] ?? null
   const [phase, setPhase] = useState<Phase>('idle')
   const [opened, setOpened] = useState(false)
 
@@ -82,7 +84,10 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     setOpened(false)
     setCardText('')
     setCardFilled(false)
-  }, [target, refreshAddress])
+    setCardIdx(0)
+    // 依赖取原始值：父弹窗（待付款弹窗）随账号自动刷新频繁重渲染，
+    // 若依赖 target 对象引用会不断重置本弹窗状态（闪烁/地址重生成）
+  }, [target?.url, target?.accountId, refreshAddress])
 
   // 支付窗口状态回流（只认当前账号）
   useEffect(() => {
@@ -91,12 +96,17 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
       if (update.accountId !== target.accountId) return
       setPhase(update.phase)
       if (update.phase === 'card-filled') {
-        setCardText('')
         setCardFilled(true)
+        if (cardIdx + 1 < cards.length) {
+          setCardIdx(cardIdx + 1)
+        } else {
+          setCardText('')
+          setCardIdx(0)
+        }
       }
     })
     return off
-  }, [target])
+  }, [target?.accountId])
 
   // Esc 关闭
   useEffect(() => {
@@ -139,7 +149,7 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
 
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative bg-background rounded-xl shadow-2xl w-full max-w-md animate-in fade-in zoom-in-95 duration-200">
         {/* 标题栏 */}
@@ -215,12 +225,23 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
                 {isEn ? 'Card quick fill (paste, not saved)' : '卡信息快捷填入（粘贴解析，不保存）'}
               </span>
               {card && (
-                <span className="text-[10px] font-mono text-green-600">{maskCardInfo(card)}</span>
+                <span className="flex items-center gap-1.5">
+                  {cards.length > 1 && (
+                    <button
+                      className="text-[10px] text-primary hover:underline"
+                      onClick={() => { setCardIdx((cardIdx + 1) % cards.length); setCardFilled(false) }}
+                      title={isEn ? 'Switch card' : '切换卡'}
+                    >
+                      {isEn ? `#${cardIdx + 1}/${cards.length}` : `第${cardIdx + 1}/${cards.length}张`}
+                    </button>
+                  )}
+                  <span className="text-[10px] font-mono text-green-600">{maskCardInfo(card)}</span>
+                </span>
               )}
             </div>
             <textarea
               value={cardText}
-              onChange={(e) => { setCardText(e.target.value); setCardFilled(false) }}
+              onChange={(e) => { setCardText(e.target.value); setCardFilled(false); setCardIdx(0) }}
               rows={3}
               spellCheck={false}
               placeholder={isEn
