@@ -343,6 +343,8 @@ export class GooglePoolRunner {
       }
       this.emitBatch()
       if (!this.batchActive || this.paused) break
+      // 队列已空：最后一个号跑完直接收尾，不再空等一轮冷却
+      if ((this.batchQueue ? this.batchQueue.length : this.store.countUnused()) === 0) break
       const cd =
         this.opts.batchIntervalSec === 'rand'
           ? randInt(60, 180)
@@ -533,6 +535,10 @@ export class GooglePoolRunner {
     let consentClicked = false
     /** TOTP 填错重试上限（码错页面会清空重出，重填最多 2 次） */
     let otpAttempts = 0
+    /** 挑战方式选择页：上次点击时间与日志去重——点击后观察期内不重点
+     *  （页面慢跳转属正常，重复点击只会刷日志/误触；点击无效时观察期过了再重试） */
+    let selectionClickAt = 0
+    let selectionLogged = false
     /** 人工提醒与错误日志去重 */
     let lastNotified = ''
     let lastErrorMsg = ''
@@ -684,13 +690,19 @@ export class GooglePoolRunner {
             // 挑战方式选择页：自动选「确认您的辅助邮箱」（无需收码的那条路；
             // 输入卡密里有地址，选完进 kpe 输入页由下个分支自动填）
             if (detect.selection && entry.recoveryEmail) {
-              const clicked = await this.clickCenter(win, [
-                { text: '确认您的辅助邮箱' },
-                { text: 'confirm your recovery email' }
-              ])
-              if (clicked) {
-                this.log('ok', `${entry.email} 已自动选择「确认您的辅助邮箱」验证方式`)
-                await sleep(randInt(500, 1200))
+              if (Date.now() - selectionClickAt > 8_000) {
+                selectionClickAt = Date.now()
+                const clicked = await this.clickCenter(win, [
+                  { text: '确认您的辅助邮箱' },
+                  { text: 'confirm your recovery email' }
+                ])
+                if (clicked) {
+                  if (!selectionLogged) {
+                    selectionLogged = true
+                    this.log('ok', `${entry.email} 已自动选择「确认您的辅助邮箱」验证方式`)
+                  }
+                  await sleep(randInt(500, 1200))
+                }
               }
               continue
             }
