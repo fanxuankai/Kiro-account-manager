@@ -32,7 +32,7 @@ interface PayInAppDialogProps {
 /** 省份偏好的 localStorage key（跨弹窗/入口共用） */
 const PROVINCE_LS_KEY = 'payment_province'
 
-type Phase = 'idle' | 'filling' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
+type Phase = 'idle' | 'filling' | 'card-filled' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
 
 export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): React.ReactNode {
   const [provinces, setProvinces] = useState<string[]>([])
@@ -59,6 +59,15 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
   const refreshAddress = useCallback((prov?: string): void => {
     void window.api.paymentGenerateAddress(prov || undefined).then(setAddress)
   }, [])
+  const handleFillCard = useCallback(async (): Promise<void> => {
+    if (!card) return
+    const res = await window.api.paymentFillCard(card)
+    if (res.success) {
+      setCardText('')
+      setCardFilled(true)
+    }
+  }, [card])
+
 
   // 打开时加载省份列表 + 生成地址预览
   useEffect(() => {
@@ -81,6 +90,10 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     const off = window.api.onPaymentUpdate((update) => {
       if (update.accountId !== target.accountId) return
       setPhase(update.phase)
+      if (update.phase === 'card-filled') {
+        setCardText('')
+        setCardFilled(true)
+      }
     })
     return off
   }, [target])
@@ -112,7 +125,8 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
       accountId: target.accountId,
       email: target.email,
       province: province || undefined,
-      address
+      address,
+      card: card || undefined
     })
     setOpening(false)
     if (res.success) {
@@ -123,14 +137,6 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     }
   }
 
-  const handleFillCard = async (): Promise<void> => {
-    if (!card) return
-    const res = await window.api.paymentFillCard(card)
-    if (res.success) {
-      setCardText('')
-      setCardFilled(true)
-    }
-  }
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -260,6 +266,12 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
                 <p className="text-muted-foreground flex items-center gap-1.5">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   {isEn ? 'Auto-filling billing address…' : '正在自动填写账单地址…'}
+                </p>
+              )}
+              {phase === 'card-filled' && (
+                <p className="text-muted-foreground flex items-center gap-1.5">
+                  <CheckCircle className="h-3.5 w-3.5 text-green-600" />
+                  {isEn ? 'Card info filled, address filling…' : '卡信息已填入，地址填写中…'}
                 </p>
               )}
               {phase === 'filled' && (

@@ -29,7 +29,7 @@ const PROBE_LIFETIME_MS = 30 * 60 * 1000
 /** 连续探测脚本异常达到该次数即停止自动化（页面结构不认识/被导航打断） */
 const MAX_PROBE_ERRORS = 5
 
-export type PaymentPhase = 'filling' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
+export type PaymentPhase = 'filling' | 'card-filled' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
 
 export interface PaymentUpdate {
   accountId: string
@@ -48,11 +48,24 @@ export interface OpenPaymentOptions {
   province?: string
   /** UI 预览过的地址（回传保证预览与实际填写一致）；缺省现场生成 */
   address?: BillingAddress
+  /** 开窗即带的卡信息（粘贴解析后的内存值，不落盘）；表单出现后最先填入 */
+  card?: CardInput
   /** 状态回调（由 index.ts 接到主窗口的 webContents） */
   notify: (update: PaymentUpdate) => void
 }
 
+/** 快捷填入的卡信息（内存值，不落盘） */
+export interface CardInput {
+  number: string
+  expiry: string
+  cvc: string
+}
+
 let paymentWindow: BrowserWindow | null = null
+/** 排队中的卡信息：流水线卡阶段未到时先存，到点由流水线串行填入（杜绝并行打字） */
+let pendingCard: CardInput | null = null
+/** 本窗口流水线的卡阶段是否已过（过后 IPC 直填，之前入队） */
+let cardStageDone = false
 
 const CHILD_WEB_PREFERENCES = {
   partition: PARTITION,
@@ -206,6 +219,8 @@ export async function openPaymentWindow(opts: OpenPaymentOptions): Promise<void>
     paymentWindow.destroy()
   }
   paymentWindow = null
+  pendingCard = opts.card || null
+  cardStageDone = false
 
   const address =
     opts.address ||
@@ -313,13 +328,25 @@ async function runFillLoop(
       notify({ accountId, email, phase: 'filling', address })
     }
 
+    // 卡阶段（页面从上到下：卡区在账单地址上方，且不依赖国家选择）——
+    // 只走这一处，天然与地址串行；UI 后粘贴的卡由 IPC 入队在此消费
+    if (!cardStageDone) {
+      cardStageDone = true
+      if (pendingCard) {
+        const card = pendingCard
+        pendingCard = null
+        await fillCardDetails(card)
+        notify({ accountId, email, phase: 'card-filled' })
+      }
+    }
+
     try {
       const countryOk = await ensureCountry(win, probe)
       if (!countryOk) {
         await sleep(PROBE_INTERVAL_MS)
         continue
       }
-      const provinceOk = await ensureProvince(win, address)
+      const provinceOk = await ensureProvince(win, probe, address)
       if (!provinceOk) {
         await sleep(PROBE_INTERVAL_MS)
         continue
@@ -374,7 +401,10 @@ async function ensureCountry(win: BrowserWindow, probe: ProbeResult): Promise<bo
 }
 
 /** 省份是否已选中目标省；不是则选择之（address.provinceZh 即真实 option value） */
-async function ensureProvince(win: BrowserWindow, address: BillingAddress): Promise<boolean> {
+async function ensureProvince(win: BrowserWindow, probe: ProbeResult, address: BillingAddress): Promise<boolean> {
+  // 已选中目标省则跳过（option 文本"浙江省 — Zhejiang Sheng"含拼音与中文双形态）
+  const cur = probe.province.value || ''
+  if (cur.includes(address.provinceZh) || cur.toLowerCase().includes(address.provinceEn.toLowerCase())) return true
   // 省份选项在国家选成 CN 后才异步填充（首项是"省/州"占位符），未就绪等下一轮
   const ready = (await win.webContents.executeJavaScript(
     `(() => { const s = document.querySelector('#billingAdministrativeArea'); return !!s && s.options.length > 1 })()`,
@@ -432,11 +462,7 @@ async function fillTextFields(win: BrowserWindow, address: BillingAddress): Prom
  * 窗口须已打开。有效期按 4 位 MMYY 逐字符输入，由页面自行格式化成 MM/YY。
  * 返回各字段填写结果供 UI 判读。
  */
-export async function fillCardDetails(card: {
-  number: string
-  expiry: string
-  cvc: string
-}): Promise<{ success: boolean; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }>; error?: string }> {
+export async function fillCardDetails(card: CardInput): Promise<{ success: boolean; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }>; error?: string }> {
   const win = paymentWindow
   if (!win || win.isDestroyed()) return { success: false, error: 'payment-window-not-open' }
   const fields = [

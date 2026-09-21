@@ -4954,6 +4954,7 @@ app.whenReady().then(async () => {
         accountId: string
         email?: string
         province?: string
+        card?: { number: string; expiry: string; cvc: string }
         address?: ReturnType<typeof generateBillingAddress>
       }
     ) => {
@@ -4967,6 +4968,7 @@ app.whenReady().then(async () => {
           email: payload.email,
           province: payload.province,
           address: payload.address,
+          card: payload.card,
           notify: (update) => {
             const w = mainWindow
             if (w && !w.isDestroyed()) w.webContents.send('payment-update', update)

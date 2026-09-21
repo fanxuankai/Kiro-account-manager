@@ -757,6 +757,7 @@ interface KiroApi {
     accountId: string
     email?: string
     province?: string
+    card?: { number: string; expiry: string; cvc: string }
     address?: {
       name: string
       zip: string
@@ -769,13 +770,13 @@ interface KiroApi {
   }) => Promise<{ success: boolean; error?: string }>
 
   // 快捷填入卡信息（粘贴解析后传入；内存直填支付窗口，不落盘）
-  paymentFillCard: (card: { number: string; expiry: string; cvc: string }) => Promise<{ success: boolean; error?: string; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }> }>
+  paymentFillCard: (card: { number: string; expiry: string; cvc: string }) => Promise<{ success: boolean; queued?: boolean; error?: string; results?: Array<{ key: string; ok: boolean; skipped?: boolean; error?: string }> }>
 
   // 支付窗口状态推送（filling/filled/success/expired/closed/error）
   onPaymentUpdate: (callback: (update: {
     accountId: string
     email?: string
-    phase: 'filling' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
+    phase: 'filling' | 'card-filled' | 'filled' | 'success' | 'expired' | 'closed' | 'error'
     detail?: string
     address?: {
       name: string

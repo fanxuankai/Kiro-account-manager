@@ -4,7 +4,8 @@
 // - 卡号：去空格/横线后 12–19 位纯数字（4234 1234 1234 9562 / 4234123412349562）
 // - 有效期：MM/YY、MM-YY、MM YY、M/YY（9/34）、MMYYYY（取后两位）、裸 MMYY（0934）
 // - 安全码：3–4 位纯数字
-// 含字母的行（持卡人名等）忽略。恰好三行且无法判别时退回「行序 = 卡号/有效期/CVC」。
+// 行首的标签前缀（卡号：/有效期:/card no.- 等）自动剥除；含字母的行（持卡人名等）
+// 忽略。恰好三行且无法判别时退回「行序 = 卡号/有效期/CVC」。
 
 export interface CardInfo {
   /** 纯数字卡号（无分隔） */
@@ -16,6 +17,10 @@ export interface CardInfo {
 }
 
 const digitsOnly = (s: string): string => s.replace(/[\s-]/g, '')
+
+/** 剥掉行首的标签前缀（「卡号：」「有效期:」「card number -」等），只留值部分 */
+const stripLabel = (line: string): string =>
+  line.replace(/^[\u4e00-\u9fa5a-zA-Z\s]{0,12}[:：\-—]\s*/, '').trim()
 
 /** 解析一行有效期 → MMYY；不合法返回 null */
 function parseExpiryLine(line: string): string | null {
@@ -50,8 +55,10 @@ export function parseCardInfo(text: string): CardInfo | null {
   let cvc: string | null = null
   const fourDigitFallback: string[] = []
 
-  for (const line of lines) {
-    if (/[a-zA-Z]/.test(line)) continue // 持卡人名等文字行忽略
+  for (const raw of lines) {
+    // 先剥标签前缀；剥完仍含字母的行（持卡人名等）忽略
+    const line = stripLabel(raw)
+    if (/[a-zA-Z]/.test(line)) continue
     const digits = digitsOnly(line)
     // 两段分隔形态（MM/YY、M-YY、MM YY、MM/YYYY）→ 有效期（优先于长卡号判定）
     if (/^\d{1,2}[/\-. ]\d{2,4}$/.test(line)) {
@@ -90,7 +97,7 @@ export function parseCardInfo(text: string): CardInfo | null {
 
   // 三行标准序兜底（识别不齐时按用户常见粘贴顺序补位）
   if ((!number || !expiry || !cvc) && lines.length >= 3) {
-    const [l1, l2, l3] = lines.filter((l) => !/[a-zA-Z]/.test(l))
+    const [l1, l2, l3] = lines.map(stripLabel).filter((l) => !/[a-zA-Z]/.test(l))
     if (!number && l1 && /^[\d\s-]{12,26}$/.test(l1)) number = digitsOnly(l1)
     if (!expiry && l2) expiry = parseExpiryLine(l2)
     if (!cvc && l3 && /^\d{3,4}$/.test(l3)) cvc = l3
