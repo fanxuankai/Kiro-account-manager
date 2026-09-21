@@ -1,9 +1,12 @@
 // 账单页：按账号展示 Stripe 订阅门户回写的账单快照（计划单价 / 计费周期 / 本周期与下期金额 / 扣款卡 / 最近发票）。
 // 数据来源是「检查续费 / 切 Free」时的同一份门户响应（零额外请求），本页只读快照并提供
 // 「检查账单」入口触发同一只读链路刷新；汇总卡与列表随筛选实时重算。
+// 已删账号的账单快照单独存档 60 天（与账号生命周期解耦），在本页合并展示——账号没了也能按卡尾号回查。
 import { useState, useCallback, useEffect, useRef, useMemo, memo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAccountsStore } from '@/store/accounts'
+import { useIdleAccountsStore } from '@/store/idleAccounts'
+import { billingArchiveToRow, hasBillingSnapshot } from '@/store/billingArchive'
 import { Button, Card, CardContent } from '../ui'
 import {
   CheckSquare,
@@ -25,6 +28,15 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTranslation } from '@/hooks/useTranslation'
+import { BillingCardsView } from '@/components/billing/BillingCardsView'
+import {
+  planKindOf,
+  PLAN_STYLES,
+  PLAN_LABELS,
+  formatMoney,
+  formatShortDate,
+  type PlanKind
+} from '@/components/billing/billingShared'
 
 type AccountType =
   ReturnType<typeof useAccountsStore.getState>['accounts'] extends Map<string, infer T> ? T : never
@@ -33,36 +45,7 @@ type AccountType =
 const jitterDelay = (): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, 100 + Math.random() * 50))
 
-// ===== 计划归类（与账号筛选面板 / 订阅页徽章同一套口径） =====
-type PlanKind = 'Pro' | 'Pro_Plus' | 'Pro_Max' | 'Power' | 'Free'
-
-function planKindOf(acc: AccountType): PlanKind {
-  const type = (acc.subscription?.type || '').toUpperCase()
-  const title = (acc.subscription?.title || '').toUpperCase()
-  const both = `${type} ${title}`
-  if (both.includes('PRO_MAX') || both.includes('PRO MAX') || both.includes('PROMAX'))
-    return 'Pro_Max'
-  if (both.includes('PRO_PLUS') || both.includes('PRO+')) return 'Pro_Plus'
-  if (both.includes('ENTERPRISE') || both.includes('POWER')) return 'Power'
-  if (both.includes('PRO')) return 'Pro'
-  return 'Free'
-}
-
-const PLAN_STYLES: Record<PlanKind, string> = {
-  Pro_Max: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
-  Pro_Plus: 'bg-purple-500/15 text-purple-700 dark:text-purple-300',
-  Power: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
-  Pro: 'bg-blue-500/15 text-blue-700 dark:text-blue-300',
-  Free: 'bg-muted text-muted-foreground'
-}
-
-const PLAN_LABELS: Record<PlanKind, string> = {
-  Pro_Max: 'Pro Max',
-  Pro_Plus: 'Pro+',
-  Power: 'Power',
-  Pro: 'Pro',
-  Free: 'Free'
-}
+// ===== 计划归类 / 显示工具：移至 components/billing/billingShared.ts（账号视图与卡视图共用） =====
 
 // 计划筛选 chip：配色与账号管理页 AccountFilter 的 SubscriptionOptions 完全一致
 const PLAN_CHIP_OPTIONS: { value: PlanKind; label: string; color: string; activeColor: string }[] = [
@@ -124,20 +107,36 @@ function nextStatusOf(acc: AccountType): NextStatus {
   return 'unchecked'
 }
 
-// ===== 显示工具 =====
-const formatMoney = (cents?: number, currency = 'usd'): string => {
-  if (cents == null) return '-'
-  const symbol = currency.toLowerCase() === 'usd' ? '$' : `${currency.toUpperCase()} `
-  return `${symbol}${(cents / 100).toFixed(2)}`
+// ===== 显示工具:见 components/billing/billingShared.ts =====
+
+// ===== 时间范围筛选（按最近发票时间 = 扣款时间；默认"今日"只看当天扣款，查历史切范围或搜索） =====
+type TimeRange = 'today' | '7d' | '30d' | 'all'
+
+const TIME_RANGE_OPTIONS: Array<{ value: TimeRange; zh: string; en: string }> = [
+  { value: 'today', zh: '今日', en: 'Today' },
+  { value: '7d', zh: '近7天', en: '7d' },
+  { value: '30d', zh: '近30天', en: '30d' },
+  { value: 'all', zh: '全部', en: 'All' }
+]
+
+/** 各时间范围的起点（本地时区"今天 00:00" / 滚动 N 天）；all 返回 null 不过滤 */
+function timeRangeStartMs(range: TimeRange): number | null {
+  if (range === 'all') return null
+  if (range === 'today') {
+    const d = new Date()
+    d.setHours(0, 0, 0, 0)
+    return d.getTime()
+  }
+  return Date.now() - (range === '7d' ? 7 : 30) * 24 * 60 * 60 * 1000
 }
 
-const formatShortDate = (ms?: number): string => {
-  if (!ms) return '-'
-  return new Date(ms).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
-}
+/** 搜索框口令：输入该串切换到按卡聚合视图（不占界面入口，口令可自行修改） */
+const CARD_VIEW_KEY = '//'
 
 export function BillingPage(): React.ReactNode {
-  const { accounts, groups, tags, updateAccount, sort } = useAccountsStore()
+  const { accounts, groups, tags, updateAccount, sort, billingArchive } = useAccountsStore()
+  // 闲置库账号：真实账号（App 启动时已随主库一起加载），本页只读展示其账单快照
+  const idleAccounts = useIdleAccountsStore((s) => s.accounts)
   const { actualLanguage } = useTranslation()
   const isEn = actualLanguage === 'en'
 
@@ -150,6 +149,10 @@ export function BillingPage(): React.ReactNode {
   const [emailDomains, setEmailDomains] = useState<Set<string>>(new Set())
   const [showAllDomains, setShowAllDomains] = useState(false)
   const [keyword, setKeyword] = useState('')
+  // 时间范围筛选（按最近发票时间）：默认"今日"，打开即聚焦当天扣款
+  const [timeRange, setTimeRange] = useState<TimeRange>('today')
+  // 搜索框命中口令时整页切换为按卡聚合视图；清空即回账号视图
+  const showCardsView = keyword.trim() === CARD_VIEW_KEY
   // 高级筛选气泡（账号管理页同款：漏斗按钮展开，维度在气泡内紧凑排布）
   const [showFilterPopover, setShowFilterPopover] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -175,7 +178,9 @@ export function BillingPage(): React.ReactNode {
   }, [])
 
   // 数据集：付费账号（含已排期切 Free 的——本周期仍计费）+ 曾付费/有账单快照的账号；
-  // 从未订阅的纯 Free 没有账单可言，排除
+  // 从未订阅的纯 Free 没有账单可言，排除。
+  // 另合并两类只读行：闲置库有账单快照的账号（标"闲置"，用户移库后账单仍可查）
+  // 与已删账号的存档（60 天内，标"已删"）——账号不在主库了账单照样能按尾号搜到
   const billingAccounts = useMemo(() => {
     const list: AccountType[] = []
     for (const acc of accounts.values()) {
@@ -186,12 +191,18 @@ export function BillingPage(): React.ReactNode {
       if (kind === 'Free' && !acc.subscription?.wasPaid && !hasSnapshot) continue
       list.push(acc)
     }
+    for (const acc of idleAccounts.values()) {
+      if (acc && hasBillingSnapshot(acc.subscription)) list.push({ ...acc, billingFromIdle: true })
+    }
+    for (const entry of billingArchive.values()) list.push(billingArchiveToRow(entry))
     return list
-  }, [accounts])
+  }, [accounts, idleAccounts, billingArchive])
 
   // 筛选 + 排序（下期金额降序，未检查垫底；同额按邮箱稳定排序）
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase()
+    // 搜索时自动放宽时间筛选：按尾号查历史账单正是搜索的主场景，不该被"今日"挡住
+    const timeStart = kw ? null : timeRangeStartMs(timeRange)
     const out = billingAccounts.filter((acc) => {
       // 分组与账号管理页同款：顶部互斥单选（全部 / 未分组 / 具体分组）
       if (activeGroupTab === 'ungrouped' && acc.groupId) return false
@@ -219,6 +230,11 @@ export function BillingPage(): React.ReactNode {
         )
       )
         return false
+      // 时间范围按最近发票时间（= 扣款时间）过滤；未检查过（无发票时间）的行只在"全部"出现
+      if (timeStart != null) {
+        const invoiceAt = acc.subscription?.latestInvoiceAt
+        if (invoiceAt == null || invoiceAt < timeStart) return false
+      }
       return true
     })
     // 排序与账号管理页共用同一份 sort 设置（store），保证两页账号顺序一致
@@ -245,15 +261,16 @@ export function BillingPage(): React.ReactNode {
       }
     }
     return out.sort((a, b) => (sort.order === 'desc' ? -compare(a, b) : compare(a, b)))
-  }, [billingAccounts, activeGroupTab, tagIds, planFilter, statusFilter, emailDomains, keyword, sort])
+  }, [billingAccounts, activeGroupTab, tagIds, planFilter, statusFilter, emailDomains, keyword, timeRange, sort])
 
-  // ===== 汇总卡（随筛选重算） =====
+  // ===== 汇总卡（随筛选重算；已删账号的存档行不参与——不会再扣款） =====
   const summary = useMemo(() => {
     let totalNext = 0
     let renewCount = 0
     let scheduledCount = 0
     let uncheckedCount = 0
     for (const acc of filtered) {
+      if (acc.billingArchivedAt != null) continue
       const st = nextStatusOf(acc)
       if (st === 'renew') {
         renewCount++
@@ -269,9 +286,11 @@ export function BillingPage(): React.ReactNode {
   }, [filtered])
 
   // 可检查（= 会发起只读门户链路）的判定：纯 Free（从未付费）无账单可查，排除；
+  // 闲置库 / 已删存档的只读行不可检查（检查结果只会回写主库，对它们无处落地）；
   // 已排期切 Free（scheduledToFree）本周期仍是付费、账单完整（含网页手动切的账号），必须允许拉取——
   // 否则这类账号永远无法补/刷快照（订阅页检查续费口径不含它们，那边不变）
   const isCheckable = useCallback((acc: AccountType): boolean => {
+    if (acc.billingFromIdle || acc.billingArchivedAt != null) return false
     if (planKindOf(acc) === 'Free') return false
     return !!acc.credentials?.accessToken
   }, [])
@@ -469,9 +488,34 @@ export function BillingPage(): React.ReactNode {
     return top
   }, [domainCounts, showAllDomains, emailDomains])
 
+  // 各时间范围的条数（基于其他筛选生效后、时间筛选前的数据集，chip 上展示参考）
+  const timeCounts = useMemo(() => {
+    const bounds = {
+      today: timeRangeStartMs('today'),
+      '7d': timeRangeStartMs('7d'),
+      '30d': timeRangeStartMs('30d'),
+      all: null
+    } as Record<TimeRange, number | null>
+    const counts: Record<TimeRange, number> = { today: 0, '7d': 0, '30d': 0, all: 0 }
+    for (const acc of billingAccounts) {
+      counts.all++
+      const invoiceAt = acc.subscription?.latestInvoiceAt
+      if (invoiceAt == null) continue
+      for (const range of ['today', '7d', '30d'] as TimeRange[]) {
+        const start = bounds[range]
+        if (start != null && invoiceAt >= start) counts[range]++
+      }
+    }
+    return counts
+  }, [billingAccounts])
+
   return (
     <>
       <div className="space-y-4">
+        {showCardsView ? (
+          <BillingCardsView rows={billingAccounts} isEn={isEn} />
+        ) : (
+          <>
         {/* 汇总卡：随筛选实时重算 */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <Card className="border-red-500/20">
@@ -636,6 +680,38 @@ export function BillingPage(): React.ReactNode {
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
                 />
+              </div>
+
+              {/* 时间范围筛选：按最近发票（扣款）时间；搜索时自动忽略并降透明度提示 */}
+              <div
+                className={cn(
+                  'flex items-center gap-1 transition-opacity',
+                  keyword.trim() && 'opacity-50'
+                )}
+                title={
+                  keyword.trim()
+                    ? isEn
+                      ? 'Time filter is bypassed while searching (history included)'
+                      : '搜索时忽略时间筛选（含历史账单）'
+                    : isEn
+                      ? 'Filter by latest invoice date'
+                      : '按最近发票（扣款）时间筛选'
+                }
+              >
+                {TIME_RANGE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    className={cn(
+                      'px-2 py-0.5 text-xs rounded border transition-colors',
+                      timeRange === opt.value
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'hover:bg-muted/50 text-muted-foreground'
+                    )}
+                    onClick={() => setTimeRange(opt.value)}
+                  >
+                    {isEn ? opt.en : opt.zh}({timeCounts[opt.value]})
+                  </button>
+                ))}
               </div>
 
               <span className="text-xs text-muted-foreground">
@@ -862,15 +938,24 @@ export function BillingPage(): React.ReactNode {
               isCheckable={isCheckable}
               onCheck={checkOne}
               isEn={isEn}
+              emptyHint={
+                keyword.trim() || timeRange === 'all'
+                  ? undefined
+                  : isEn
+                    ? 'No invoices in this time range — switch the range or search a card last4 to view history'
+                    : '当前时间范围内没有扣款账单——切换时间范围或搜索卡尾号查看历史'
+              }
             />
 
             <p className="text-[10px] text-muted-foreground">
               {isEn
-                ? 'Billing snapshot is written back by "Check Renewal / Switch to Free" (same Stripe portal response, no extra requests). Unchecked rows show "-".'
-                : '账单快照由「检查续费 / 切 Free」随 Stripe 门户同一响应回写（零额外请求）；未检查的行显示 "-"。'}
+                ? 'Billing snapshot is written back by "Check Renewal / Switch to Free" (same Stripe portal response, no extra requests). Unchecked rows show "-". Idle-pool accounts are shown read-only; deleted accounts keep their snapshot archived for 60 days (searchable by card last4). Default view is today\u2019s charges.'
+                : '账单快照由「检查续费 / 切 Free」随 Stripe 门户同一响应回写（零额外请求）；未检查的行显示 "-"。闲置库账号在列表中标「闲置」只读展示；删除账号时快照自动存档保留 60 天（可按卡尾号搜索回查）；列表默认只展示今日扣款。'}
             </p>
           </CardContent>
         </Card>
+          </>
+        )}
       </div>
     </>
   )
@@ -890,6 +975,8 @@ interface BillingListProps {
   isCheckable: (acc: AccountType) => boolean
   onCheck: (acc: AccountType) => Promise<boolean>
   isEn: boolean
+  /** 空列表提示文案（如"当前时间范围内没有扣款账单"）；不传用默认文案 */
+  emptyHint?: string
 }
 
 function BillingVirtualList({
@@ -898,7 +985,8 @@ function BillingVirtualList({
   toggleSelect,
   isCheckable,
   onCheck,
-  isEn
+  isEn,
+  emptyHint
 }: BillingListProps): React.ReactNode {
   const parentRef = useRef<HTMLDivElement>(null)
   const ROW_HEIGHT = 44
@@ -927,7 +1015,7 @@ function BillingVirtualList({
         ))}
         {rows.length === 0 && (
           <div className="py-10 text-center text-xs text-muted-foreground">
-            {isEn ? 'No accounts match current filters' : '没有符合当前筛选的账号'}
+            {emptyHint ?? (isEn ? 'No accounts match current filters' : '没有符合当前筛选的账号')}
           </div>
         )}
       </div>
@@ -1025,7 +1113,33 @@ const BillingRow = memo(function BillingRow({
         )}
       </button>
       <span className="w-8 text-center text-muted-foreground">{idx + 1}</span>
-      <span className="flex-1 truncate">{acc.email}</span>
+      <span className="flex-1 truncate">
+        {acc.email}
+        {acc.billingArchivedAt != null && (
+          <span
+            className="ml-1.5 inline-block px-1.5 py-0.5 rounded text-[9px] bg-muted text-muted-foreground border border-[var(--glass-border)] align-middle"
+            title={
+              isEn
+                ? `Account deleted on ${new Date(acc.billingArchivedAt).toLocaleString()}; billing snapshot archived for 60 days`
+                : `账号已于 ${new Date(acc.billingArchivedAt).toLocaleString()} 删除，账单快照存档保留 60 天`
+            }
+          >
+            {isEn ? 'deleted' : '已删'}
+          </span>
+        )}
+        {acc.billingFromIdle && (
+          <span
+            className="ml-1.5 inline-block px-1.5 py-0.5 rounded text-[9px] bg-blue-500/15 text-blue-600 dark:text-blue-300 align-middle"
+            title={
+              isEn
+                ? 'Account is in the idle pool (read-only snapshot here; manage it in the Idle page)'
+                : '账号在闲置库中（此处只读展示快照；可在闲置库管理页操作）'
+            }
+          >
+            {isEn ? 'idle' : '闲置'}
+          </span>
+        )}
+      </span>
       <span className="w-36 text-center">
         <span
           className={cn(

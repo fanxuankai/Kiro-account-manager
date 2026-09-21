@@ -13,8 +13,13 @@ import type {
   BatchOperationResult,
   AccountSubscription,
   SubscriptionType,
-  IdpType
+  IdpType,
+  BillingArchiveEntry
 } from '../types/account'
+import {
+  buildBillingArchiveEntry,
+  pruneBillingArchive
+} from './billingArchive'
 import type {
   ProxyEntry,
   ProxyPoolConfig,
@@ -226,6 +231,10 @@ interface AccountsState {
   proxyPoolCursor: number
   /** 账号-代理绑定映射（accountId → proxyId）；用于"反代时 N 个账号共用 1 个 IP" */
   accountProxyBindings: Record<string, string>
+
+  // ============ 账单存档（已删账号的账单快照，保留 60 天）============
+  /** 存档条目（id → entry）；账号删除时落档，账单页合并展示供按卡尾号回查 */
+  billingArchive: Map<string, BillingArchiveEntry>
 }
 
 interface AccountsActions {
@@ -236,6 +245,8 @@ interface AccountsActions {
   removeAccounts: (ids: string[]) => BatchOperationResult
   /** 接收从闲置账号库移回的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重） */
   receiveAccounts: (accounts: Account[]) => BatchOperationResult
+  /** 把待删账号的账单快照落入存档（闲置库删除账号时也走这里）；无快照的账号自动跳过 */
+  appendBillingArchive: (accounts: Account[]) => void
 
   // 激活账号
   setActiveAccount: (id: string | null) => void
@@ -451,6 +462,22 @@ const loadActiveGroupTab = (): string => {
   }
 }
 
+/** 把待删账号的账单快照并入存档并清理过期条目（纯函数）；无可写内容时原 Map 返回 */
+function archiveInto(
+  current: Map<string, BillingArchiveEntry>,
+  accs: Array<Account | undefined>
+): Map<string, BillingArchiveEntry> {
+  let next = current
+  for (const acc of accs) {
+    if (!acc) continue
+    const entry = buildBillingArchiveEntry(acc)
+    if (!entry) continue
+    if (next === current) next = new Map(current)
+    next.set(entry.id, entry)
+  }
+  return pruneBillingArchive(next)
+}
+
 export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   // 初始状态
   appVersion: '1.0.0',
@@ -506,6 +533,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   proxyPoolConfig: { ...DEFAULT_PROXY_POOL_CONFIG },
   proxyPoolCursor: 0,
   accountProxyBindings: {},
+
+  billingArchive: new Map(),
 
   // ==================== 账号 CRUD ====================
 
@@ -574,6 +603,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   },
 
   removeAccount: (id) => {
+    // 删除前留取账号引用：账单快照随删落档（无快照自动跳过）
+    const acc = get().accounts.get(id)
     set((state) => {
       const accounts = new Map(state.accounts)
       accounts.delete(id)
@@ -589,11 +620,17 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       return { accounts, selectedIds, activeAccountId, accountProxyBindings: bindings }
     })
+    set((state) => ({ billingArchive: archiveInto(state.billingArchive, [acc]) }))
     get().saveToStorage()
   },
 
   removeAccounts: (ids) => {
     const result: BatchOperationResult = { success: 0, failed: 0, errors: [] }
+
+    // 删除前留取账号引用：账单快照随删落档
+    const removed: Array<Account | undefined> = []
+    const snapshot = get().accounts
+    for (const id of ids) removed.push(snapshot.get(id))
 
     set((state) => {
       const accounts = new Map(state.accounts)
@@ -616,9 +653,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
       return { accounts, selectedIds, activeAccountId, accountProxyBindings: bindings }
     })
+    set((state) => ({ billingArchive: archiveInto(state.billingArchive, removed) }))
 
     get().saveToStorage()
     return result
+  },
+
+  // 闲置库删除账号时也把账单快照落到主库存档（跨库共用一份，账单页统一可查）
+  appendBillingArchive: (accounts) => {
+    set((state) => ({ billingArchive: archiveInto(state.billingArchive, accounts) }))
+    get().saveToStorage()
   },
 
   // 闲置库账号移回主库：整对象入库（不重建 id/创建时间），保活体系下一轮自然接管
@@ -653,7 +697,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       set((state) => {
         const accounts = new Map(state.accounts)
         for (const acc of toAdd) accounts.set(acc.id, acc)
-        return { accounts }
+        // 恢复的账号若在存档里有旧"幽灵行"（如曾移入闲置库时落的档），按 accountId 清掉避免重复
+        const restoredIds = new Set(toAdd.map((a) => a.id))
+        let billingArchive = state.billingArchive
+        for (const [entryId, entry] of billingArchive) {
+          if (restoredIds.has(entry.accountId)) {
+            if (billingArchive === state.billingArchive) billingArchive = new Map(billingArchive)
+            billingArchive.delete(entryId)
+          }
+        }
+        return { accounts, billingArchive }
       })
       get().saveToStorage()
     }
@@ -1666,9 +1719,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       if (data) {
         const accounts = new Map(Object.entries(data.accounts ?? {}) as [string, Account][])
         const activeAccountId = data.activeAccountId ?? null
+        let needsSave = false
+
+        // 恢复账单存档并顺带清理超 60 天的过期条目（应用一直没开的期间也会积压）
+        const rawArchive = Object.entries(
+          (data.billingArchive ?? {}) as Record<string, BillingArchiveEntry>
+        )
+        const billingArchive = pruneBillingArchive(new Map(rawArchive))
+        if (billingArchive.size !== rawArchive.length) needsSave = true
 
         // 为没有 machineId 的现有账户生成一个
-        let needsSave = false
         for (const [id, account] of accounts) {
           if (!account.machineId) {
             account.machineId = generateRandomMachineId()
@@ -1691,6 +1751,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           groups: new Map(Object.entries(data.groups ?? {}) as [string, AccountGroup][]),
           tags: new Map(Object.entries(data.tags ?? {}) as [string, AccountTag][]),
           activeAccountId,
+          billingArchive,
           autoRefreshEnabled: data.autoRefreshEnabled ?? true,
           autoRefreshInterval: data.autoRefreshInterval ?? 5,
           autoRefreshConcurrency: data.autoRefreshConcurrency ?? 100,
@@ -1828,7 +1889,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       proxyPool,
       proxyPoolConfig,
       proxyPoolCursor,
-      accountProxyBindings
+      accountProxyBindings,
+      billingArchive
     } = get()
 
     set({ isSyncing: true })
@@ -1863,7 +1925,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           proxyPool: Object.fromEntries(proxyPool),
           proxyPoolConfig,
           proxyPoolCursor,
-          accountProxyBindings
+          accountProxyBindings,
+          billingArchive: Object.fromEntries(billingArchive)
         })
       } catch (error) {
         console.error('Failed to save accounts:', error)

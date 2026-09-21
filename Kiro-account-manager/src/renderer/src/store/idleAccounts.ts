@@ -12,7 +12,7 @@ import type {
   AccountImportItem,
   BatchOperationResult
 } from '../types/account'
-import { isBannedAccountError } from './accounts'
+import { isBannedAccountError, useAccountsStore } from './accounts'
 
 // ============================================
 // 闲置账号库 Store（与主账号库物理隔离）
@@ -212,6 +212,9 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
   },
 
   removeAccount: (id) => {
+    // 删除前留取账号引用：账单快照落到主库的账单存档（保留 60 天，账单页可回查）
+    const acc = get().accounts.get(id)
+    if (acc) useAccountsStore.getState().appendBillingArchive([acc])
     set((state) => {
       const accounts = new Map(state.accounts)
       accounts.delete(id)
@@ -226,6 +229,11 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
 
   removeAccounts: (ids) => {
     const result: BatchOperationResult = { success: 0, failed: 0, errors: [] }
+
+    // 删除前留取账号引用：账单快照落到主库的账单存档
+    const snapshot = get().accounts
+    const removed = ids.map((id) => snapshot.get(id)).filter((a) => a != null)
+    if (removed.length > 0) useAccountsStore.getState().appendBillingArchive(removed)
 
     set((state) => {
       const accounts = new Map(state.accounts)

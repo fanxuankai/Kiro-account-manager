@@ -67,6 +67,8 @@ interface AccountData {
   proxyPoolCursor?: number
   /** 账号-代理绑定映射 */
   accountProxyBindings?: Record<string, string>
+  /** 账单存档（已删账号的账单快照，保留 60 天；主进程 AccountDb meta KV 自动接住） */
+  billingArchive?: Record<string, unknown>
 }
 
 /** 闲置账号库数据（独立 SQLite 文件 kiro-idle-accounts.db，物理隔离） */

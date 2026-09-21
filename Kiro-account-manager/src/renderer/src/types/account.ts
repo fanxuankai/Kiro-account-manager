@@ -161,6 +161,30 @@ export interface Account {
   createdAt: number
   lastUsedAt: number
   lastCheckedAt?: number // 上次状态检查时间
+
+  // 账单页专用内存标记：由已删账号的账单存档组装出的"幽灵行"才带（账号删除时间）；
+  // 不落库、不进真实账号，仅用于账单页渲染"已删"徽章与统计排除
+  billingArchivedAt?: number
+  // 账单页专用内存标记：来自闲置库的账号行（真实账号，凭证齐全但本页只读展示）；
+  // 不落库，用于渲染"闲置"徽章并禁止对其发起"检查账单"（结果无法回写闲置库）
+  billingFromIdle?: boolean
+}
+
+/**
+ * 账单存档条目：账号删除时把账单快照单独落档（与账号生命周期解耦），
+ * 保留 BILLING_ARCHIVE_RETENTION_MS（60 天）供按卡尾号等回查——账号没了账单还能查。
+ * 只存账单展示所需字段，不含任何凭证。
+ */
+export interface BillingArchiveEntry {
+  id: string // 存档条目独立 id（同一账号多次删除会形成多条并存）
+  accountId: string // 原账号 id（账号恢复回主库时按此清理存档，避免与真实账号重复显示）
+  email: string
+  nickname?: string
+  groupId?: string // 删除时所在分组（仅记录，分组可能随后被删）
+  tags?: string[] // 删除时携带的标签 id
+  createdAt?: number // 原账号创建时间（排序用）
+  deletedAt: number // 账号删除（存档落档）时间
+  subscription: AccountSubscription // 删除时的账单快照
 }
 
 /**
