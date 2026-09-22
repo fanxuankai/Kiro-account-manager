@@ -534,6 +534,7 @@ interface KiroApi {
     }[]
     running: boolean
     batch: { active: boolean; paused: boolean; unused: number }
+    extensionOnline: boolean
     logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
     pending: Array<{
       resultId: string
@@ -559,6 +560,7 @@ interface KiroApi {
   /** 发起单号授权：主进程打开授权窗口；autofill=自动填邮箱/密码/2FA（默认开），挑战与授权确认人工 */
   googlePoolAuthorize: (id: string, opts?: {
     autofill?: boolean
+    viaExtension?: boolean
     proxy?: {
       enabled: boolean
       mode?: 'pool' | 'api'
@@ -574,6 +576,7 @@ interface KiroApi {
     autofill?: boolean
     batchIntervalSec?: number | 'rand'
     ids?: string[]
+    viaExtension?: boolean
     proxy?: {
       enabled: boolean
       mode?: 'pool' | 'api'

@@ -19,6 +19,7 @@ import type {
   LoginPoolProxyOptions
 } from '../loginPool/runner'
 import { totpNow } from '../loginPool/totp'
+import { GooglePoolBridge } from './bridge'
 import { ChainProxyRelay } from '../registration/chainProxy'
 import {
   acquireDynamicExit,
@@ -67,6 +68,9 @@ export interface GoogleAuthorizeOptions {
   batchIntervalSec?: number | 'rand'
   /** 勾选批次：只跑这些 id（须为未用状态）；缺省跑全部未用 */
   ids?: string[]
+  /** 走 Chrome 扩展（google-signin）执行：应用只发任务等 kiro:// 回调，
+   *  浏览器环节在真 Chrome 无痕窗口（不触发验证）；内置窗口模式忽略本项 */
+  viaExtension?: boolean
   proxy?: LoginPoolProxyOptions
 }
 
@@ -233,14 +237,23 @@ export class GooglePoolRunner {
   private activeRun: {
     oauthState: string
     resolveCallback: (v: { code?: string; error?: string }) => void
-    /** 兜底链路收到回调时置 callbackSeen，让主循环退出 */
-    markSeen: () => void
-  } | null = null
+  /** 兜底链路收到回调时置 callbackSeen，让主循环退出 */
+  markSeen: () => void
+} | null = null
 
-  constructor(store: GooglePoolStore, deps: GooglePoolDeps, events: GooglePoolEvents) {
+  /** 扩展放弃信号转发（runViaExtension 等待中注入） */
+  private extAbort: ((taskId: string) => void) | null = null
+
+  constructor(
+    store: GooglePoolStore,
+    deps: GooglePoolDeps,
+    events: GooglePoolEvents,
+    private bridge: GooglePoolBridge
+  ) {
     this.store = store
     this.deps = deps
     this.events = events
+    this.bridge.onAbandoned = (taskId, detail) => this.handleExtensionAbandoned(taskId, detail)
     // 全局提链池（与订阅取链接共用一份队列与记忆）的动态转发进号池 UI 日志（多播，不影响 loginPool 的订阅）
     onDynamicSourceLog((m) => this.log('info', `[提链] ${m}`))
   }
@@ -386,6 +399,13 @@ export class GooglePoolRunner {
   private async runEntry(entry: GooglePoolEntry, batchMode = false): Promise<void> {
     const partition = `googlepool-${Date.now()}-${randomBytes(3).toString('hex')}`
     const login = this.deps.buildGoogleLoginUrl()
+
+    // Chrome 扩展模式：浏览器环节交给真 Chrome 无痕窗口（不触发验证），
+    // 应用只发任务 + 等 kiro:// OS 协议回调（manualCallback 按 state 匹配到 activeRun）
+    if (this.opts.viaExtension) {
+      await this.runViaExtension(entry, login, batchMode)
+      return
+    }
 
     // 出口代理在设 activeRun / 开窗之前装配：失败直接终止，无需清理任何资源
     const proxy = await this.setupEntryProxy(entry)
@@ -864,6 +884,130 @@ export class GooglePoolRunner {
     this.store.patch(entry.id, { state: 'failed', failReason: msg })
     this.emitEntry(this.store.get(entry.id)!)
     this.log('err', `${entry.email} 失败[${reason}]：${msg}`)
+  }
+
+  // ── Chrome 扩展执行模式 ──
+
+  /** 扩展报告任务被放弃（无痕窗口被关）：唤醒等待循环 */
+  private handleExtensionAbandoned(taskId: string, detail: string): void {
+    this.log('warn', `扩展报告任务放弃：${detail}`)
+    this.extAbort?.(taskId)
+  }
+
+  /** 任务下发扩展 → 等领取 → 等 kiro:// 回调 / 放弃 / 超时 → 换 token 入库 */
+  private async runViaExtension(
+    entry: GooglePoolEntry,
+    login: { url: string; codeVerifier: string; oauthState: string },
+    batchMode: boolean
+  ): Promise<void> {
+    const taskId = `${Date.now()}-${entry.id}`
+    let callbackResolve!: (v: { code?: string; error?: string }) => void
+    const callbackPromise = new Promise<{ code?: string; error?: string }>((resolve) => {
+      callbackResolve = resolve
+    })
+    let callbackSeen = false
+    this.activeRun = {
+      oauthState: login.oauthState,
+      resolveCallback: callbackResolve,
+      markSeen: () => {
+        callbackSeen = true
+      }
+    }
+    let abandonResolve!: () => void
+    const abandonPromise = new Promise<void>((resolve) => {
+      abandonResolve = resolve
+    })
+    this.extAbort = (tid) => {
+      if (tid === taskId) abandonResolve()
+    }
+    const idleTimeoutMs = batchMode ? BATCH_IDLE_TIMEOUT_MS : IDLE_TIMEOUT_MS
+
+    try {
+      this.bridge.postTask({
+        taskId,
+        entryId: entry.id,
+        email: entry.email,
+        password: entry.password,
+        secret: entry.secret,
+        recoveryEmail: entry.recoveryEmail,
+        authUrl: login.url
+      })
+      this.log('info', `${entry.email} 任务已下发 Chrome 扩展，等待无痕窗口打开…`)
+
+      // 领取检查：60s 未领取=Chrome 没开/扩展没装/未允许无痕
+      const claimDeadline = Date.now() + 60_000
+      while (!this.bridge.taskClaimed && !callbackSeen && Date.now() < claimDeadline) {
+        await sleep(1000)
+      }
+      if (!callbackSeen) {
+        if (!this.bridge.taskClaimed) {
+          this.fail(
+            entry,
+            'ext-offline',
+            'Chrome 扩展 60 秒未领取任务：确认 Chrome 正在运行、google-signin 扩展已加载且「允许在无痕模式下运行」'
+          )
+          return
+        }
+        this.log('ok', `${entry.email} 扩展已领取，Chrome 无痕窗口已打开——字段会自动填好，「下一步/继续」请人工点`)
+      }
+
+      const result = await Promise.race([
+        callbackPromise.then((v) => ({ kind: 'cb' as const, v })),
+        abandonPromise.then(() => ({ kind: 'abandoned' as const, v: null })),
+        sleep(idleTimeoutMs).then(() => ({ kind: 'timeout' as const, v: null }))
+      ])
+      if (result.kind === 'abandoned') {
+        if (batchMode) {
+          this.fail(entry, 'window-closed', 'Chrome 无痕窗口被关闭（批次模式标失败，可恢复重跑）')
+        } else {
+          this.store.patch(entry.id, { state: 'unused', failReason: '窗口已关闭（可再次授权）' })
+          this.emitEntry(this.store.get(entry.id)!)
+          this.log('warn', `${entry.email} 无痕窗口被关闭，条目已拨回未用`)
+        }
+        return
+      }
+      if (result.kind === 'timeout') {
+        this.fail(
+          entry,
+          'timeout',
+          `等待授权超时（${batchMode ? '4 分钟（批次模式）' : '10 分钟'}）`
+        )
+        return
+      }
+      const cb = result.v!
+      if (cb.error) {
+        this.fail(entry, 'callback-error', `授权回调错误：${cb.error}`)
+        return
+      }
+      if (!cb.code) {
+        this.fail(entry, 'callback-error', '回调缺少授权码')
+        return
+      }
+      this.log('info', `${entry.email} 已收到 kiro:// 回调（Chrome），交换 token…`)
+      const token = await this.deps.exchangeSocialToken(cb.code, login.codeVerifier)
+      if (token.success) {
+        this.store.patch(entry.id, { state: 'used', failReason: undefined })
+        this.emitEntry(this.store.get(entry.id)!)
+        this.log('ok', `${entry.email} token 交换成功，交给界面验证入库`)
+        // 标记任务完成：扩展轮询到即自动关无痕窗口
+        this.bridge.markDone(taskId)
+        this.events.onResult({
+          resultId: `${Date.now()}-${entry.id}`,
+          entryId: entry.id,
+          email: entry.email,
+          accessToken: token.accessToken,
+          refreshToken: token.refreshToken,
+          profileArn: token.profileArn,
+          expiresIn: token.expiresIn
+        })
+      } else {
+        this.fail(entry, 'exchange-failed', `token 交换失败：${token.error}`)
+      }
+    } finally {
+      this.activeRun = null
+      this.extAbort = null
+      this.bridge.clearTask()
+    }
   }
 
   // ── 页面动作封装（自动填表用）──

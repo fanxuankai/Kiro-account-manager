@@ -115,6 +115,23 @@ export function GooglePoolPage(): React.ReactNode {
     setBatchInterval(v)
     localStorage.setItem('googlepool_batch_interval', v)
   }
+  // 执行方式：window=应用内窗口（全自动化但触发验证概率高）；
+  // extension=Chrome 无痕（google-signin 扩展自动填值、人工点继续，不触发验证）
+  const [viaExt, setViaExt] = useState<boolean>(() => localStorage.getItem('googlepool_via') === 'extension')
+  const updateViaExt = (v: boolean): void => {
+    setViaExt(v)
+    localStorage.setItem('googlepool_via', v ? 'extension' : 'window')
+  }
+  // 扩展在线状态（15s 轮询；在线=最近 30s 内有轮询领任务）
+  const [extOnline, setExtOnline] = useState(false)
+  useEffect(() => {
+    const tick = (): void => {
+      void window.api.googlePoolList().then((s) => setExtOnline(s.extensionOnline))
+    }
+    tick()
+    const timer = setInterval(tick, 15000)
+    return () => clearInterval(timer)
+  }, [])
   const usablePoolCount = Array.from(proxyPool.values()).filter(
     (p) => p.enabled && p.status === 'alive'
   ).length
@@ -351,7 +368,7 @@ export function GooglePoolPage(): React.ReactNode {
     })
   }
   const handleAuthorize = (id: string): void => {
-    void window.api.googlePoolAuthorize(id, { autofill, proxy: buildProxyOpts() }).then((r) => {
+    void window.api.googlePoolAuthorize(id, { autofill, viaExtension: viaExt, proxy: buildProxyOpts() }).then((r) => {
       if (!r.success) pushLog({ time: nowTime(), level: 'warn', msg: r.error || '发起授权失败' })
     })
   }
@@ -441,6 +458,7 @@ export function GooglePoolPage(): React.ReactNode {
                   autofill,
                   batchIntervalSec: batchInterval === 'rand' ? ('rand' as const) : Number(batchInterval),
                   ...(selected.size > 0 ? { ids: [...selected] } : {}),
+                  viaExtension: viaExt,
                   proxy: buildProxyOpts()
                 })
                 setSelected(new Set())
@@ -452,6 +470,26 @@ export function GooglePoolPage(): React.ReactNode {
           <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" /> 粘贴入池
           </Button>
+          <div
+            className="flex items-center gap-1.5"
+            title="窗口=应用内 Electron 窗口全自动（触发验证概率高）；扩展=真 Chrome 无痕窗口（google-signin 扩展自动填值、人工点「下一步/继续」，实测不触发验证）"
+          >
+            <Label className="text-xs text-muted-foreground whitespace-nowrap">执行方式</Label>
+            <select
+              value={viaExt ? 'extension' : 'window'}
+              onChange={(e) => updateViaExt(e.target.value === 'extension')}
+              disabled={running || batch.active}
+              className="h-8 rounded-lg border border-input bg-background px-2 text-xs disabled:opacity-50"
+            >
+              <option value="window">应用内窗口</option>
+              <option value="extension">Chrome 扩展{extOnline ? '' : '（未连接）'}</option>
+            </select>
+            {viaExt && (
+              <span className={cn('text-[11px]', extOnline ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500')}>
+                {extOnline ? '● 扩展已连接' : '● 扩展未连接'}
+              </span>
+            )}
+          </div>
           <div
             className="flex items-center gap-1.5"
             title="批次相邻两号之间的冷却秒数，防风控"

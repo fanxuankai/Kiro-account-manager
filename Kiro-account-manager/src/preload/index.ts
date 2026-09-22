@@ -533,6 +533,7 @@ const api = {
     entries: GooglePoolEntryView[]
     running: boolean
     batch: { active: boolean; paused: boolean; unused: number }
+    extensionOnline: boolean
     logs: Array<{ time: string; level: 'info' | 'ok' | 'err' | 'warn'; msg: string }>
     pending: Array<{
       resultId: string
@@ -575,10 +576,10 @@ const api = {
   googlePoolRestoreAll: (): Promise<{ success: boolean }> => {
     return ipcRenderer.invoke('google-pool:restore-all')
   },
-  /** 发起单号授权：主进程打开授权窗口；autofill=自动填邮箱/密码/2FA（默认开），挑战与授权确认人工 */
+  /** 发起单号授权：viaExtension=走 Chrome 无痕窗口（扩展自动填值、人工点继续） */
   googlePoolAuthorize: (
     id: string,
-    opts?: { autofill?: boolean; proxy?: GooglePoolProxyOptions }
+    opts?: { autofill?: boolean; viaExtension?: boolean; proxy?: GooglePoolProxyOptions }
   ): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('google-pool:authorize', id, opts)
   },
@@ -591,6 +592,7 @@ const api = {
       autofill?: boolean
       batchIntervalSec?: number | 'rand'
       ids?: string[]
+      viaExtension?: boolean
       proxy?: GooglePoolProxyOptions
     }
   ): Promise<{ success: boolean }> => {

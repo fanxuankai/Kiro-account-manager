@@ -5,6 +5,7 @@
 import { ipcMain, type BrowserWindow } from 'electron'
 import { GooglePoolStore, type GooglePoolEntryView } from './store'
 import { GooglePoolRunner, type GooglePoolDeps, type GooglePoolResultPayload } from './runner'
+import { GooglePoolBridge } from './bridge'
 import { parseGooglePoolText } from './parse'
 import { totpNow } from '../loginPool/totp'
 
@@ -33,6 +34,10 @@ export function registerGooglePoolIpc(opts: {
   const pendingResults: GooglePoolResultPayload[] = []
   let lastBatch = { active: false, paused: false, unused: 0 }
 
+  // 联动桥：扩展轮询领任务的本地服务（127.0.0.1:17321）
+  const bridge = new GooglePoolBridge()
+  bridge.start()
+
   const runner = new GooglePoolRunner(store, opts.deps, {
     onEntry: (entry) => send({ kind: 'entry', entry }),
     onLog: (line) => {
@@ -50,7 +55,7 @@ export function registerGooglePoolIpc(opts: {
       pendingResults.push(payload)
       send({ kind: 'result', payload })
     }
-  })
+  }, bridge)
 
   const log = (level: 'info' | 'ok' | 'err' | 'warn', msg: string): void => {
     const line = { time: new Date().toTimeString().slice(0, 8), level, msg }
@@ -60,11 +65,12 @@ export function registerGooglePoolIpc(opts: {
     send({ kind: 'log', line })
   }
 
-  // 返回全量快照：条目 + 最近日志 + 批次状态 + 待补投的入库结果（页面重挂时恢复/消费用）
+  // 返回全量快照：条目 + 最近日志 + 批次状态 + 扩展在线状态 + 待补投的入库结果
   ipcMain.handle('google-pool:list', () => ({
     entries: store.listViews(),
     running: runner.running,
     batch: lastBatch,
+    extensionOnline: bridge.online,
     logs: [...recentLogs],
     pending: [...pendingResults]
   }))

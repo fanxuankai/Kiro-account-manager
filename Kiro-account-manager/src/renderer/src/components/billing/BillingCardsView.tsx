@@ -2,14 +2,16 @@
 // 用卡名下各账号的最近发票时间近似支付时间，在两个时间窗口内推算额度与恢复状态。
 // 近似口径：每账号只保留最近一张发票，窗口内同账号的多次支付会漏计（额度偏乐观），
 // 判"还能不能用"以 >= 限额为准，宁可保守。
-import { useMemo, useState, useEffect, useCallback } from 'react'
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
 import {
   ChevronDown,
   CreditCard,
   CheckCircle2,
   TimerReset,
   ExternalLink,
-  Search
+  Search,
+  Copy,
+  Check
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { Account } from '@/types/account'
@@ -198,6 +200,18 @@ export function BillingCardsView({ rows, isEn }: { rows: Account[]; isEn: boolea
 
   const [keyword, setKeyword] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // 尾号复制反馈：记录最近复制的卡 key，短暂显示对勾后还原
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+  }, [])
+  const copyLast4 = useCallback((card: CardEntry): void => {
+    navigator.clipboard.writeText(card.last4).catch(() => {})
+    setCopiedKey(card.key)
+    if (copyTimer.current) clearTimeout(copyTimer.current)
+    copyTimer.current = setTimeout(() => setCopiedKey(null), 1200)
+  }, [])
 
   const cards = useMemo(() => aggregateCards(rows, now), [rows, now])
 
@@ -289,14 +303,36 @@ export function BillingCardsView({ rows, isEn }: { rows: Account[]; isEn: boolea
             <div key={c.key} className="border-b last:border-b-0">
               <button
                 type="button"
-                className="w-full flex items-center gap-3 py-2.5 px-3 text-xs text-left hover:bg-muted/40 transition-colors"
+                className="group w-full flex items-center gap-3 py-2.5 px-3 text-xs text-left hover:bg-muted/40 transition-colors"
                 onClick={() => toggle(c.key)}
               >
                 <span className="w-8 flex justify-center">
                   <CreditCard className={cn('h-4 w-4', brandColor(c.brand))} />
                 </span>
-                <span className="w-44 truncate font-medium">
-                  {(c.brand || 'card').toUpperCase()} •{c.last4}
+                <span className="w-44 flex items-center gap-0.5">
+                  <span
+                    className="truncate font-medium select-text cursor-text"
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {(c.brand || 'card').toUpperCase()} •{c.last4}
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={-1}
+                    className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground opacity-60 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      copyLast4(c)
+                    }}
+                    title={isEn ? 'Copy last4' : '复制卡尾号'}
+                  >
+                    {copiedKey === c.key ? (
+                      <Check className="h-3 w-3 text-emerald-500" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </span>
                 </span>
                 <span className="w-16 text-center text-muted-foreground">
                   {c.expMonth ? `${c.expMonth}/${String(c.expYear).slice(-2)}` : '-'}
