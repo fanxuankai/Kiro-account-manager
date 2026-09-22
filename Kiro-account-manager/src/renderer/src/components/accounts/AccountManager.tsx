@@ -36,6 +36,8 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
   const [showAddDialog, setShowAddDialog] = useState(false)
   // 快捷 GitHub 无痕登录：打开添加对话框后自动发起（关闭时复位）
   const [addDialogAutoGithub, setAddDialogAutoGithub] = useState(false)
+  // 快捷 Google 无痕登录：同 GitHub 快捷入口
+  const [addDialogAutoGoogle, setAddDialogAutoGoogle] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
   const [showGroupDialog, setShowGroupDialog] = useState(false)
   const [showTagDialog, setShowTagDialog] = useState(false)
@@ -356,6 +358,10 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
             setAddDialogAutoGithub(true)
             setShowAddDialog(true)
           }}
+          onQuickGoogleLogin={() => {
+            setAddDialogAutoGoogle(true)
+            setShowAddDialog(true)
+          }}
           onImport={handleImport}
           onExport={handleExport}
           onArchive={handleArchive}
@@ -391,9 +397,11 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       <AddAccountDialog
         isOpen={showAddDialog}
         autoGithubLogin={addDialogAutoGithub}
+        autoGoogleLogin={addDialogAutoGoogle}
         onClose={() => {
           setShowAddDialog(false)
           setAddDialogAutoGithub(false)
+          setAddDialogAutoGoogle(false)
         }}
       />
 

@@ -78,6 +78,23 @@ export function GooglePoolPage(): React.ReactNode {
       return !v
     })
   }
+  // 导出未用：复制为入池同构卡密文本（2FA 密钥版/辅助邮箱版按原格式拼回，可回贴）；
+  // 顺序即批次执行顺序（unused 按入池先后排）
+  const [exportedCount, setExportedCount] = useState(0)
+  const unusedEntries = entries.filter((e) => e.state === 'unused')
+  const handleExportUnused = useCallback((): void => {
+    if (!unusedEntries.length) return
+    const text = unusedEntries
+      .map((e) =>
+        e.secret
+          ? [e.email, e.password, e.secret, e.country].filter(Boolean).join('----')
+          : [e.email, e.password, e.recoveryEmail, e.recoveryPassword, e.country].filter(Boolean).join('----')
+      )
+      .join('\n')
+    navigator.clipboard.writeText(text)
+    setExportedCount(unusedEntries.length)
+    setTimeout(() => setExportedCount(0), 1500)
+  }, [unusedEntries])
   // 出口代理模式：off=直连；pool=静态代理池；api=动态提链接口
   const [proxyMode, setProxyMode] = useState<'off' | 'pool' | 'api'>(
     () => (localStorage.getItem('googlepool_proxymode') as 'off' | 'pool' | 'api' | null) ?? 'off'
@@ -380,7 +397,7 @@ export function GooglePoolPage(): React.ReactNode {
     total: entries.length,
     success: entries.filter((e) => e.state === 'used').length,
     failed: entries.filter((e) => e.state === 'failed').length,
-    unused: entries.filter((e) => e.state === 'unused').length,
+    unused: unusedEntries.length,
     wasted: entries.filter((e) => e.state === 'wasted').length
   }
   const chips: { key: 'all' | GooglePoolView['state']; label: string; count: number }[] = [
@@ -560,6 +577,16 @@ export function GooglePoolPage(): React.ReactNode {
         >
           {showSecrets ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
           {showSecrets ? '明文' : '打码'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 text-xs"
+          title="把全部未用号复制为卡密文本（2FA 密钥版/辅助邮箱版按原格式拼回），可直接粘贴回入池弹窗"
+          disabled={!unusedEntries.length}
+          onClick={handleExportUnused}
+        >
+          <ClipboardCopy className="h-3.5 w-3.5" /> {exportedCount ? `已复制 ${exportedCount}` : `导出未用（${unusedEntries.length}）`}
         </Button>
         <Button
           size="sm"

@@ -11,6 +11,8 @@ interface AddAccountDialogProps {
   onClose: () => void
   /** 快捷入口：打开后自动切到在线登录并直接发起 GitHub 无痕登录 */
   autoGithubLogin?: boolean
+  /** 快捷入口：打开后自动切到在线登录并直接发起 Google 无痕登录 */
+  autoGoogleLogin?: boolean
 }
 
 interface BonusData {
@@ -62,7 +64,7 @@ interface VerifiedData {
 type ImportMode = 'oidc' | 'sso' | 'login'
 type LoginType = 'builderid' | 'google' | 'github' | 'iamsso'
 
-export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccountDialogProps): React.ReactNode {
+export function AddAccountDialog({ isOpen, onClose, autoGithubLogin, autoGoogleLogin }: AddAccountDialogProps): React.ReactNode {
   const { addAccount, accounts, batchImportConcurrency, loginPrivateMode, groups, activeGroupTab } = useAccountsStore()
 
   // 检查账户是否已存在（同userId 或 同邮箱+同provider 才算重复）
@@ -503,6 +505,23 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
     handleStartSocialLogin('Github', true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, autoGithubLogin])
+
+  // 快捷入口：打开即自动切到在线登录并发起 Google 无痕登录（每次打开只触发一次）
+  const autoGoogleDoneRef = useRef(false)
+  useEffect(() => {
+    if (!isOpen) {
+      autoGoogleDoneRef.current = false
+      return
+    }
+    if (!autoGoogleLogin || autoGoogleDoneRef.current) return
+    autoGoogleDoneRef.current = true
+    setAuthMethod('social')
+    setLoginType('google')
+    // 快捷入口固定无痕（不依赖全局开关），同时同步 UI 开关状态
+    setUsePrivateMode(true)
+    handleStartSocialLogin('Google', true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, autoGoogleLogin])
 
   // 复制 user_code
   const handleCopyUserCode = async () => {
@@ -1219,6 +1238,31 @@ export function AddAccountDialog({ isOpen, onClose, autoGithubLogin }: AddAccoun
                       <div className="flex flex-col items-start">
                         <span className="text-sm font-semibold text-foreground">{isEn ? 'Google Account' : 'Google 账号'}</span>
                         <span className="text-xs text-muted-foreground">{isEn ? 'Quick login with Google' : '使用 Google 账号快捷登录'}</span>
+                      </div>
+                    </button>
+
+                    {/* Google（固定无痕：登录不留本地痕迹，同 GitHub 无痕模式） */}
+                    <button
+                      className="group w-full h-14 flex items-center px-4 gap-4 bg-background hover:bg-muted border border-border rounded-xl transition-all duration-200 hover:shadow-md hover:border-primary/30"
+                      onClick={() => {
+                        setLoginType('google')
+                        // 固定无痕，并同步 UI 开关状态保持一致
+                        setUsePrivateMode(true)
+                        handleStartSocialLogin('Google', true)
+                      }}
+                    >
+                      <div className="relative w-8 h-8 flex items-center justify-center bg-white dark:bg-slate-800 rounded-full shadow-sm border dark:border-slate-600 p-1.5 group-hover:scale-110 transition-transform">
+                        <svg viewBox="0 0 24 24" className="w-full h-full">
+                          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                        </svg>
+                        <EyeOff className="absolute -bottom-0.5 -right-0.5 w-3 h-3 text-primary" />
+                      </div>
+                      <div className="flex flex-col items-start">
+                        <span className="text-sm font-semibold text-foreground">{isEn ? 'Google Account (Private Mode)' : 'Google 账号（无痕模式）'}</span>
+                        <span className="text-xs text-muted-foreground">{isEn ? 'Login with Google in a private window' : '使用 Google 账号无痕登录，不留本地痕迹'}</span>
                       </div>
                     </button>
 
