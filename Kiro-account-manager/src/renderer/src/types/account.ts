@@ -200,6 +200,15 @@ export interface AccountGroup {
 }
 
 /**
+ * 跨库移动（主库 ↔ 闲置库）时随账号搬运的标签/分组定义
+ * （账号只存引用 id，定义不跟着搬过去就会显示不出来）
+ */
+export interface CarriedDefinitions {
+  tags?: AccountTag[]
+  groups?: AccountGroup[]
+}
+
+/**
  * 筛选条件
  */
 export interface AccountFilter {

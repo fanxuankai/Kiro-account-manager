@@ -96,8 +96,11 @@ export function AccountToolbar({
     accountProxyBindings,
     bindAccountsToProxy,
     unbindAccountFromProxy,
-    refreshProgress
+    refreshBatches
   } = useAccountsStore()
+
+  // 手动批量刷新/检查进行中（自动 tick 的 silent 批次不算）：期间禁用批量操作按钮
+  const hasManualRefreshBatch = Object.values(refreshBatches).some((b) => b.silent !== true)
 
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
@@ -902,7 +905,7 @@ export function AccountToolbar({
             size="icon"
             className="h-8 w-8"
             onClick={handleBatchCheck}
-            disabled={isChecking || selectedCount === 0 || (!!refreshProgress && !refreshProgress.silent)}
+            disabled={isChecking || selectedCount === 0 || hasManualRefreshBatch}
             title={selectedCount > 0
               ? (isEn ? `Check ${selectedCount} accounts info (usage / subscription / banned)` : `检查选中 ${selectedCount} 个账号信息：刷新用量、订阅详情、封禁状态`)
               : (isEn ? 'Check accounts info (select first)' : '检查账户信息（请先选中账号）')
@@ -955,7 +958,7 @@ export function AccountToolbar({
             size="icon"
             className="h-8 w-8"
             onClick={handleBatchRefresh}
-            disabled={isRefreshing || selectedCount === 0 || (!!refreshProgress && !refreshProgress.silent)}
+            disabled={isRefreshing || selectedCount === 0 || hasManualRefreshBatch}
             title={selectedCount > 0
               ? (isEn ? `Refresh ${selectedCount} access tokens` : `刷新选中 ${selectedCount} 个账号的访问令牌`)
               : (isEn ? 'Refresh Token (select first)' : '刷新 Token（请先选中账号）')

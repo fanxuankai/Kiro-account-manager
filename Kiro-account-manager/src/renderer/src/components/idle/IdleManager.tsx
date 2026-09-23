@@ -8,6 +8,7 @@ import { IdleList } from './IdleList'
 import { IdleAddDialog } from './IdleAddDialog'
 import { IdleEditDialog } from './IdleEditDialog'
 import { GroupManageDialog, TagManageDialog, ExportDialog, ImportDialog, type ImportResult } from '../accounts'
+import { collectCarriedDefinitions } from '../accounts/_helpers'
 import { type ParsedImport } from '@/lib/importParse'
 import type { Account } from '@/types/account'
 import { Loader2, Warehouse } from 'lucide-react'
@@ -112,9 +113,11 @@ export function IdleManager(): React.ReactNode {
     }
   }
 
-  // 单个账号移回账号管理
+  // 单个账号移回账号管理（标签/分组定义随账号一起搬运，主库才能显示出来）
   const handleRestoreAccount = (account: Account): void => {
-    const mainResult = useAccountsStore.getState().receiveAccounts([account])
+    const idle = useIdleAccountsStore.getState()
+    const carried = collectCarriedDefinitions(idle.tags, idle.groups, [account])
+    const mainResult = useAccountsStore.getState().receiveAccounts([account], carried)
     if (mainResult.success > 0) {
       removeAccounts([account.id])
     } else {
@@ -150,7 +153,11 @@ export function IdleManager(): React.ReactNode {
       return
     }
 
-    const mainResult = mainStore.receiveAccounts(restorable)
+    const mainResult = mainStore.receiveAccounts(restorable, collectCarriedDefinitions(
+      useIdleAccountsStore.getState().tags,
+      useIdleAccountsStore.getState().groups,
+      restorable
+    ))
     if (mainResult.success > 0) {
       // 只移除成功入库主库的账号；去重跳过的保留在闲置库
       removeAccounts(restorable.map(acc => acc.id))

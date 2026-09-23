@@ -3,7 +3,7 @@
  * 保证两种视图（卡片 / 列表）视觉系统一致
  */
 import type { CSSProperties } from 'react'
-import type { Account } from '@/types/account'
+import type { Account, AccountTag, AccountGroup } from '@/types/account'
 
 // ============ 卡片布局常量 ============
 // AccountGrid 与 AccountCard 共用（放此处避免组件间循环 import）
@@ -386,4 +386,23 @@ export async function switchAccountToFree(
     : `${acc.email} 切换失败：\n${r.error || '未知错误'}`
   )
   return 'failed'
+}
+
+// ============ 跨库移动：收集账号引用的标签/分组定义 ============
+
+// 主库 ↔ 闲置库互移时，账号身上的 tags/groupId 只是引用 id，
+// 需要把源库里对应的定义一并收集交给目标库合并，否则标签/分组显示不出来
+export function collectCarriedDefinitions(
+  sourceTags: Map<string, AccountTag>,
+  sourceGroups: Map<string, AccountGroup>,
+  accounts: Account[]
+): { tags: AccountTag[]; groups: AccountGroup[] } {
+  const tagIds = new Set(accounts.flatMap((a) => a.tags))
+  const groupIds = new Set(
+    accounts.map((a) => a.groupId).filter((g): g is string => !!g)
+  )
+  return {
+    tags: Array.from(tagIds, (id) => sourceTags.get(id)).filter((t): t is AccountTag => !!t),
+    groups: Array.from(groupIds, (id) => sourceGroups.get(id)).filter((g): g is AccountGroup => !!g)
+  }
 }

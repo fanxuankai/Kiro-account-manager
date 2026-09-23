@@ -14,7 +14,8 @@ import type {
   AccountSubscription,
   SubscriptionType,
   IdpType,
-  BillingArchiveEntry
+  BillingArchiveEntry,
+  CarriedDefinitions
 } from '../types/account'
 import {
   buildBillingArchiveEntry,
@@ -260,6 +261,14 @@ let autoSaveTimer: ReturnType<typeof setInterval> | null = null
 const AUTO_SAVE_INTERVAL = 30 * 1000 // 每 30 秒自动保存一次
 let lastSaveHash = '' // 用于检测数据是否变化
 
+/** 单个批量刷新批次的进度（按 batchId 隔离登记，多批次并发互不干扰） */
+export interface RefreshBatchProgress {
+  kind: 'token' | 'usage'
+  done: number
+  total: number
+  silent?: boolean
+}
+
 interface AccountsState {
   // 应用版本号
   appVersion: string
@@ -297,11 +306,12 @@ interface AccountsState {
   nextTokenRefreshAt: number | null
   nextUsageRefreshAt: number | null
   /**
-   * 正在进行的批量刷新进度；null 表示空闲。
-   * silent=true 表示定时器自动触发的刷新：不在 UI 弹悬浮进度卡（避免常驻遮挡内容），
-   * 只用于阻止并发冲突；手动批量（silent=false）才显示右下角进度卡。
+   * 正在进行的批量刷新批次，按 batchId 注册（空对象表示全空闲）；多条并发批次各存各的、
+   * 各自的进度条互不清对方。silent=true 表示定时器自动触发的刷新，展示时带「自动」标注。
+   * 主进程调度器（60 秒一轮的小批量）不在此注册：进度事件按 batchId 路由，
+   * 未登记的批次事件直接忽略，因此不会打断/清掉这里登记的进度条。
    */
-  refreshProgress: { kind: 'token' | 'usage'; done: number; total: number; silent?: boolean } | null
+  refreshBatches: Record<string, RefreshBatchProgress>
 
   // 主动续期开关（持久化在 main 进程的 electron-store；这里只是镜像，不写 saveToStorage）
   proactiveRenewalEnabled: boolean
@@ -378,8 +388,9 @@ interface AccountsActions {
   updateAccount: (id: string, updates: Partial<Account>) => void
   removeAccount: (id: string) => void
   removeAccounts: (ids: string[]) => BatchOperationResult
-  /** 接收从闲置账号库移回的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重） */
-  receiveAccounts: (accounts: Account[]) => BatchOperationResult
+  /** 接收从闲置账号库移回的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重）；
+   *  carried 为随账号搬运的标签/分组定义（同 id 已存在时保留本库定义） */
+  receiveAccounts: (accounts: Account[], carried?: CarriedDefinitions) => BatchOperationResult
   /** 把待删账号的账单快照落入存档（闲置库删除账号时也走这里）；无快照的账号自动跳过 */
   appendBillingArchive: (accounts: Account[]) => void
 
@@ -491,7 +502,7 @@ interface AccountsActions {
   triggerUsageRefresh: () => void
   setAutoUsageRefresh: (enabled: boolean, interval?: number) => void
   /** 主进程进度事件回流时推进批量刷新进度；completed>=total 自动收尾 */
-  updateRefreshProgress: (progress: { done: number; total: number }) => void
+  updateRefreshProgress: (batchId: string, progress: { done: number; total: number }) => void
   clearRefreshProgress: () => void
   checkAndRefreshExpiringTokens: () => Promise<void>
   refreshExpiredTokensOnly: () => Promise<void>
@@ -613,6 +624,27 @@ function archiveInto(
   return pruneBillingArchive(next)
 }
 
+// ============ 批量刷新进度注册表：登记/移除只影响自己那个批次 ============
+// 多条刷新链路（手动/token tick/用量 tick）并发时各拿各的 batchId，
+// 收尾只删自己的 entry，不再像旧单槽那样互相清对方的进度条
+function registerRefreshBatch(
+  batches: Record<string, RefreshBatchProgress>,
+  batchId: string,
+  entry: RefreshBatchProgress
+): Record<string, RefreshBatchProgress> {
+  return { ...batches, [batchId]: entry }
+}
+
+function dropRefreshBatch(
+  batches: Record<string, RefreshBatchProgress>,
+  batchId: string
+): Record<string, RefreshBatchProgress> {
+  if (!(batchId in batches)) return batches
+  const next = { ...batches }
+  delete next[batchId]
+  return next
+}
+
 export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   // 初始状态
   appVersion: '1.0.0',
@@ -635,7 +667,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   statusCheckInterval: 60,
   nextTokenRefreshAt: null,
   nextUsageRefreshAt: null,
-  refreshProgress: null,
+  refreshBatches: {},
   proactiveRenewalEnabled: false,
   proactiveRenewalLeadMinutes: 15,
   privacyMode: false,
@@ -801,7 +833,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   },
 
   // 闲置库账号移回主库：整对象入库（不重建 id/创建时间），保活体系下一轮自然接管
-  receiveAccounts: (incoming) => {
+  receiveAccounts: (incoming, carried) => {
     const result: BatchOperationResult = { success: 0, failed: 0, errors: [] }
     const existing = get().accounts
 
@@ -832,6 +864,23 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       set((state) => {
         const accounts = new Map(state.accounts)
         for (const acc of toAdd) accounts.set(acc.id, acc)
+
+        // 合并随账号搬来的标签/分组定义（同 id 已存在时保留本库定义，不覆盖本库修改）
+        let tags = state.tags
+        if (carried?.tags?.length) {
+          tags = new Map(state.tags)
+          for (const tag of carried.tags) {
+            if (!tags.has(tag.id)) tags.set(tag.id, tag)
+          }
+        }
+        let groups = state.groups
+        if (carried?.groups?.length) {
+          groups = new Map(state.groups)
+          for (const group of carried.groups) {
+            if (!groups.has(group.id)) groups.set(group.id, group)
+          }
+        }
+
         // 恢复的账号若在存档里有旧"幽灵行"（如曾移入闲置库时落的档），按 accountId 清掉避免重复
         const restoredIds = new Set(toAdd.map((a) => a.id))
         let billingArchive = state.billingArchive
@@ -841,7 +890,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
             billingArchive.delete(entryId)
           }
         }
-        return { accounts, billingArchive }
+        return { accounts, tags, groups, billingArchive }
       })
       get().saveToStorage()
     }
@@ -1633,18 +1682,26 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     console.log(`[BatchRefresh] Triggering background refresh for ${accountsToRefresh.length} accounts...`)
-    set({ refreshProgress: { kind: 'token', done: 0, total: accountsToRefresh.length } })
+    // 按 batchId 登记：进度事件只推进自己这个批次，收尾也只收自己
+    const batchId = crypto.randomUUID()
+    set((state) => ({
+      refreshBatches: registerRefreshBatch(state.refreshBatches, batchId, {
+        kind: 'token',
+        done: 0,
+        total: accountsToRefresh.length
+      })
+    }))
 
     // 使用后台刷新 API（不阻塞 UI）；结束后收掉进度条（事件侧完成时也会自动收）
     try {
-      const result = await window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency)
+      const result = await window.api.backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, true, batchId)
       return {
         success: result.successCount,
         failed: result.failedCount,
         errors: []
       }
     } finally {
-      if (get().refreshProgress?.kind === 'token') set({ refreshProgress: null })
+      set((state) => ({ refreshBatches: dropRefreshBatch(state.refreshBatches, batchId) }))
     }
   },
 
@@ -1792,18 +1849,25 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     console.log(`[BatchCheck] Triggering background check for ${accountsToCheck.length} accounts...`)
-    set({ refreshProgress: { kind: 'usage', done: 0, total: accountsToCheck.length } })
+    const batchId = crypto.randomUUID()
+    set((state) => ({
+      refreshBatches: registerRefreshBatch(state.refreshBatches, batchId, {
+        kind: 'usage',
+        done: 0,
+        total: accountsToCheck.length
+      })
+    }))
 
     // 使用后台检查 API（只检查状态，不刷新 Token）
     try {
-      const result = await window.api.backgroundBatchCheck(accountsToCheck, autoRefreshConcurrency)
+      const result = await window.api.backgroundBatchCheck(accountsToCheck, autoRefreshConcurrency, batchId)
       return {
         success: result.successCount,
         failed: result.failedCount,
         errors: []
       }
     } finally {
-      if (get().refreshProgress?.kind === 'usage') set({ refreshProgress: null })
+      set((state) => ({ refreshBatches: dropRefreshBatch(state.refreshBatches, batchId) }))
     }
   },
 
@@ -2710,14 +2774,22 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
 
     console.log(`[BackgroundRefresh] Token tick: ${accountsToRefresh.length} accounts expiring, refreshing (token only)...`)
-    set({ refreshProgress: { kind: 'token', done: 0, total: accountsToRefresh.length, silent: true } })
+    const batchId = crypto.randomUUID()
+    set((state) => ({
+      refreshBatches: registerRefreshBatch(state.refreshBatches, batchId, {
+        kind: 'token',
+        done: 0,
+        total: accountsToRefresh.length,
+        silent: true
+      })
+    }))
 
     // fire-and-forget：结果通过 IPC 事件回流；invoke 结束即整批完成，兜底收掉进度条
     // （主进程在途去重可能让 completed 到不了 total，靠这里的 finally 收尾）
     void window.api
-      .backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, false)
+      .backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, false, batchId)
       .finally(() => {
-        if (get().refreshProgress?.kind === 'token') set({ refreshProgress: null })
+        set((state) => ({ refreshBatches: dropRefreshBatch(state.refreshBatches, batchId) }))
       })
   },
 
@@ -2780,28 +2852,40 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
     const tokenCount = accountsToRefresh.filter((a) => a.needsTokenRefresh).length
     console.log(`[UsageRefresh] Refreshing usage for ${accountsToRefresh.length} accounts (${tokenCount} with token renewal)...`)
-    set({ refreshProgress: { kind: 'usage', done: 0, total: accountsToRefresh.length, silent: true } })
+    const batchId = crypto.randomUUID()
+    set((state) => ({
+      refreshBatches: registerRefreshBatch(state.refreshBatches, batchId, {
+        kind: 'usage',
+        done: 0,
+        total: accountsToRefresh.length,
+        silent: true
+      })
+    }))
 
     void window.api
-      .backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, true)
+      .backgroundBatchRefresh(accountsToRefresh, autoRefreshConcurrency, true, batchId)
       .finally(() => {
-        if (get().refreshProgress?.kind === 'usage') set({ refreshProgress: null })
+        set((state) => ({ refreshBatches: dropRefreshBatch(state.refreshBatches, batchId) }))
       })
   },
 
-  // 主进程进度事件回流：推进当前批量进度；完成即自动收尾
-  updateRefreshProgress: ({ done, total }) => {
-    const cur = get().refreshProgress
+  // 主进程进度事件回流：按 batchId 推进对应批次；完成即自动收尾（只收这一个批次，
+  // 未登记的批次——如主进程调度器的小批量——直接忽略，不会影响别的进度条）
+  updateRefreshProgress: (batchId, { done, total }) => {
+    const cur = get().refreshBatches[batchId]
     if (!cur) return
     if (done >= total) {
-      set({ refreshProgress: null })
+      set((state) => ({ refreshBatches: dropRefreshBatch(state.refreshBatches, batchId) }))
       return
     }
-    set({ refreshProgress: { ...cur, done, total } })
+    set((state) => ({
+      refreshBatches: registerRefreshBatch(state.refreshBatches, batchId, { ...cur, done, total })
+    }))
   },
 
+  // 兜底清空全部进度批次（当前无调用方；各批次正常都走自己的 finally/事件收尾）
   clearRefreshProgress: () => {
-    set({ refreshProgress: null })
+    set({ refreshBatches: {} })
   },
 
   // 处理后台刷新结果（兼容入口；高频场景请走 applyBackgroundRefreshResults 批量）

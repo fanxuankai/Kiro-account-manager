@@ -13,7 +13,7 @@ cd Kiro-account-manager
 npm run typecheck        # 类型检查(node + web)
 npm run lint             # eslint(存量告警多,只关注新改动的 error)
 npm run build            # electron-vite 构建(含 typecheck)
-npm run build:mac        # 本地打 mac 安装包(dist/)
+npm run build:mac:arm64  # 本地打 mac 安装包(dist/,本机 Apple Silicon 单架构)
 npm run fetch:singbox    # 开发模式下载 sing-box 内核到 resources/bin/(hy2 功能前置)
 node test/hy2-e2e.mjs    # hy2 桥端到端测试
 ```
@@ -22,18 +22,16 @@ node test/hy2-e2e.mjs    # hy2 桥端到端测试
 
 ```bash
 cd Kiro-account-manager
-npm run build:win     # Windows: dist/ 下 NSIS 安装器,双击安装
-npm run build:mac     # macOS:  dist/ 下 dmg,按本机架构选(arm64/x64)
-npm run build:linux   # Linux:  dist/ 下 AppImage / deb
+npm run build:win          # Windows: dist/ 下 NSIS 安装器,双击安装
+npm run build:mac:arm64    # macOS(本机 Apple Silicon): dist/ 下 arm64 dmg
+npm run build:linux        # Linux:  dist/ 下 AppImage / deb
 ```
 
 mac 命令行覆盖安装——用未打包产物直拷(比挂载 dmg 简单,不用拼版本号/卷名;应用开着会覆盖失败,先退出):
 
 ```bash
-cd Kiro-account-manager && npm run build:mac   # 双架构构建,产物在 dist/mac-arm64(Apple Silicon) 与 dist/mac(Intel)
-# 按本机架构选未打包产物目录
+cd Kiro-account-manager && npm run build:mac:arm64   # 单架构构建(本机 arm64),产物在 dist/mac-arm64
 SRC="dist/mac-arm64/Kiro Account Manager.app"
-[ "$(uname -m)" = "x86_64" ] && SRC="dist/mac/Kiro Account Manager.app"
 osascript -e 'tell application "Kiro Account Manager" to quit' 2>/dev/null; sleep 2
 pkill -f "Kiro Account Manager" 2>/dev/null; sleep 1
 rm -rf "/Applications/Kiro Account Manager.app"
@@ -45,6 +43,7 @@ open "/Applications/Kiro Account Manager.app"
 不要从 GitHub Release 下载安装——本地安装一律用本地构建产物。Windows/Linux 用各自 build:win / build:linux 的安装器双击安装。
 
 - 用户数据不受覆盖安装影响(mac 在 `~/Library/Application Support/kiro-account-manager`);本地验证可不 bump 版本,正式发布前再 bump。
+- `build:mac`(双架构)只给 CI 发布用:electron-builder.yml 的 mac target 需出 x64+arm64 双 zip 供 latest-mac.yml 在线更新;本机一律用 build:mac:arm64。
 
 ## 打包发布
 

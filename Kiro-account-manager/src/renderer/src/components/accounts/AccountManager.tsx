@@ -11,6 +11,7 @@ import { GroupManageDialog } from './GroupManageDialog'
 import { TagManageDialog } from './TagManageDialog'
 import { ExportDialog } from './ExportDialog'
 import { ImportDialog, type ImportResult } from './ImportDialog'
+import { collectCarriedDefinitions } from './_helpers'
 import { Button } from '../ui'
 import type { Account, AccountImportItem } from '@/types/account'
 import { type ParsedImport } from '@/lib/importParse'
@@ -307,7 +308,9 @@ export function AccountManager({ onBack }: AccountManagerProps): React.ReactNode
       return
     }
 
-    const result = idleStore.receiveAccounts(archivable)
+    // 随账号搬运其引用的标签/分组定义，否则标签在闲置库因查不到定义而显示不出来
+    const carried = collectCarriedDefinitions(main.tags, main.groups, archivable)
+    const result = idleStore.receiveAccounts(archivable, carried)
     if (result.success > 0) {
       main.removeAccounts(archivable.map(acc => acc.id))
       const skipNote = skippedCount > 0 ? (isEn ? `, ${skippedCount} skipped (already exist)` : `，跳过 ${skippedCount} 个已存在`) : ''

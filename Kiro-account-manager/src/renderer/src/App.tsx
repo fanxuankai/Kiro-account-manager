@@ -115,13 +115,13 @@ function App(): React.JSX.Element {
     }
   }, [loadFromStorage, startAutoTokenRefresh, stopAutoTokenRefresh, startAutoUsageRefresh, stopAutoUsageRefresh])
 
-  // 订阅主进程批量刷新/检查的逐账号进度，推进 store 里的全局进度条状态
+  // 订阅主进程批量刷新/检查的逐账号进度，按 batchId 推进 store 里对应批次的进度
   useEffect(() => {
     const unsubscribeRefresh = window.api.onBackgroundRefreshProgress((data) => {
-      updateRefreshProgress({ done: data.completed, total: data.total })
+      updateRefreshProgress(data.batchId, { done: data.completed, total: data.total })
     })
     const unsubscribeCheck = window.api.onBackgroundCheckProgress((data) => {
-      updateRefreshProgress({ done: data.completed, total: data.total })
+      updateRefreshProgress(data.batchId, { done: data.completed, total: data.total })
     })
     return () => {
       unsubscribeRefresh()

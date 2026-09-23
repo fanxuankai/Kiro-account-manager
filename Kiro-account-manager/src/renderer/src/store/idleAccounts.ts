@@ -10,7 +10,8 @@ import type {
   AccountStats,
   AccountExportData,
   AccountImportItem,
-  BatchOperationResult
+  BatchOperationResult,
+  CarriedDefinitions
 } from '../types/account'
 import { isBannedAccountError, useAccountsStore } from './accounts'
 
@@ -79,8 +80,9 @@ export interface IdleAccountsActions {
   updateAccount: (id: string, updates: Partial<Account>) => void
   removeAccount: (id: string) => void
   removeAccounts: (ids: string[]) => BatchOperationResult
-  /** 接收从另一库移动过来的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重） */
-  receiveAccounts: (accounts: Account[]) => BatchOperationResult
+  /** 接收从另一库移动过来的完整账号（保留 id/创建时间/凭证等，按 id 与 邮箱+provider 去重）；
+   *  carried 为随账号搬运的标签/分组定义（同 id 已存在时保留本库定义） */
+  receiveAccounts: (accounts: Account[], carried?: CarriedDefinitions) => BatchOperationResult
 
   // 分组操作
   addGroup: (group: Omit<AccountGroup, 'id' | 'createdAt' | 'order'>) => string
@@ -257,7 +259,7 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
     return result
   },
 
-  receiveAccounts: (incoming) => {
+  receiveAccounts: (incoming, carried) => {
     const result: BatchOperationResult = { success: 0, failed: 0, errors: [] }
     const existing = get().accounts
 
@@ -288,7 +290,24 @@ export const useIdleAccountsStore = create<IdleAccountsStore>()((set, get) => ({
       set((state) => {
         const accounts = new Map(state.accounts)
         for (const acc of toAdd) accounts.set(acc.id, acc)
-        return { accounts }
+
+        // 合并随账号搬来的标签/分组定义（同 id 已存在时保留本库定义，不覆盖本库修改）
+        let tags = state.tags
+        if (carried?.tags?.length) {
+          tags = new Map(state.tags)
+          for (const tag of carried.tags) {
+            if (!tags.has(tag.id)) tags.set(tag.id, tag)
+          }
+        }
+        let groups = state.groups
+        if (carried?.groups?.length) {
+          groups = new Map(state.groups)
+          for (const group of carried.groups) {
+            if (!groups.has(group.id)) groups.set(group.id, group)
+          }
+        }
+
+        return { accounts, tags, groups }
       })
       get().saveToStorage()
     }

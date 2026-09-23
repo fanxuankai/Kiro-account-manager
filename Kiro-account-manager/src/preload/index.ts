@@ -208,13 +208,13 @@ const api = {
       accessToken?: string
       provider?: string
     }
-  }>, concurrency?: number, syncInfo?: boolean): Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }> => {
-    return ipcRenderer.invoke('background-batch-refresh', accounts, concurrency, syncInfo)
+  }>, concurrency?: number, syncInfo?: boolean, batchId?: string): Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }> => {
+    return ipcRenderer.invoke('background-batch-refresh', accounts, concurrency, syncInfo, batchId)
   },
 
-  // 监听后台刷新进度
-  onBackgroundRefreshProgress: (callback: (data: { completed: number; total: number; success: number; failed: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { completed: number; total: number; success: number; failed: number }): void => {
+  // 监听后台刷新进度（batchId 区分并发批次，渲染层只推进自己发起的批次）
+  onBackgroundRefreshProgress: (callback: (data: { batchId: string; completed: number; total: number; success: number; failed: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { batchId: string; completed: number; total: number; success: number; failed: number }): void => {
       callback(data)
     }
     ipcRenderer.on('background-refresh-progress', handler)
@@ -248,13 +248,13 @@ const api = {
       provider?: string
     }
     idp?: string
-  }>, concurrency?: number): Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }> => {
-    return ipcRenderer.invoke('background-batch-check', accounts, concurrency)
+  }>, concurrency?: number, batchId?: string): Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }> => {
+    return ipcRenderer.invoke('background-batch-check', accounts, concurrency, batchId)
   },
 
-  // 监听后台检查进度
-  onBackgroundCheckProgress: (callback: (data: { completed: number; total: number; success: number; failed: number }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, data: { completed: number; total: number; success: number; failed: number }): void => {
+  // 监听后台检查进度（batchId 区分并发批次）
+  onBackgroundCheckProgress: (callback: (data: { batchId: string; completed: number; total: number; success: number; failed: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, data: { batchId: string; completed: number; total: number; success: number; failed: number }): void => {
       callback(data)
     }
     ipcRenderer.on('background-check-progress', handler)

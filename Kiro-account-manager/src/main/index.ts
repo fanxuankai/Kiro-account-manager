@@ -7,6 +7,7 @@ import {
   cleanupMacUpdateBackups
 } from './macSelfUpdater'
 import * as machineIdModule from './machineId'
+import { randomUUID } from 'node:crypto'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { writeFile, readFile } from 'fs/promises'
@@ -2300,7 +2301,8 @@ let backgroundBatchRefreshImpl:
   | ((
       accounts: BackgroundRefreshAccount[],
       concurrency?: number,
-      syncInfo?: boolean
+      syncInfo?: boolean,
+      batchId?: string
     ) => Promise<{
       success: boolean
       completed: number
@@ -2409,8 +2411,10 @@ async function runMainPoolTokenRefreshTick(): Promise<void> {
     console.log(
       `[MainPoolRefresh] ${toRefresh.length} token(s) expiring within ${Math.round(leadMs / 60000)}min, refreshing...`
     )
-    // syncInfo=false：仅刷 token；用量/订阅等信息同步由渲染进程定时器负责，避免主进程跑重活
-    await backgroundBatchRefreshImpl(toRefresh, concurrency, false)
+    // syncInfo=false：仅刷 token；用量/订阅等信息同步由渲染进程定时器负责，避免主进程跑重活。
+    // batchId 用固定标识：渲染层进度条只登记自己发起的批次，未登记的批次事件会被直接忽略，
+    // 主调度器的小批量因此不会打断/清掉渲染层正在展示的进度球
+    await backgroundBatchRefreshImpl(toRefresh, concurrency, false, 'main-pool-tick')
   } catch (err) {
     console.warn('[MainPoolRefresh] tick failed:', err instanceof Error ? err.message : err)
   }
@@ -4397,7 +4401,8 @@ app.whenReady().then(async () => {
   const backgroundBatchRefresh = async (
     accounts: BackgroundRefreshAccount[],
     concurrency: number = 10,
-    syncInfo: boolean = true
+    syncInfo: boolean = true,
+    batchId: string = randomUUID()
   ): Promise<{
     success: boolean
     completed: number
@@ -4412,9 +4417,11 @@ app.whenReady().then(async () => {
     let success = 0
     let failed = 0
 
-    // 每账号完成即上报进度：渲染层进度条逐号推进（批末的批次级汇总事件仍保留）
+    // 每账号完成即上报进度：渲染层进度条逐号推进（批末的批次级汇总事件仍保留）；
+    // batchId 让渲染层能区分并发跑着的多个批次，各推进各的进度
     const sendProgress = (): void => {
       mainWindow?.webContents.send('background-refresh-progress', {
+        batchId,
         completed,
         total: accounts.length,
         success,
@@ -4865,12 +4872,7 @@ app.whenReady().then(async () => {
       )
 
       // 通知进度
-      mainWindow?.webContents.send('background-refresh-progress', {
-        completed,
-        total: accounts.length,
-        success,
-        failed
-      })
+      sendProgress()
 
       // 批次间延迟，让主进程有喘息时间
       if (i + concurrency < accounts.length) {
@@ -4889,8 +4891,9 @@ app.whenReady().then(async () => {
       _event,
       accounts: BackgroundRefreshAccount[],
       concurrency: number = 10,
-      syncInfo: boolean = true
-    ) => backgroundBatchRefresh(accounts, concurrency, syncInfo)
+      syncInfo: boolean = true,
+      batchId?: string
+    ) => backgroundBatchRefresh(accounts, concurrency, syncInfo, batchId)
   )
   // 启动主进程池 token 刷新调度器（不依赖窗口可见/存活，挂托盘也照常刷新）
   startMainPoolTokenRefresh()
@@ -4914,7 +4917,8 @@ app.whenReady().then(async () => {
         }
         idp?: string
       }>,
-      concurrency: number = 10
+      concurrency: number = 10,
+      batchId: string = randomUUID()
     ) => {
       console.log(
         `[BackgroundCheck] Starting batch check for ${accounts.length} accounts, concurrency: ${concurrency}`
@@ -5272,8 +5276,9 @@ app.whenReady().then(async () => {
           })
         )
 
-        // 通知进度
+        // 通知进度（batchId 供渲染层区分批次）
         mainWindow?.webContents.send('background-check-progress', {
+          batchId,
           completed,
           total: accounts.length,
           success,
