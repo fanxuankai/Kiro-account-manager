@@ -56,6 +56,7 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
   const cards = parseCardInfos(cardText)
   const card: CardInfo | null = cards[cardIdx] ?? cards[0] ?? null
   const [phase, setPhase] = useState<Phase>('idle')
+  const [errorDetail, setErrorDetail] = useState<string | undefined>()
   const [opened, setOpened] = useState(false)
 
   const refreshAddress = useCallback((prov?: string): void => {
@@ -81,6 +82,7 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     })
     refreshAddress(localStorage.getItem(PROVINCE_LS_KEY) || undefined)
     setPhase('idle')
+    setErrorDetail(undefined)
     setOpened(false)
     setCardText('')
     setCardFilled(false)
@@ -95,6 +97,7 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
     const off = window.api.onPaymentUpdate((update) => {
       if (update.accountId !== target.accountId) return
       setPhase(update.phase)
+      setErrorDetail(update.detail)
       if (update.phase === 'card-filled') {
         setCardFilled(true)
         if (cardIdx + 1 < cards.length) {
@@ -328,7 +331,11 @@ export function PayInAppDialog({ target, onClose, isEn }: PayInAppDialogProps): 
               {phase === 'error' && (
                 <p className="text-red-500 flex items-center gap-1.5">
                   <AlertTriangle className="h-3.5 w-3.5" />
-                  {isEn ? 'Failed to open payment window' : '支付窗口打开失败'}
+                  {errorDetail === 'new-page-load-failed'
+                    ? (isEn
+                        ? 'New payment page failed to load (js.stripe.com unreachable on this network). Switch network or proxy rule, then reopen.'
+                        : '新版支付页加载失败：当前网络无法访问其依赖资源（js.stripe.com 直连不通），请换网络或调整代理规则后重开')
+                    : (isEn ? 'Failed to open payment window' : '支付窗口打开失败')}
                 </p>
               )}
             </div>
