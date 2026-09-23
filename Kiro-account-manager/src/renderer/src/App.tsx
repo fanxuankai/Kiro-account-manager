@@ -3,7 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { AccountManager } from './components/accounts'
 import { IdleManager } from './components/idle'
 import { Sidebar, TitleBar, type PageType } from './components/layout'
-import { HomePage, AboutPage, SettingsPage, MachineIdPage, KProxyPage, ProxyPoolPage, ConfigSyncPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage, LoginPagePool, GooglePoolPage } from './components/pages'
+import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage, ProxyPage, KProxyPage, ProxyPoolPage, WebhooksPage, DiagnosePage, ConfigSyncPage, RegisterPage, SubscriptionPage, BillingPage, LogsPage, LoginPagePool, GooglePoolPage } from './components/pages'
+import { useWebhookStore } from './store/webhooks'
 import { UpdateDialog } from './components/UpdateDialog'
 import { CloseConfirmDialog } from './components/CloseConfirmDialog'
 import { TaskProgressWidget } from './components/layout/TaskProgressWidget'
@@ -23,7 +24,7 @@ function App(): React.JSX.Element {
     return saved === null ? true : saved === 'true'
   })
 
-    const {
+  const {
     loadFromStorage,
     startAutoTokenRefresh,
     stopAutoTokenRefresh,
@@ -36,7 +37,9 @@ function App(): React.JSX.Element {
     accounts,
     activeAccountId,
     setActiveAccount,
-    checkAndRefreshExpiringTokens
+    checkAndRefreshExpiringTokens,
+    updateAccountStatus,
+    updateAccount
   } = useAccountsStore()
 
   // 切换到下一个可用账户
@@ -101,6 +104,10 @@ function App(): React.JSX.Element {
     })
     // 闲置账号库（独立 SQLite，物理隔离）：只加载数据，无任何定时器/网络调度
     void useIdleAccountsStore.getState().loadFromStorage()
+    // 同步主动续期开关（持久化在 main 进程的 electron-store）
+    useAccountsStore.getState().loadProactiveRenewalEnabled()
+    // 加载 Webhook 配置
+    useWebhookStore.getState().loadFromStorage()
 
     return () => {
       stopAutoTokenRefresh()
@@ -121,6 +128,50 @@ function App(): React.JSX.Element {
       unsubscribeCheck()
     }
   }, [updateRefreshProgress])
+
+  // 订阅 Kiro IDE 自己 refresh token 后反代检测到的事件
+  // 触发时间点：Kiro IDE 在后台 refresh loop 把磁盘 token 写新了，反代 watcher 反向同步到 store
+  // 这里收到事件后从磁盘重新加载账号数据，让 UI 立刻显示最新 expiresAt / accessToken
+  useEffect(() => {
+    if (typeof window.api.onKiroIdeTokenChanged !== 'function') return
+    const unsubscribe = window.api.onKiroIdeTokenChanged((data) => {
+      console.log(`[App] Kiro IDE refreshed token for account ${data.accountId} (${data.reason}), reloading accounts...`)
+      loadFromStorage().catch((e) => console.warn('[App] reload after IDE token change failed:', e))
+    })
+    return unsubscribe
+  }, [loadFromStorage])
+
+  // 反代关键事件 → 触发 webhook（v1.8 新增）
+  // 由 main/proxyServer 内置的 webhookTrigger 通过 IPC 推送过来，统一在 renderer 调 useWebhookStore
+  useEffect(() => {
+    const unsubscribe = window.api.onProxyWebhookTrigger?.((event, payload) => {
+      try {
+        const store = useWebhookStore.getState()
+        // 映射反代事件名 → Webhook 事件类型
+        const webhookEventMap: Record<string, 'risk-warning' | 'account-banned'> = {
+          'proxy-account-suspended': 'account-banned',
+          'proxy-all-exhausted': 'risk-warning'
+        }
+        const targetEvent = webhookEventMap[event] || 'risk-warning'
+        // 规范化 level（main 用 'error'/'info' 等字符串字面量，需要映射到 store 接受的类型）
+        const rawLevel = (payload as { level?: string })?.level
+        const level: 'info' | 'warn' | 'error' | 'success' =
+          rawLevel === 'error' ? 'error'
+          : rawLevel === 'info' ? 'info'
+          : rawLevel === 'success' ? 'success'
+          : 'warn'
+        void store.triggerEvent(targetEvent, {
+          title: String((payload as Record<string, unknown>).title ?? '反代告警'),
+          message: String((payload as Record<string, unknown>).message ?? ''),
+          level,
+          fields: (payload as { fields?: Record<string, string | number> })?.fields
+        })
+      } catch (err) {
+        console.error('[App] Proxy webhook trigger failed:', err)
+      }
+    })
+    return () => { unsubscribe?.() }
+  }, [])
 
   // 应用内页面跳转（轻量 CustomEvent，供深层组件无需 prop 钻取即可切页）
   useEffect(() => {
@@ -268,6 +319,35 @@ function App(): React.JSX.Element {
     }
   }, [applyBackgroundCheckResults])
 
+  // 监听反代账号被封禁事件（TEMPORARILY_SUSPENDED / AccountSuspendedException）
+  // 反代触发后，把封禁状态同步到 store 让 UI 显示
+  useEffect(() => {
+    const unsubscribe = window.api.onProxyAccountSuspended((info) => {
+      console.warn(`[App] Account suspended via proxy: ${info.email || info.id} (${info.reason})`)
+      updateAccountStatus(info.id, 'error', `[${info.reason}] ${info.message}`)
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [updateAccountStatus])
+
+  // 监听反代账号更新事件（Enterprise profileArn 自愈），持久化到 store + 磁盘
+  useEffect(() => {
+    const unsubscribe = window.api.onProxyAccountUpdate((info) => {
+      if (!info.profileArn) return
+      const account = useAccountsStore.getState().accounts.get(info.id)
+      if (!account || account.credentials?.profileArn === info.profileArn) return
+      updateAccount(info.id, {
+        profileArn: info.profileArn,
+        credentials: { ...account.credentials, profileArn: info.profileArn }
+      })
+      console.log(`[App] Persisted Enterprise profileArn for ${info.id}`)
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [updateAccount])
+
   const renderPage = () => {
     switch (currentPage) {
       case 'home':
@@ -278,6 +358,10 @@ function App(): React.JSX.Element {
         return <IdleManager />
       case 'machineId':
         return <MachineIdPage />
+      case 'kiroSettings':
+        return <KiroSettingsPage />
+      case 'proxy':
+        return <ProxyPage />
       case 'kproxy':
         return <KProxyPage />
       case 'proxyPool':
@@ -288,6 +372,10 @@ function App(): React.JSX.Element {
         return <SubscriptionPage />
       case 'billing':
         return <BillingPage />
+      case 'webhooks':
+        return <WebhooksPage />
+      case 'diagnose':
+        return <DiagnosePage />
       case 'configSync':
         return <ConfigSyncPage />
       case 'logs':

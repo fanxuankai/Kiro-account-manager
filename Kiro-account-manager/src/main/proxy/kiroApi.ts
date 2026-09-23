@@ -19,6 +19,14 @@ import { proxyLogger } from './logger'
 import { getKProxyService } from '../kproxy'
 import { getSystemProxy, safeCreateProxyAgent } from './systemProxy'
 import { resolveProxyUrl } from './proxyBridge'
+import {
+  countTokens,
+  getModelContextLength,
+  setModelContextWindow,
+  getModelContextWindow
+} from './tokenCounter'
+// 重新导出以保持向后兼容（proxyServer.ts 等模块仍 from './kiroApi' 导入）
+export { setModelContextWindow, getModelContextWindow }
 
 // 是否使用 K-Proxy 代理发送 API 请求（从主进程导入）
 let useKProxyForApi = false
@@ -70,8 +78,9 @@ export function getTokenBufferReserve(): number {
 // 根据 modelId 和 buffer 计算 effective token limit
 // 仅在 enableTokenBufferReserve=true 时被调用
 // 查不到 model 时 fallback 到 200K context (Claude 默认)
-function getEffectiveTokenLimit(_modelId?: string): number {
-  const ctx = 200000
+function getEffectiveTokenLimit(modelId?: string): number {
+  // 复用 getModelContextLength（支持 cache 命中 → 模糊匹配 → 关键词兜底）
+  const ctx = modelId ? getModelContextLength(modelId) : 200000
   return Math.max(8000, ctx - tokenBufferReserve)
 }
 
@@ -203,23 +212,21 @@ export function getAgentMode(): 'vibe' | 'spec' {
   return configuredAgentMode
 }
 
-export const KIRO_BUILDER_ID_PLACEHOLDER_ARN = 'arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX'
-export const KIRO_SOCIAL_PROFILE_ARN = 'arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK'
+// profileArn 决策中心已迁移到 ../kiroAuthSync，反代和账号管理器主进程共用同一份定义，
+// 防止多处常量漂移。注意 KIRO_BUILDER_ID_PLACEHOLDER_ARN 仍以本模块为出口 re-export，
+// 这样 main/index.ts 等老 import 路径不需要改。
+import {
+  KIRO_BUILDER_ID_PLACEHOLDER_ARN as _KIRO_BUILDER_ID_PLACEHOLDER_ARN,
+  KIRO_SOCIAL_PROFILE_ARN,
+  isPlaceholderProfileArn as _isPlaceholderProfileArn,
+  getEnterpriseFallbackArn
+} from '../kiroAuthSync'
 
-const ENTERPRISE_FALLBACK_PROFILE_ID = 'VNECVYCYYAWN'
-const ENTERPRISE_FALLBACK_ACCOUNT_ID = '610548660232'
-export function getEnterpriseFallbackArn(region?: string): string {
-  const reg = region || 'us-east-1'
-  return `arn:aws:codewhisperer:${reg}:${ENTERPRISE_FALLBACK_ACCOUNT_ID}:profile/${ENTERPRISE_FALLBACK_PROFILE_ID}`
-}
-
-export function isPlaceholderProfileArn(arn: string | undefined): boolean {
-  if (!arn) return false
-  return arn === KIRO_BUILDER_ID_PLACEHOLDER_ARN || arn.endsWith(':profile/AAAACCCCXXXX')
-}
+export const KIRO_BUILDER_ID_PLACEHOLDER_ARN = _KIRO_BUILDER_ID_PLACEHOLDER_ARN
+export const isPlaceholderProfileArn = _isPlaceholderProfileArn
 
 /**
- * 调 Kiro API 时使用的 profileArn 决策。
+ * 反代调 Kiro API 时使用的 profileArn 决策。
  * 优先级：真实 ARN（自动获取） > 备用固定 ARN（按账号类型）
  * - 已有真实 ARN（非占位符） → 直接用
  * - Enterprise/IdC → 区域化备用 ARN（自动获取失败时兜底）
@@ -238,6 +245,9 @@ function resolveProfileArn(account: ProxyAccount): string | undefined {
   }
   return KIRO_BUILDER_ID_PLACEHOLDER_ARN
 }
+
+// 兼容 SDK 部分调用仍想知道社交 ARN 的场景（极少；保留 export 不破坏外部 import）
+export { KIRO_SOCIAL_PROFILE_ARN }
 
 // Agentic 模式系统提示 - 防止大文件写入超时
 const AGENTIC_SYSTEM_PROMPT = `# CRITICAL: CHUNKED WRITE PROTOCOL (MANDATORY)
@@ -1055,7 +1065,7 @@ export function buildKiroPayload(
     const effectiveTokenLimit = getEffectiveTokenLimit(modelId)
     const tokenTrimResult = trimHistoryByTokens(payload, effectiveTokenLimit)
     if (tokenTrimResult.trimmed > 0) {
-      const modelCtx = 200000
+      const modelCtx = getModelContextLength(modelId)
       console.log(`[KiroPayload] Trimmed ${tokenTrimResult.trimmed} oldest history messages by token estimate (≈${tokenTrimResult.finalTokens.toLocaleString()} / ${effectiveTokenLimit.toLocaleString()} tokens [model ctx ${modelCtx.toLocaleString()} - buffer ${tokenBufferReserve.toLocaleString()}], ${tokenTrimResult.iterations} iter)`)
     }
   }
@@ -1330,7 +1340,7 @@ export async function callKiroApiStream(
       // 解析 Event Stream
       // 传入 modelId + payloadStr 用于精确 token 计算（contextUsage 反推 + tiktoken）
       const inputChars = payloadStr.length
-      await parseEventStream(response.body!, onChunk, onComplete, onError, inputChars, signal, requestedModelId)
+      await parseEventStream(response.body!, onChunk, onComplete, onError, inputChars, signal, requestedModelId, payloadStr)
       return
     } catch (error) {
       if (signal?.aborted) {
@@ -1379,7 +1389,7 @@ export async function callKiroApiStream(
             ? await undiciFetch(endpoint.url, { method: 'POST', headers: retryHeaders, body: retryStr, signal, dispatcher: retryAgent } as UndiciRequestInit) as unknown as Response
             : await fetch(endpoint.url, { method: 'POST', headers: retryHeaders, body: retryStr, signal })
           if (retryResponse.ok) {
-            await parseEventStream(retryResponse.body!, onChunk, onComplete, onError, retryStr.length, signal, getPayloadModelId(retryPayload))
+            await parseEventStream(retryResponse.body!, onChunk, onComplete, onError, retryStr.length, signal, getPayloadModelId(retryPayload), retryStr)
             return
           }
           const retryBody = await retryResponse.text()
@@ -1446,9 +1456,10 @@ interface ToolUseState {
   inputBuffer: string
 }
 
-// Token 估算
+// Token 估算（被 promptCacheTracker 等模块使用，用于 cache 块大小判定）
+// 优先使用 tiktoken cl100k_base 精确计算（±5%），失败时自动降级到字符系数（±15%）
 export function estimateTokens(text: string): number {
-  return Math.max(1, Math.round(text.length * 0.4))
+  return countTokens(text)
 }
 
 // 解析 AWS Event Stream 二进制格式
@@ -1459,7 +1470,8 @@ async function parseEventStream(
   onError: (error: Error) => void,
   inputChars: number = 0,  // 输入字符长度（兜底估算用）
   signal?: AbortSignal,
-  modelId?: string        // 模型 ID，用于 contextUsagePercentage 反推 inputTokens
+  modelId?: string,        // 模型 ID，用于 contextUsagePercentage 反推 inputTokens
+  payloadStr?: string      // 请求 payload JSON 字符串，用于 tiktoken 精确计算
 ): Promise<void> {
   const reader = body.getReader()
   const abort = () => {
@@ -1485,8 +1497,13 @@ async function parseEventStream(
   // 流式事件聚合计数（logStreamEvents 开启时，结束后输出摘要而非逐条输出）
   const streamEventCounts: Record<string, number> = {}
   
-  // 初始化 input tokens 估算
-  if (inputChars > 0) {
+  // 初始化 input tokens 估算（优先级链路：tokenUsage > contextUsage 反推 > tiktoken > 字符系数）
+  // 这里只是兜底初值，后续真实事件会覆盖
+  if (payloadStr) {
+    // 用 tiktoken cl100k_base 精确计算（±5%）
+    usage.inputTokens = countTokens(payloadStr)
+  } else if (inputChars > 0) {
+    // 字符系数兜底（针对 payload JSON 经验值 0.42）
     usage.inputTokens = Math.max(1, Math.round(inputChars * 0.42))
   }
   
@@ -1942,7 +1959,7 @@ async function parseEventStream(
                   proxyLogger.info('Kiro', `contextUsageEvent - Context usage: ${percentage.toFixed(2)}% (real tokenUsage already received)`)
                 } else {
                   // 反推真实 inputTokens：modelContext × percentage / 100
-                  const contextLen = 200000
+                  const contextLen = getModelContextLength(modelId)
                   const reverseInput = Math.round(contextLen * percentage / 100)
                   if (reverseInput > 0) {
                     usage.inputTokens = reverseInput
@@ -2129,9 +2146,15 @@ async function parseEventStream(
 
     // 如果 API 没有返回 token 信息，优先用 tiktoken 精确计算，兜底字符系数
     if (usage.outputTokens === 0 && totalOutputChars > 0) {
-      // 字符系数兜底（自然语言中英混合约 0.4 token/字符）
-      usage.outputTokens = Math.max(1, Math.round(totalOutputChars * 0.4))
-      proxyLogger.info('Kiro', `Estimated output tokens (fallback): ${totalOutputChars} chars -> ${usage.outputTokens} tokens`)
+      if (collectedOutputText) {
+        // tiktoken cl100k_base 精确计算（±5%）
+        usage.outputTokens = Math.max(1, countTokens(collectedOutputText))
+        proxyLogger.info('Kiro', `Estimated output tokens (tiktoken): ${totalOutputChars} chars -> ${usage.outputTokens} tokens`)
+      } else {
+        // 字符系数兜底（自然语言中英混合约 0.4 token/字符）
+        usage.outputTokens = Math.max(1, Math.round(totalOutputChars * 0.4))
+        proxyLogger.info('Kiro', `Estimated output tokens (fallback): ${totalOutputChars} chars -> ${usage.outputTokens} tokens`)
+      }
     }
     
     // 流式事件聚合摘要

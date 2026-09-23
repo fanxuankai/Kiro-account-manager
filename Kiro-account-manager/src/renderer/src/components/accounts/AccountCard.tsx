@@ -181,11 +181,28 @@ export const AccountCard = memo(function AccountCard({
     return proxyPool.get(proxyId) || null
   }, [accountProxyBindings, account.id, proxyPool])
 
-  // 手动解除封禁标记
-  const handleClearSuspended = (e: React.MouseEvent) => {
+  // 解除封禁标记中（loading 状态）
+  const [isClearingSuspended, setIsClearingSuspended] = useState(false)
+
+  // 手动解除封禁标记：调用后端 IPC → 清反代池 suspended + 清前端 lastError
+  const handleClearSuspended = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    updateAccountStatus(account.id, 'active', undefined)
-    setShowBanDialog(false)
+    if (isClearingSuspended) return
+    setIsClearingSuspended(true)
+    try {
+      const result = await window.api.proxyClearAccountSuspended(account.id)
+      if (result.success) {
+        // 前端 store 同步：status → active, lastError → undefined
+        updateAccountStatus(account.id, 'active', undefined)
+        setShowBanDialog(false)
+      } else {
+        console.error('[AccountCard] Clear suspended failed:', result.error)
+      }
+    } catch (err) {
+      console.error('[AccountCard] Clear suspended error:', err)
+    } finally {
+      setIsClearingSuspended(false)
+    }
   }
 
   const { t } = useTranslation()
@@ -199,8 +216,83 @@ export const AccountCard = memo(function AccountCard({
     return Math.floor(value).toLocaleString()
   }
 
-  const handleSwitch = (): void => {
-    setActiveAccount(account.id)
+  const handleSwitch = async (): Promise<void> => {
+    const { credentials } = account
+    const { switchTarget } = useAccountsStore.getState()
+    
+    // 社交登录只需要 refreshToken，IdC 登录需要 clientId 和 clientSecret
+    if (!credentials.refreshToken) {
+      alert(isEn ? 'Incomplete credentials, cannot switch' : '账号凭证不完整，无法切换')
+      return
+    }
+    if (credentials.authMethod !== 'social' && (!credentials.clientId || !credentials.clientSecret)) {
+      alert(isEn ? 'Incomplete credentials, cannot switch' : '账号凭证不完整，无法切换')
+      return
+    }
+
+    const cliPayload = {
+      accessToken: credentials.accessToken,
+      refreshToken: credentials.refreshToken,
+      clientId: credentials.clientId,
+      clientSecret: credentials.clientSecret,
+      region: credentials.region || 'us-east-1',
+      profileArn: account.profileArn,
+      provider: credentials.provider
+    }
+    const idePayload = {
+      accessToken: credentials.accessToken,
+      refreshToken: credentials.refreshToken,
+      clientId: credentials.clientId || '',
+      clientSecret: credentials.clientSecret || '',
+      region: credentials.region || 'us-east-1',
+      startUrl: credentials.startUrl,
+      authMethod: credentials.authMethod,
+      provider: credentials.provider,
+      profileArn: account.profileArn,
+      accountId: account.id
+    }
+
+    let success = true
+    let errorMsg = ''
+
+    // 根据 switchTarget 设置决定切换目标
+    if (switchTarget === 'ide' || switchTarget === 'both') {
+      const result = await window.api.switchAccount(idePayload)
+      if (!result.success) {
+        success = false
+        errorMsg = result.error || ''
+      } else if (result.refreshedCredentials) {
+        // 同步 main 进程 refresh 后的最新 credentials 到 store，避免反代 store 留下已作废的 refreshToken
+        const rc = result.refreshedCredentials
+        useAccountsStore.setState((state) => {
+          const accounts = new Map(state.accounts)
+          const acc = accounts.get(account.id)
+          if (acc) {
+            accounts.set(account.id, {
+              ...acc,
+              credentials: {
+                ...acc.credentials,
+                accessToken: rc.accessToken,
+                refreshToken: rc.refreshToken,
+                expiresAt: Date.now() + rc.expiresIn * 1000
+              }
+            })
+          }
+          return { accounts }
+        })
+        useAccountsStore.getState().saveToStorage()
+      }
+    }
+    if (switchTarget === 'cli' || switchTarget === 'both') {
+      const result = await window.api.switchAccountCli(cliPayload)
+      if (!result.success && switchTarget === 'cli') { success = false; errorMsg = result.error || '' }
+    }
+
+    if (success) {
+      setActiveAccount(account.id)
+    } else {
+      alert(isEn ? `Switch failed: ${errorMsg}` : `切换失败: ${errorMsg}`)
+    }
   }
 
   const handleRefresh = async (): Promise<void> => {
@@ -208,8 +300,19 @@ export const AccountCard = memo(function AccountCard({
     await checkAccountStatus(account.id)
   }
 
-  const handleLogout = (): void => {
-    setActiveAccount(null)
+  const handleLogout = async (): Promise<void> => {
+    if (!confirm(isEn ? 'This will clear local SSO cache and logout from Kiro. Continue?' : '这将清除本地 SSO 缓存并退出 Kiro 登录，是否继续？')) {
+      return
+    }
+    
+    const result = await window.api.logoutAccount()
+    if (result.success) {
+      // 取消当前账号的激活状态
+      setActiveAccount(null)
+      alert(isEn ? `Logged out successfully, cleared ${result.deletedCount} cache files` : `退出成功，已清除 ${result.deletedCount} 个缓存文件`)
+    } else {
+      alert(isEn ? `Logout failed: ${result.error}` : `退出失败: ${result.error}`)
+    }
   }
 
   const [isRefreshingToken, setIsRefreshingToken] = useState(false)
@@ -998,9 +1101,14 @@ export const AccountCard = memo(function AccountCard({
                     size="sm"
                     variant="outline"
                     onClick={handleClearSuspended}
-                    title={isEn ? 'Mark as recovered' : '标记为已恢复'}
+                    disabled={isClearingSuspended}
+                    title={isEn ? 'Mark as recovered — proxy pool will use this account again' : '标记为已恢复 — 反代池会重新使用该账号'}
                   >
-                    <RotateCcw className="h-3 w-3 mr-1" />
+                    {isClearingSuspended ? (
+                      <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3 mr-1" />
+                    )}
                     {isEn ? 'Reset Suspended' : '重置封禁状态'}
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setShowBanDialog(false)}>

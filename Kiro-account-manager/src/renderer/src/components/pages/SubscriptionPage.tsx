@@ -874,9 +874,9 @@ export function SubscriptionPage() {
           const l = realProbe[idx]
           if (!l.url) continue
           try {
-            const resp = await fetch(l.url, { method: 'HEAD' })
+            const r = await window.api.diagnoseHttpProbe({ url: l.url, method: 'HEAD', timeoutMs: 6000 })
             // 4xx/5xx 视为失效，2xx/3xx 视为有效
-            checkResults[l.accountId] = resp.ok || (resp.status < 400)
+            checkResults[l.accountId] = r.success || (r.status !== undefined && r.status < 400)
               ? 'success'
               : 'expired'
           } catch {

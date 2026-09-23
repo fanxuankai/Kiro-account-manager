@@ -27,6 +27,7 @@ import type {
   ProxyProtocol
 } from '../types/proxy'
 import { DEFAULT_PROXY_POOL_CONFIG } from '../types/proxy'
+import { useWebhookStore, type WebhookEvent, type WebhookMessage } from './webhooks'
 
 // ============================================
 // 账号管理 Store
@@ -90,6 +91,140 @@ let _statsCache: {
   output: AccountStats
 } | null = null
 
+/**
+ * 异步同步本地 SSO 缓存中的激活账号到 store。
+ * 含潜在的网络请求（verifyAccountCredentials），从 loadFromStorage 中拆出来
+ * 异步执行，避免阻塞首屏加载（isLoading）。
+ */
+type SetFn = (
+  partial:
+    | Partial<AccountsState>
+    | ((state: AccountsState) => Partial<AccountsState>)
+) => void
+
+async function syncLocalSsoAccountAsync(
+  get: () => AccountsStore,
+  set: SetFn
+): Promise<void> {
+  try {
+    const localResult = await window.api.getLocalActiveAccount()
+    if (!localResult.success || !localResult.data?.refreshToken) return
+
+    const localRefreshToken = localResult.data.refreshToken
+    const currentAccounts = get().accounts
+
+    // 查找匹配的账号
+    let foundAccountId: string | null = null
+    for (const [id, account] of currentAccounts) {
+      if (account.credentials.refreshToken === localRefreshToken) {
+        foundAccountId = id
+        break
+      }
+    }
+
+    if (foundAccountId) {
+      // 找到匹配的账号，更新 activeAccountId
+      set({ activeAccountId: foundAccountId })
+      // 同步 isActive 字段
+      set((state) => {
+        const accounts = new Map(state.accounts)
+        for (const [id, account] of accounts) {
+          const shouldBeActive = id === foundAccountId
+          if (account.isActive !== shouldBeActive) {
+            accounts.set(id, { ...account, isActive: shouldBeActive })
+          }
+        }
+        return { accounts }
+      })
+      console.log('[Store] Synced active account from local SSO cache:', foundAccountId)
+      get().saveToStorage()
+      return
+    }
+
+    // 未找到匹配账号，尝试自动导入（网络请求）
+    console.log('[Store] Local account not found in app, importing...')
+    const importResult = await window.api.loadKiroCredentials()
+    if (!importResult.success || !importResult.data) return
+
+    const verifyResult = await window.api.verifyAccountCredentials({
+      refreshToken: importResult.data.refreshToken,
+      clientId: importResult.data.clientId || '',
+      clientSecret: importResult.data.clientSecret || '',
+      region: importResult.data.region,
+      authMethod: importResult.data.authMethod,
+      provider: importResult.data.provider
+    })
+    if (!verifyResult.success || !verifyResult.data) return
+
+    const now = Date.now()
+    const newId = `${verifyResult.data.email}-${now}`
+    const newAccount: Account = {
+      id: newId,
+      email: verifyResult.data.email,
+      userId: verifyResult.data.userId,
+      nickname: verifyResult.data.email ? verifyResult.data.email.split('@')[0] : undefined,
+      idp: (importResult.data.provider || 'BuilderId') as 'BuilderId' | 'Google' | 'Github',
+      credentials: {
+        accessToken: verifyResult.data.accessToken,
+        csrfToken: '',
+        refreshToken: verifyResult.data.refreshToken,
+        clientId: importResult.data.clientId || '',
+        clientSecret: importResult.data.clientSecret || '',
+        region: importResult.data.region || 'us-east-1',
+        expiresAt: verifyResult.data.expiresIn ? now + verifyResult.data.expiresIn * 1000 : now + 3600 * 1000,
+        authMethod: importResult.data.authMethod as 'IdC' | 'social',
+        provider: (importResult.data.provider || 'BuilderId') as 'BuilderId' | 'Github' | 'Google'
+      },
+      subscription: {
+        type: verifyResult.data.subscriptionType as SubscriptionType,
+        title: verifyResult.data.subscriptionTitle,
+        rawType: verifyResult.data.subscription?.rawType,
+        daysRemaining: verifyResult.data.daysRemaining,
+        expiresAt: verifyResult.data.expiresAt,
+        managementTarget: verifyResult.data.subscription?.managementTarget,
+        upgradeCapability: verifyResult.data.subscription?.upgradeCapability,
+        overageCapability: verifyResult.data.subscription?.overageCapability
+      },
+      usage: {
+        current: verifyResult.data.usage.current,
+        limit: verifyResult.data.usage.limit,
+        percentUsed: verifyResult.data.usage.limit > 0
+          ? verifyResult.data.usage.current / verifyResult.data.usage.limit
+          : 0,
+        lastUpdated: now,
+        baseLimit: verifyResult.data.usage.baseLimit,
+        baseCurrent: verifyResult.data.usage.baseCurrent,
+        freeTrialLimit: verifyResult.data.usage.freeTrialLimit,
+        freeTrialCurrent: verifyResult.data.usage.freeTrialCurrent,
+        freeTrialExpiry: verifyResult.data.usage.freeTrialExpiry,
+        bonuses: verifyResult.data.usage.bonuses,
+        nextResetDate: verifyResult.data.usage.nextResetDate,
+        resourceDetail: verifyResult.data.usage.resourceDetail
+      },
+      status: 'active',
+      createdAt: now,
+      lastUsedAt: now,
+      tags: [],
+      isActive: true
+    }
+
+    set((state) => {
+      const accounts = new Map(state.accounts)
+      // 取消其它账号的激活状态
+      for (const [id, account] of accounts) {
+        if (account.isActive) {
+          accounts.set(id, { ...account, isActive: false })
+        }
+      }
+      accounts.set(newId, newAccount)
+      return { accounts, activeAccountId: newId }
+    })
+    console.log('[Store] Auto-imported account from local SSO cache:', verifyResult.data.email)
+    get().saveToStorage()
+  } catch (e) {
+    console.warn('[Store] Failed to sync local active account:', e)
+  }
+}
 
 export function isBannedAccountError(error?: string): boolean {
   if (!error) return false
@@ -1356,6 +1491,8 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   // ==================== 状态管理 ====================
 
   updateAccountStatus: (id, status, error) => {
+    const wasBanned = isBannedAccountError(get().accounts.get(id)?.lastError)
+    const isBanned = isBannedAccountError(error)
     set((state) => {
       const accounts = new Map(state.accounts)
       const account = accounts.get(id)
@@ -1370,6 +1507,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       return { accounts }
     })
     get().saveToStorage()
+    // 触发 webhook：账号刚被封禁时通知（已封禁的不重复）
+    if (isBanned && !wasBanned) {
+      const acc = get().accounts.get(id)
+      triggerWebhook('account-banned', {
+        title: '账号被封禁',
+        message: `账号 ${acc?.email || id} 状态变为封禁`,
+        level: 'error',
+        fields: { 邮箱: acc?.email || '-', 错误: error || '-' }
+      })
+    }
   },
 
   refreshAccountToken: async (id) => {
@@ -1385,6 +1532,18 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       const result = await window.api.refreshAccountToken(account)
 
       if (result.success && result.data) {
+        // 当 refresh 后 main 进程检测到该账号是 IDE 当前激活账号，会自动同步到磁盘 token 文件；
+        // 否则只更新反代 store，IDE 仍用旧 token —— 提醒用户避免误以为"刷新对 IDE 也生效了"
+        if (result.data.syncedToIde) {
+          console.log(`[refreshAccountToken] Token refreshed AND synced to Kiro IDE (account=${account.email})`)
+        } else {
+          console.warn(
+            `[refreshAccountToken] Token refreshed but NOT synced to Kiro IDE (account=${account.email}). ` +
+              `Reason: ${result.data.syncSkipReason || 'unknown'}. ` +
+              `Kiro IDE will still use its previously cached token until its own refresh loop kicks in.`
+          )
+        }
+
         set((state) => {
           const accounts = new Map(state.accounts)
           const acc = accounts.get(id)
@@ -1413,6 +1572,13 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         return true
       } else {
         updateAccountStatus(id, 'error', result.error?.message)
+        // 触发 webhook：Token 刷新失败
+        triggerWebhook('token-expired', {
+          title: 'Token 刷新失败',
+          message: `账号 ${account.email} Token 刷新失败`,
+          level: 'warn',
+          fields: { 邮箱: account.email, 错误: result.error?.message || '-' }
+        })
         return false
       }
     } catch (error) {
@@ -1808,6 +1974,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           get().saveToStorage()
         }
 
+        // SSO 同步（含潜在网络请求）异步执行，不阻塞首屏加载
+        // 完成后通过 set 应用结果，UI 会自然更新
+        queueMicrotask(() => { void syncLocalSsoAccountAsync(get, set) })
       }
     } catch (error) {
       console.error('Failed to load accounts:', error)
@@ -1982,11 +2151,31 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     }
   },
 
-  setProactiveRenewalEnabled: async (_enabled) => {
-    return { success: true }
+  setProactiveRenewalEnabled: async (enabled) => {
+    if (typeof window.api?.setProactiveRenewalEnabled !== 'function') {
+      return { success: false, error: 'API not available' }
+    }
+    const result = await window.api.setProactiveRenewalEnabled(enabled)
+    if (result.success) {
+      set({ proactiveRenewalEnabled: !!result.enabled })
+    }
+    return { success: result.success, error: result.error }
   },
 
-  loadProactiveRenewalEnabled: async () => {},
+  loadProactiveRenewalEnabled: async () => {
+    if (typeof window.api?.getProactiveRenewalEnabled !== 'function') return
+    try {
+      const result = await window.api.getProactiveRenewalEnabled()
+      if (result.success) {
+        set({
+          proactiveRenewalEnabled: !!result.enabled,
+          proactiveRenewalLeadMinutes: result.leadTimeMinutes ?? 15
+        })
+      }
+    } catch (e) {
+      console.warn('[Store] loadProactiveRenewalEnabled failed:', e)
+    }
+  },
 
   setStatusCheckInterval: (interval) => {
     set({ statusCheckInterval: interval })
@@ -2207,6 +2396,56 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       if (availableAccount) {
         console.log(`[AutoSwitch] Switching to: ${availableAccount.email}`)
         setActiveAccount(availableAccount.id)
+        // 根据 switchTarget 设置决定切换目标
+        const { switchTarget: target } = get()
+        const creds = availableAccount.credentials
+        if (target === 'ide' || target === 'both') {
+          const switchResult = await window.api.switchAccount({
+            accessToken: creds.accessToken || '',
+            refreshToken: creds.refreshToken || '',
+            clientId: creds.clientId || '',
+            clientSecret: creds.clientSecret || '',
+            region: creds.region || 'us-east-1',
+            startUrl: creds.startUrl,
+            authMethod: creds.authMethod,
+            provider: creds.provider,
+            profileArn: (availableAccount as { profileArn?: string }).profileArn,
+            accountId: availableAccount.id
+          })
+          // 把 main 进程 refresh 后的最新 credentials 同步回 store，
+          // 否则 store 里的 refreshToken 仍是 v1（已被服务端 rotate 作废），下次任何 refresh 都会失败
+          if (switchResult?.success && switchResult.refreshedCredentials) {
+            const rc = switchResult.refreshedCredentials
+            set((state) => {
+              const accounts = new Map(state.accounts)
+              const acc = accounts.get(availableAccount.id)
+              if (acc) {
+                accounts.set(availableAccount.id, {
+                  ...acc,
+                  credentials: {
+                    ...acc.credentials,
+                    accessToken: rc.accessToken,
+                    refreshToken: rc.refreshToken,
+                    expiresAt: Date.now() + rc.expiresIn * 1000
+                  }
+                })
+              }
+              return { accounts }
+            })
+            get().saveToStorage()
+          }
+        }
+        if (target === 'cli' || target === 'both') {
+          window.api.switchAccountCli?.({
+            accessToken: creds.accessToken || '',
+            refreshToken: creds.refreshToken || '',
+            clientId: creds.clientId,
+            clientSecret: creds.clientSecret,
+            region: creds.region || 'us-east-1',
+            profileArn: (availableAccount as { profileArn?: string }).profileArn,
+            provider: creds.provider
+          }).catch(err => console.warn('[AutoSwitch CLI] Failed:', err))
+        }
       } else {
         console.log('[AutoSwitch] No available account to switch to')
       }
@@ -3480,6 +3719,15 @@ function syncAllAccountsBoundToProxy(proxyId: string): void {
     }
   } catch (err) {
     console.warn('[Store] Failed to sync accounts bound to proxy:', err)
+  }
+}
+
+/** 触发 Webhook 事件（封装错误处理，不阻塞主业务流程） */
+function triggerWebhook(event: WebhookEvent, payload: WebhookMessage): void {
+  try {
+    void useWebhookStore.getState().triggerEvent(event, payload)
+  } catch (err) {
+    console.warn(`[Webhook] trigger ${event} failed:`, err)
   }
 }
 

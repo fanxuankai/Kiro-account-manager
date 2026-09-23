@@ -202,6 +202,9 @@ export function SettingsPage() {
     setAutoUsageRefresh,
     nextTokenRefreshAt,
     nextUsageRefreshAt,
+    proactiveRenewalEnabled,
+    proactiveRenewalLeadMinutes,
+    setProactiveRenewalEnabled,
     setAutoRefresh,
     setAutoRefreshConcurrency,
     checkAndRefreshExpiringTokens,
@@ -216,6 +219,8 @@ export function SettingsPage() {
     setBatchImportConcurrency,
     loginPrivateMode,
     setLoginPrivateMode,
+    switchTarget,
+    setSwitchTarget,
     theme,
     darkMode,
     setTheme,
@@ -601,6 +606,21 @@ export function SettingsPage() {
           </div>
           <div className="flex items-center justify-between pt-2 border-t">
             <div>
+              <p className="font-medium">{isEn ? 'Switch Target' : '切号目标'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'Which client to switch account credentials to' : '切换账号凭证写入的客户端'}</p>
+            </div>
+            <select
+              className="h-9 px-3 rounded-lg border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+              value={switchTarget}
+              onChange={(e) => setSwitchTarget(e.target.value as 'ide' | 'cli' | 'both')}
+            >
+              <option value="ide">Kiro IDE</option>
+              <option value="cli">Kiro CLI</option>
+              <option value="both">{isEn ? 'Both (IDE + CLI)' : '两者 (IDE + CLI)'}</option>
+            </select>
+          </div>
+          <div className="flex items-center justify-between pt-2 border-t">
+            <div>
               <p className="font-medium">{isEn ? 'Login Private Mode' : '登录隐私模式'}</p>
               <p className="text-sm text-muted-foreground">{isEn ? 'Open browser in incognito/private mode when logging in' : '在线登录时使用浏览器无痕/隐私模式打开'}</p>
             </div>
@@ -641,10 +661,77 @@ export function SettingsPage() {
             </Button>
           </div>
 
-          <div className="text-xs text-muted-foreground bg-muted/50 rounded-lg p-3 space-y-1">
-            <p>• {isEn ? 'refreshToken rotates on every renewal — the more often you refresh, the higher the risk of invalid_grant / rate-limit' : 'refreshToken 是轮换式的：刷一次旧值立即作废，刷得越勤、失败和限流的面越大，因此只在临期窗口内刷'}</p>
-            <p>• {isEn ? 'Usage/subscription checks run on their own schedule (see Auto Usage Refresh below)' : '用量/订阅检查走独立节奏，见下方「自动刷新用量」'}</p>
+          <div className="text-xs text-muted-foreground bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg p-3 space-y-1">
+            <p className="font-medium text-amber-700 dark:text-amber-300">
+              {isEn ? 'About Kiro IDE auto refresh' : '关于 Kiro IDE 自动刷新'}
+            </p>
+            <p>
+              {isEn
+                ? '• Kiro IDE has its own internal refresh loop (independent of this app). Disabling Auto Refresh here only stops this app from refreshing — it does NOT stop Kiro IDE.'
+                : '• Kiro IDE 自带独立的刷新循环，关闭本工具的"自动刷新"不会停止 IDE 自己的刷新。'}
+            </p>
+            <p>
+              {isEn
+                ? '• When switching accounts or refreshing tokens here, the new token is synced to ~/.aws/sso/cache/kiro-auth-token.json only for the IDE current active account; other accounts only update the local store.'
+                : '• 切号 / 刷新 Token 时，仅当该账号是 Kiro IDE 当前激活账号才会同步到磁盘文件；非激活账号仅更新本工具内部 store。'}
+            </p>
+            <p>
+              {isEn
+                ? '• If IDE refreshes the token itself, this app detects the file change and syncs the new token back to its store (bidirectional sync).'
+                : '• 当 Kiro IDE 自己 refresh 后，本工具会监听磁盘文件变化并反向同步到 store（双向同步）。'}
+            </p>
           </div>
+
+          {/* 主动续期开关（默认关闭） */}
+          <div className="flex items-center justify-between pt-3 border-t">
+            <div>
+              <p className="font-medium">
+                {isEn ? 'Proactive Token Renewal for IDE' : 'IDE 主动续期'}
+                <span className="ml-2 text-xs text-muted-foreground">
+                  ({isEn ? 'Advanced' : '进阶'})
+                </span>
+              </p>
+              <p className="text-sm text-muted-foreground">
+                {isEn
+                  ? `Renew IDE's active token ~${proactiveRenewalLeadMinutes} min before expiry, so Kiro IDE never refreshes by itself (eliminates all race conditions).`
+                  : `在 IDE 激活账号的 token 剩 ~${proactiveRenewalLeadMinutes} 分钟时抢先 refresh，让 Kiro IDE 永远不自己 refresh（彻底消除竞争条件）。`}
+              </p>
+            </div>
+            <Button
+              variant={proactiveRenewalEnabled ? 'default' : 'outline'}
+              size="sm"
+              onClick={async () => {
+                const result = await setProactiveRenewalEnabled(!proactiveRenewalEnabled)
+                if (!result.success && result.error) {
+                  alert(
+                    (isEn ? 'Failed to toggle proactive renewal: ' : '切换主动续期失败：') +
+                      result.error
+                  )
+                }
+              }}
+            >
+              {proactiveRenewalEnabled ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+            </Button>
+          </div>
+          {proactiveRenewalEnabled && (
+            <div className="text-xs text-muted-foreground bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 rounded-lg p-3 space-y-1">
+              <p>
+                {isEn
+                  ? `• On: a single in-process timer renews token ${proactiveRenewalLeadMinutes} min before expiry; Kiro IDE keeps seeing fresh tokens (≥${60 - proactiveRenewalLeadMinutes} min remaining) and never invokes OIDC by itself.`
+                  : `• 启用后：账号管理器主进程会在 token 剩 ${proactiveRenewalLeadMinutes} 分钟时自动续期，Kiro IDE 始终看到剩余 ≥ ${60 - proactiveRenewalLeadMinutes} 分钟的 token，永远不会自己调 OIDC。`}
+              </p>
+              <p>
+                {isEn
+                  ? '• Only the IDE current active account is renewed. Switching accounts re-schedules the timer for the new active account.'
+                  : '• 仅对 IDE 当前激活账号续期。切号时 timer 会自动重新调度到新账号。'}
+              </p>
+              <p>
+                {isEn
+                  ? '• If a renewal fails (e.g. server outage), the timer stops; IDE\'s own refresh loop takes over as fallback.'
+                  : '• 续期失败时 timer 停止，由 IDE 自己的 refresh loop 接管（双向同步仍生效）。'}
+              </p>
+            </div>
+          )}
 
           {autoRefreshEnabled && (
             <>

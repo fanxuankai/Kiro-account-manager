@@ -1278,12 +1278,12 @@ export function ProxyPoolPage(): React.ReactNode {
         </CardContent>
       </Card>
 
-      {/* 账号-代理 N:1 绑定分桶 */}
+      {/* 反代账号-代理 N:1 分桶 */}
       <Card className="hover-lift">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Link2 className="h-4 w-4 text-primary" />
-            {isEn ? 'Account-to-IP Bucketing' : '账号绑定代理 IP'}
+            {isEn ? 'Reverse Proxy: Account-to-IP Bucketing' : '反代分桶（账号绑定代理 IP）'}
             <span className="text-[10px] font-normal text-muted-foreground">
               {isEn
                 ? '— Limit accounts per IP to avoid risk-control association'
