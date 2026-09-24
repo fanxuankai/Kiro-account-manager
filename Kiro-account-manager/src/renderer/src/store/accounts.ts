@@ -142,6 +142,13 @@ async function syncLocalSsoAccountAsync(
       return
     }
 
+    // 未找到匹配账号：用户关闭了"启动自动导入 IDE 账号"时不导入，
+    // 到此为止（上面的激活标记同步不受影响）
+    if (!get().autoImportIdeAccount) {
+      console.log('[Store] Auto-import IDE account disabled, skip importing')
+      return
+    }
+
     // 未找到匹配账号，尝试自动导入（网络请求）
     console.log('[Store] Local account not found in app, importing...')
     const importResult = await window.api.loadKiroCredentials()
@@ -338,6 +345,11 @@ interface AccountsState {
   // 登录浏览器隐私模式
   loginPrivateMode: boolean // 登录时使用浏览器隐私/无痕模式
 
+  // 启动自动导入 IDE 账号：启动/加载时若 ~/.aws/sso/cache/kiro-auth-token.json 的
+  // refreshToken 在账号库中无匹配（列表为空必然无匹配），是否自动导入该 IDE 登录账号。
+  // 关闭后仅同步"当前激活账号"标记，不再把库外的 IDE 账号导进来。
+  autoImportIdeAccount: boolean
+
   // 切号目标设置
   switchTarget: 'ide' | 'cli' | 'both' // ide=仅 Kiro IDE, cli=仅 Kiro CLI, both=两者都切
 
@@ -485,6 +497,9 @@ interface AccountsActions {
 
   // 登录浏览器隐私模式
   setLoginPrivateMode: (enabled: boolean) => void
+
+  // 启动自动导入 IDE 账号
+  setAutoImportIdeAccount: (enabled: boolean) => void
 
   // 切号目标设置
   setSwitchTarget: (target: 'ide' | 'cli' | 'both') => void
@@ -679,6 +694,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   autoSwitchInterval: 5,
   batchImportConcurrency: 100,
   loginPrivateMode: false,
+  autoImportIdeAccount: true,
   switchTarget: 'ide' as const,
   theme: 'default',
   darkMode: false,
@@ -1992,6 +2008,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           statusCheckInterval: data.statusCheckInterval ?? 60,
           privacyMode: data.privacyMode ?? false,
           usagePrecision: data.usagePrecision ?? false,
+          autoImportIdeAccount: data.autoImportIdeAccount ?? true,
           proxyEnabled: data.proxyEnabled ?? false,
           proxyUrl: data.proxyUrl ?? '',
           autoSwitchEnabled: data.autoSwitchEnabled ?? false,
@@ -2107,6 +2124,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       statusCheckInterval,
       privacyMode,
       usagePrecision,
+      autoImportIdeAccount,
       proxyEnabled,
       proxyUrl,
       autoSwitchEnabled,
@@ -2143,6 +2161,7 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           statusCheckInterval,
           privacyMode,
           usagePrecision,
+          autoImportIdeAccount,
           proxyEnabled,
           proxyUrl,
           autoSwitchEnabled,
@@ -2383,6 +2402,11 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
 
   setLoginPrivateMode: (enabled) => {
     set({ loginPrivateMode: enabled })
+    get().saveToStorage()
+  },
+
+  setAutoImportIdeAccount: (enabled) => {
+    set({ autoImportIdeAccount: enabled })
     get().saveToStorage()
   },
 

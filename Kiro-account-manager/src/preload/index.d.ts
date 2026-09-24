@@ -34,6 +34,8 @@ interface AccountData {
   statusCheckInterval: number
   privacyMode?: boolean
   usagePrecision?: boolean
+  /** 启动自动导入 IDE 账号（~/.aws/sso/cache 凭证无匹配时是否自动导入） */
+  autoImportIdeAccount?: boolean
   proxyEnabled?: boolean
   proxyUrl?: string
   autoSwitchEnabled?: boolean

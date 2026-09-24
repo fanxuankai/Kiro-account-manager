@@ -1,6 +1,6 @@
 import { useAccountsStore } from '@/store/accounts'
 import { Card, CardContent, CardHeader, CardTitle, Button } from '../ui'
-import { Eye, EyeOff, RefreshCw, Clock, Trash2, Download, Upload, Globe, Repeat, Palette, Moon, Sun, Fingerprint, Info, ChevronDown, ChevronUp, Settings, Database, Layers, UserX, Monitor } from 'lucide-react'
+import { Eye, EyeOff, RefreshCw, Clock, Trash2, Download, Upload, Globe, Repeat, Palette, Moon, Sun, Fingerprint, Info, ChevronDown, ChevronUp, Settings, Database, Layers, UserX, Monitor, LogIn } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { ExportDialog } from '../accounts/ExportDialog'
 import { useTranslation } from '@/hooks/useTranslation'
@@ -219,6 +219,8 @@ export function SettingsPage() {
     setBatchImportConcurrency,
     loginPrivateMode,
     setLoginPrivateMode,
+    autoImportIdeAccount,
+    setAutoImportIdeAccount,
     switchTarget,
     setSwitchTarget,
     theme,
@@ -631,6 +633,20 @@ export function SettingsPage() {
             >
               <UserX className="h-4 w-4 mr-2" />
               {loginPrivateMode ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
+            </Button>
+          </div>
+          <div className="flex items-center justify-between pt-2 border-t">
+            <div>
+              <p className="font-medium">{isEn ? 'Auto Import IDE Account' : '启动自动导入 IDE 账号'}</p>
+              <p className="text-sm text-muted-foreground">{isEn ? 'On startup, import the locally logged-in Kiro IDE account when no matching account exists' : '启动时检测到 Kiro IDE 本地登录凭证（~/.aws/sso/cache）且库内无匹配账号，自动导入该账号；关闭后不再导入，仅同步激活标记'}</p>
+            </div>
+            <Button
+              variant={autoImportIdeAccount ? "default" : "outline"}
+              size="sm"
+              onClick={() => setAutoImportIdeAccount(!autoImportIdeAccount)}
+            >
+              <LogIn className="h-4 w-4 mr-2" />
+              {autoImportIdeAccount ? (isEn ? 'On' : '已开启') : (isEn ? 'Off' : '已关闭')}
             </Button>
           </div>
         </CardContent>

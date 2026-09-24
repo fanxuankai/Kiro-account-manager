@@ -288,9 +288,13 @@ export class AccountDb {
         stat.changed++
       }
     }
-    // 旧的 meta 键在新数据里消失 → 删除（与集合行为一致）
+    // 旧的 meta 键在新数据里消失 → 删除（与集合行为一致）。
+    // 例外：下划线前缀的内部标记键（如 _legacyMigrated）由主进程维护，渲染层载荷
+    // 永远不含它们；若照删，用户清空账号后的下一次保存会把迁移标记一起抹掉，
+    // 下次启动空库又被判定为"待迁移"，把不再更新的旧 JSON 化石整库回灌——
+    // 已删除的账号全部复活。因此内部标记键不参与删除。
     for (const key of Array.from(cache.keys())) {
-      if (!seen.has(key)) {
+      if (!seen.has(key) && !key.startsWith('_')) {
         del.run(key)
         cache.delete(key)
         stat.deleted++
